@@ -1,6 +1,9 @@
 package datagen
 
-import "net/netip"
+import (
+	"fmt"
+	"net/netip"
+)
 
 // SimulatedASN identifica un número de sistema autónomo (ASN) asignado
 // por este generador — nunca uno real. Los ASN públicos ocupan el
@@ -22,13 +25,14 @@ type SimulatedASN uint32
 // (Fase 1) mediante un adaptador independiente que esta simulación no
 // necesita conocer.
 //
-// Nota de alcance: RandomAddr asume que Prefix es exactamente un /24
-// IPv4 — es lo único que necesita esta tarea. Si en la tarea 0.5 hiciera
-// falta más espacio de direcciones (por ejemplo, para simular cientos
-// de IPs de un clúster de credential stuffing), se ampliaría entonces
-// — el candidato natural es el rango 198.18.0.0/15, reservado por el
-// RFC 2544 para benchmarking, que da lugar a muchas más direcciones y
-// tampoco activa las reglas de "IP privada".
+// Nota de alcance: RandomAddr y DistinctAddrs asumen que Prefix es
+// exactamente un /24 IPv4 (254 direcciones utilizables, .1 a .254) — es
+// lo único que necesitan las tareas 0.4 y 0.5 (la campaña de credential
+// stuffing de la tarea 0.5 usa 150 de esas 254). Si más adelante hiciera
+// falta más espacio de direcciones, el candidato natural es el rango
+// 198.18.0.0/15, reservado por el RFC 2544 para benchmarking, que da
+// lugar a muchas más direcciones y tampoco activa las reglas de "IP
+// privada".
 type IPPool struct {
 	Name   string
 	ASN    SimulatedASN
@@ -59,4 +63,43 @@ func (p IPPool) RandomAddr(rng *RNG) netip.Addr {
 	octets := p.Prefix.Addr().As4()
 	octets[3] = byte(last)
 	return netip.AddrFrom4(octets)
+}
+
+// poolCapacity es cuántas direcciones utilizables tiene un /24 (los
+// octetos .1 a .254; ver la nota de alcance más arriba).
+const poolCapacity = 254
+
+// DistinctAddrs sortea n direcciones DISTINTAS dentro del pool, sin
+// reemplazo — necesario para el credential stuffing distribuido (tarea
+// 0.5), donde cada IP atacante tiene que ser única. Mezcla el espacio
+// de direcciones utilizables (Fisher-Yates) y toma las primeras n, así
+// la selección es uniforme y sin un orden artificial (no son "las
+// primeras n direcciones del bloque").
+//
+// Entra en pánico si n supera la capacidad del pool: pedir más IPs
+// distintas de las que el bloque puede dar es un error de configuración
+// de la campaña que se generó, no algo a resolver en tiempo de
+// ejecución.
+func (p IPPool) DistinctAddrs(rng *RNG, n int) []netip.Addr {
+	if n > poolCapacity {
+		panic(fmt.Sprintf("datagen: DistinctAddrs requested %d addresses from pool %q, which only has %d", n, p.Name, poolCapacity))
+	}
+
+	octets := make([]int, poolCapacity)
+	for i := range octets {
+		octets[i] = i + 1
+	}
+	for i := len(octets) - 1; i > 0; i-- {
+		j := rng.IntRange(0, i)
+		octets[i], octets[j] = octets[j], octets[i]
+	}
+
+	base := p.Prefix.Addr().As4()
+	addrs := make([]netip.Addr, n)
+	for i := 0; i < n; i++ {
+		b := base
+		b[3] = byte(octets[i])
+		addrs[i] = netip.AddrFrom4(b)
+	}
+	return addrs
 }

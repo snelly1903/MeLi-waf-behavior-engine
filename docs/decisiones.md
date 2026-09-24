@@ -325,3 +325,121 @@ la regla de tolerancia de tiempo, pensada para otro escenario, dé un
 falso rechazo. Es la misma distinción ya documentada en
 `docs/formato-eventos.md` para la tarea 0.2, aplicada ahora a datos
 generados en batch.
+
+## 2026-09-24 — Generadores de ataque: credential stuffing y escaneo lento (tarea 0.5)
+
+**Refactor previo: `DefaultLoginPath` compartido.** `legit.go` tenía
+`"/login"` repetido como texto suelto en `ProfileNavegante` y
+`ProfileOffice`. Se movió a una constante (`paths.go`) reutilizada
+también por `GenerateCredentialStuffingCampaign`, así el ataque apunta
+al mismo endpoint que navegan los usuarios legítimos, no a una
+aplicación simulada distinta. `ProfileAPIClient` mantiene su propio
+`"/api/login"` — es, a propósito, un endpoint distinto de la misma
+aplicación. Se corrieron de nuevo los tests de la tarea 0.4 después
+del cambio: los 8 grupos de tests de `legit.go` siguen en PASS.
+
+**`IPPool.DistinctAddrs`, agregado en `ipspace.go`.** El credential
+stuffing necesita `IPCount` direcciones **distintas** (sin reemplazo),
+a diferencia de `RandomAddr` (con reemplazo, usado por los perfiles
+legítimos, donde una repetición ocasional no importa). Se implementó
+con un mezclado Fisher-Yates del espacio de direcciones utilizables
+(1 a 254) para que la selección sea uniforme y sin un orden artificial
+— no son "las primeras N direcciones del bloque". Entra en pánico si
+se piden más de 254: es un error de configuración de la campaña, no
+un caso a manejar en tiempo de ejecución. Con `IPCount = 150`, queda
+holgadamente dentro del límite de un solo /24.
+
+**Credential stuffing: sondas aisladas, no una sesión.** A diferencia
+de `GenerateLegitSession` y de `GenerateSlowScanSession`, acá cada IP
+participa con 1 a 3 intentos aislados repartidos al azar en toda la
+ventana de la campaña (3 horas simuladas) — no hay una "sesión"
+continua por IP, así que no se usa un `event.ManualClock` por IP; cada
+timestamp se calcula directo como un desplazamiento aleatorio dentro
+de la ventana, y el conjunto completo se ordena al final (mismo
+principio de "ordenar al mezclar" que `GenerateOfficeCluster` de la
+0.4).
+
+**Cada intento prueba, casi siempre, una cuenta distinta —
+`AccountReuseProbability = 5%` en vez de 0%.** Una diversidad de
+cuentas del 100% sería una señal *demasiado* limpia — una lista de
+credenciales filtrada real suele reciclarse parcialmente entre bots.
+Se comprueba con un test que el ratio de cuentas distintas sea alto
+(>80%), no exactamente 100%.
+
+**Escaneo lento: rutas mezcladas, no 100% desconocidas.** El 15%
+(`ValidPathProbability`) de los requests del escáner apunta a una
+ruta real de la aplicación (tomada de `ProfileNavegante.Paths`, no
+inventada aparte) en lugar de una ruta del wordlist
+(`SensitivePaths`, definido en `paths.go`, verificado por test para
+que **nunca** se superponga con ninguna ruta de los perfiles
+legítimos). Sobre esas rutas válidas, ~20% lleva parámetros de query
+fuzzeados (solo nombres, nunca valores — misma regla de privacidad
+del contrato de eventos).
+
+**Los valores numéricos de esta tarea (150 IPs, 1–3 intentos, ventana
+de 3 h, 1% de éxito, 5% de reutilización de cuenta; 20–60 requests,
+pausas de 20 s a 3 min, 15% de rutas válidas, 20% de fuzzing de
+parámetros) son configurables y sirven para generar el dataset de
+prueba — no son umbrales de detección.** El motor (Fase 1) va a
+definir sus propios umbrales de forma independiente de cómo se generó
+este tráfico; confundir "con qué parámetros generé el ataque" con
+"con qué umbral lo voy a detectar" sería circular.
+
+**Ocho decisiones para que el tráfico no sea artificialmente fácil de
+distinguir** (quedan documentadas acá porque son las que se van a
+defender en la entrevista):
+
+1. Tasa por IP tope duro de 3 intentos — ningún rate-limit por IP
+   puede verlo nunca, por construcción.
+2. Sin ráfagas: los intentos se distribuyen en instantes aleatorios
+   de toda la ventana, no juntos.
+3. Ruido controlado a propósito (5% de reutilización de cuenta, 1% de
+   éxito, 30% de 403 entre los fallos) — un patrón perfectamente
+   limpio sería, en sí mismo, una señal artificial.
+4. User-Agent mixto (navegador normal y herramientas de script) en
+   ambos ataques — ningún UA único alcanza para distinguir todo.
+5. El escaneo mezcla rutas nunca vistas (85%) con rutas reales de la
+   aplicación (15%) — un escáner 100% desconocido sería trivialmente
+   distinguible con una sola regla de catálogo.
+6. **La ausencia de `Referer` está compartida a propósito entre
+   `ProfileAPIClient` (legítimo, tarea 0.4) y el escaneo lento
+   (ataque).** No es un descuido: es una comprobación incorporada al
+   propio dataset de que ningún detector futuro va a poder aprobar el
+   challenge usando "falta de referer" como única señal — si lo
+   hiciera, generaría falsos positivos contra `ProfileAPIClient`, y
+   eso se va a medir en la Fase 0.7+.
+7. Timing con jitter aleatorio en los dos ataques, nunca intervalos
+   constantes.
+8. IPs sorteadas de forma uniforme dentro de todo el /24 (Fisher-Yates),
+   no en un rango secuencial artificial.
+
+**Notas para trabajo futuro, a partir de tus cuatro observaciones**
+(no se implementan en esta tarea — son recordatorios para la 0.6 y la
+Fase 1):
+
+- *"No depender exclusivamente del ASN para identificar stuffing"*:
+  ya es cierto por diseño — este generador no calcula ni expone
+  ninguna lógica de correlación por ASN, eso es responsabilidad del
+  detector (Fase 1). Queda anotado que, cuando exista, tendrá que
+  combinar la correlación por ASN con el ratio de fallos y la
+  diversidad de cuentas — nunca el ASN solo.
+- *"Tráfico legítimo que comparta ASN con algunos atacantes"*: hoy
+  los perfiles legítimos usan `PoolResidentialSimA/B` y los ataques
+  usan `PoolHostingSim` — pools separados. Para la tarea 0.6 (mezcla
+  de datasets) queda anotado agregar una variante de tráfico legítimo
+  que también salga de `PoolHostingSim` (por ejemplo, una pequeña
+  empresa alojada en un proveedor de hosting) — así "esta IP es del
+  ASN de hosting" deja de ser, por sí sola, una señal utilizable.
+- *"Los 404 legítimos no deben producir bloqueos injustificados"*: ya
+  cubierto estructuralmente desde la tarea 0.4 —
+  `BrokenLinkProbability` en `ProfileNavegante` y `ProfileOffice`
+  genera una tasa de 404 legítima mayor a cero. Queda anotado que la
+  medición real de esto (falsos positivos sobre tráfico 100%
+  legítimo) es exactamente lo que mide el perfil de prueba "0% de
+  tráfico malicioso" en la Fase 0.9 y en la evaluación final.
+- *"UA, ruta o ausencia de Referer no deben alcanzar por sí solos"*:
+  ya incorporado en el diseño de esta tarea (puntos 4 y 6 de la lista
+  de arriba). Queda pendiente, para cuando exista el detector real
+  (Fase 1), medir esto de forma cuantitativa con la matriz de
+  confusión — hoy es una propiedad del dataset, ahí va a ser una
+  propiedad medida del detector.
