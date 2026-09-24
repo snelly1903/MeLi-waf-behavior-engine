@@ -60,6 +60,17 @@ type SlowScanProfile struct {
 	// siempre el método es GET.
 	Methods                    []string
 	MethodDiversityProbability float64
+
+	// IPs, si no es nil, reemplaza el sorteo interno de direcciones que
+	// hace GenerateSlowScanCampaign (Pool.DistinctAddrs) — usa
+	// exactamente estas IPs, una por escáner, en lugar de sortearlas.
+	// GenerateSlowScanSession, en cambio, ya recibe su IP explícita por
+	// parámetro y nunca lee este campo. Se agregó en la tarea 0.6, con
+	// el mismo propósito que el campo homónimo de
+	// CredentialStuffingCampaign: que el mezclador de escenarios pueda
+	// coordinar de antemano direcciones disjuntas entre generadores. Si
+	// es nil, el comportamiento es idéntico al de la tarea 0.5.
+	IPs []netip.Addr
 }
 
 // DefaultValidScanPaths reutiliza las rutas reales de ProfileNavegante
@@ -152,7 +163,10 @@ func GenerateSlowScanSession(rng *RNG, profile SlowScanProfile, start time.Time,
 // inicio dentro de startJitter respecto de campaignStart. El resultado
 // queda ordenado por Timestamp.
 func GenerateSlowScanCampaign(rng *RNG, profile SlowScanProfile, scanners int, campaignStart time.Time, startJitter time.Duration) []groundtruth.LabeledEvent {
-	ips := profile.Pool.DistinctAddrs(rng, scanners)
+	ips := profile.IPs
+	if ips == nil {
+		ips = profile.Pool.DistinctAddrs(rng, scanners)
+	}
 
 	var all []groundtruth.LabeledEvent
 	for _, ip := range ips {

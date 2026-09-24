@@ -66,6 +66,46 @@ func TestPools_AddressesPassEventValidator(t *testing.T) {
 	}
 }
 
+func TestIPPool_DistinctAddrsExcluding_NeverReturnsExcluded(t *testing.T) {
+	rng := NewRNG(20)
+	exclude := PoolHostingSim.DistinctAddrs(rng, 8)
+
+	got := PoolHostingSim.DistinctAddrsExcluding(rng, 50, exclude)
+	if len(got) != 50 {
+		t.Fatalf("DistinctAddrsExcluding returned %d addresses, want 50", len(got))
+	}
+
+	excludedSet := make(map[string]bool, len(exclude))
+	for _, a := range exclude {
+		excludedSet[a.String()] = true
+	}
+
+	seen := make(map[string]bool, len(got))
+	for _, a := range got {
+		if excludedSet[a.String()] {
+			t.Fatalf("DistinctAddrsExcluding returned an excluded address: %v", a)
+		}
+		if seen[a.String()] {
+			t.Fatalf("duplicate address: %v", a)
+		}
+		seen[a.String()] = true
+		if !PoolHostingSim.Prefix.Contains(a) {
+			t.Fatalf("address %v is outside %v", a, PoolHostingSim.Prefix)
+		}
+	}
+}
+
+func TestIPPool_DistinctAddrsExcluding_PanicsWhenNotEnoughRemain(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("DistinctAddrsExcluding did not panic when too few addresses remain")
+		}
+	}()
+	rng := NewRNG(21)
+	exclude := PoolHostingSim.DistinctAddrs(rng, 250)
+	PoolHostingSim.DistinctAddrsExcluding(rng, 10, exclude) // solo quedan 4
+}
+
 // TestPools_HaveDistinctSimulatedASNsInPrivateUseRange confirma que los
 // tres ASN simulados son todos distintos y caen dentro del rango
 // 64512–65534 reservado por la IANA (RFC 6996) para uso privado — así

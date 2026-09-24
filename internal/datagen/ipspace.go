@@ -103,3 +103,48 @@ func (p IPPool) DistinctAddrs(rng *RNG, n int) []netip.Addr {
 	}
 	return addrs
 }
+
+// DistinctAddrsExcluding funciona como DistinctAddrs, pero nunca
+// devuelve ninguna dirección presente en exclude. Se usa cuando dos
+// generadores distintos necesitan direcciones garantizadamente
+// disjuntas del mismo pool — por ejemplo, en la tarea 0.6, para que un
+// tenant legítimo (ProfileHostedTenant) y las IPs atacantes nunca
+// coincidan dentro del mismo escenario, sin depender de la
+// probabilidad de que dos sorteos independientes no se solapen.
+//
+// Entra en pánico si, después de descontar exclude, no quedan
+// suficientes direcciones para dar las n pedidas.
+func (p IPPool) DistinctAddrsExcluding(rng *RNG, n int, exclude []netip.Addr) []netip.Addr {
+	excluded := make(map[netip.Addr]bool, len(exclude))
+	for _, a := range exclude {
+		excluded[a] = true
+	}
+
+	base := p.Prefix.Addr().As4()
+	available := make([]int, 0, poolCapacity)
+	for last := 1; last <= poolCapacity; last++ {
+		b := base
+		b[3] = byte(last)
+		if !excluded[netip.AddrFrom4(b)] {
+			available = append(available, last)
+		}
+	}
+
+	if n > len(available) {
+		panic(fmt.Sprintf("datagen: DistinctAddrsExcluding requested %d addresses from pool %q, only %d remain after excluding %d addresses",
+			n, p.Name, len(available), len(exclude)))
+	}
+
+	for i := len(available) - 1; i > 0; i-- {
+		j := rng.IntRange(0, i)
+		available[i], available[j] = available[j], available[i]
+	}
+
+	addrs := make([]netip.Addr, n)
+	for i := 0; i < n; i++ {
+		b := base
+		b[3] = byte(available[i])
+		addrs[i] = netip.AddrFrom4(b)
+	}
+	return addrs
+}

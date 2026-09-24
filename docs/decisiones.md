@@ -443,3 +443,103 @@ Fase 1):
   (Fase 1), medir esto de forma cuantitativa con la matriz de
   confusión — hoy es una propiedad del dataset, ahí va a ser una
   propiedad medida del detector.
+
+## 2026-09-24 — Mezclador de escenarios: 0%, 10% y 30% (tarea 0.6)
+
+**Cómo se calcula el volumen malicioso, sin forzar el porcentaje
+exacto.** Primero se genera toda la población legítima (incluidos los
+tenants sobre el ASN de hosting, ver más abajo) y se cuenta cuántos
+eventos produjo de verdad (`L`) — no se adivina de antemano, porque
+cada sesión genera un número de eventos que depende del azar. Con `L`
+conocido, se calcula el volumen malicioso objetivo
+(`M = L · ratio / (1 - ratio)`) y se reparte entre los dos ataques: el
+credential stuffing recibe como máximo el 30% de ese volumen
+(`StuffingShareOfMalicious`), reflejando que es, por diseño, un ataque
+de bajo volumen — no se infla artificialmente para "completar" el
+porcentaje. El escaneo lento absorbe el resto. **No se recorta ningún
+evento a mitad de una sesión para ajustar el número exacto** — eso
+rompería la coherencia narrativa de una sesión. En cambio, se calcula
+el porcentaje real alcanzado (exacto, porque el ground truth se
+conoce) y se guarda en `manifest.json`. Con la población por defecto y
+semilla 42: 8.85% real para el objetivo de 10%, y 28.51% real para el
+objetivo de 30% — ambos dentro de la tolerancia de ±3 puntos
+porcentuales que se dejó como criterio (verificado por test).
+
+**Simplificación respecto del plan original: los dos volúmenes de
+ataque se estiman en paralelo, no en dos pasadas.** En la
+planificación se había propuesto generar primero el stuffing, medir su
+volumen real, y recién ahí calcular cuánto escaneo hace falta para
+completar el resto. En la implementación se simplificó: los dos
+volúmenes se estiman a la vez, a partir de promedios esperados
+(intentos por IP, requests por escáner) — es más simple de razonar y
+la diferencia práctica es chica, porque ambos promedios son
+razonablemente estables con las cantidades de esta tarea. Queda
+anotado acá porque es una desviación consciente del plan aprobado, no
+un olvido.
+
+**`ProfileHostedTenant`: mismo comportamiento que `ProfileAPIClient`,
+construido a partir de él, no copiado a mano.** Se define como una
+función que toma `ProfileAPIClient`, le cambia el `Name` y el `Pool` a
+`PoolHostingSim`, y devuelve el resultado — así, si mañana se ajusta
+algún parámetro de `ProfileAPIClient` (probabilidades, rutas), el
+tenant hereda el cambio automáticamente, sin tener que actualizar dos
+lugares.
+
+**Direcciones disjuntas entre tenants legítimos y atacantes, mediante
+un sorteo coordinado — no por probabilidad baja de choque.** Antes de
+generar los ataques, se sortean primero las IPs de los tenants
+legítimos (`PoolHostingSim.DistinctAddrs`), y recién después las IPs
+atacantes se sortean con el nuevo método `DistinctAddrsExcluding`
+(agregado en `ipspace.go`), que nunca devuelve una dirección ya usada
+por los tenants. Se evaluó la alternativa de sortear ambos conjuntos
+por separado y aceptar una probabilidad chica de superposición, pero
+con las cantidades de esta tarea (8 tenants, hasta 150 IPs de
+stuffing, sobre un pool de 254) el número esperado de choques no era
+despreciable — así que se prefirió la garantía exacta, con un método
+adicional chico y reutilizable en vez de una probabilidad a
+documentar.
+
+**El campo `IPs` en `CredentialStuffingCampaign` y en `SlowScanProfile`
+es opcional y no rompe nada de la tarea 0.5.** Si es `nil` (el caso de
+todos los tests ya existentes), el comportamiento es idéntico al de
+antes: cada generador sortea sus propias direcciones. El mezclador de
+esta tarea es el único que lo usa, para repartir el sorteo coordinado
+de arriba. Se corrieron de nuevo los tests de la 0.4 y la 0.5 después
+del cambio — todos siguen en PASS.
+
+**No se asume que una IP tiene una única etiqueta — la evaluación
+siempre se hace por `request_id`.** La garantía de direcciones
+disjuntas de este escenario es una simplificación deliberada para
+tener un primer dataset limpio de evaluar, no una regla general del
+proyecto. Queda anotado para más adelante: una extensión natural es
+generar a propósito un escenario donde una misma IP mezcle tráfico
+legítimo y malicioso (por ejemplo, un usuario real detrás de un proxy
+que en otro momento participó, sin saberlo, de una botnet), y
+confirmar que el mecanismo de evaluación —que ya cruza por
+`request_id`, nunca por entidad— sigue funcionando igual de bien en
+ese caso.
+
+**Formato de archivos: dos JSONL más un manifiesto, por escenario.**
+`events.jsonl` (exactamente `LabeledEvent.Payload()`, sin ninguna
+etiqueta — es lo único a lo que tiene acceso el código que arma el
+request hacia el motor), `labels.jsonl` (`request_id` + `label`, el
+ground truth) y `manifest.json` (semilla, configuración y
+estadísticas, sin ninguna marca de tiempo real de generación, para que
+el manifiesto también sea reproducible byte a byte). Verificado por
+test que `events.jsonl` y `labels.jsonl` tienen exactamente el mismo
+conjunto de `request_id` — ni de más, ni de menos.
+
+**`cmd/datagen`** es el ejecutable nuevo: `--seed`, `--ratio` (0, 10 o
+30) y `--out`. Los objetivos `make data-0`, `make data-10`,
+`make data-30` y `make data-all` (agregados al `Makefile` reservado
+desde la tarea 0.1) lo invocan con la semilla 42 por defecto. La
+carpeta `data/` sigue ignorada por git desde la tarea 0.1.
+
+**Ventana del escenario: 6 horas simuladas**, elegida para contener
+cómodamente la ventana de 3 horas del stuffing (con margen antes y
+después) y las sesiones de escaneo lento (hasta 3 horas cada una) —
+verificado por test que ningún evento de ataque cae fuera de la
+ventana del escenario. Esto le deja margen de sobra al futuro motor,
+con sus ventanas de tiempo configurables (minutos para correlacionar
+stuffing, horas para el escaneo lento), para operar sobre un solo
+archivo de escenario.

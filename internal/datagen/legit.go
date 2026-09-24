@@ -127,6 +127,23 @@ var (
 		MaxGap:                5 * time.Second,
 	}
 
+	// ProfileHostedTenant es tráfico legítimo que comparte la misma red
+	// simulada (el ASN "tipo hosting") que usan los dos ataques —
+	// piensa en una pyme que aloja su propia API en el mismo proveedor
+	// de hosting que un atacante usa para lanzar sus campañas. Mismo
+	// comportamiento que ProfileAPIClient (se construye a partir de él,
+	// así que hereda cualquier ajuste futuro), cambiando solo el pool
+	// de IP. Existe para que "esta IP pertenece al ASN de hosting"
+	// nunca sea, por sí sola, una señal suficiente — se usa recién en
+	// la tarea 0.6, al mezclar tráfico legítimo y malicioso dentro del
+	// mismo ASN simulado.
+	ProfileHostedTenant = func() LegitProfile {
+		p := ProfileAPIClient
+		p.Name = "hosted_tenant"
+		p.Pool = PoolHostingSim
+		return p
+	}()
+
 	// ProfileOffice es la "trampa" de cualquier regla ingenua basada
 	// solo en volumen por IP: varios empleados navegan normalmente,
 	// cada uno con su propia sesión, pero todos salen a Internet por la

@@ -1,6 +1,7 @@
 package datagen
 
 import (
+	"net/netip"
 	"sort"
 	"time"
 
@@ -22,8 +23,18 @@ type CredentialStuffingCampaign struct {
 
 	// IPCount es cuántas IPs distintas participan de la campaña. No
 	// puede superar la capacidad del Pool (254 direcciones para un
-	// /24; ver ipspace.go).
+	// /24; ver ipspace.go). Se ignora si IPs no es nil.
 	IPCount int
+
+	// IPs, si no es nil, reemplaza el sorteo interno de direcciones:
+	// la campaña usa exactamente estas IPs en lugar de llamar a
+	// Pool.DistinctAddrs. Se agregó en la tarea 0.6 para que el
+	// mezclador de escenarios pueda coordinar de antemano qué
+	// direcciones le da a cada generador (por ejemplo, para que un
+	// tenant legítimo del mismo ASN y las IPs atacantes nunca
+	// coincidan). Si es nil, el comportamiento es idéntico al de la
+	// tarea 0.5: se sortean IPCount direcciones del Pool.
+	IPs []netip.Addr
 
 	// MinAttemptsPerIP / MaxAttemptsPerIP acota cuántos intentos de
 	// login hace cada IP en TODA la campaña — deliberadamente bajo,
@@ -89,7 +100,10 @@ var DefaultCredentialStuffingCampaign = CredentialStuffingCampaign{
 // timestamp se calcula directo como un desplazamiento aleatorio dentro
 // de start..start+cfg.Window, y después se ordena todo el conjunto.
 func GenerateCredentialStuffingCampaign(rng *RNG, cfg CredentialStuffingCampaign, start time.Time) []groundtruth.LabeledEvent {
-	ips := cfg.Pool.DistinctAddrs(rng, cfg.IPCount)
+	ips := cfg.IPs
+	if ips == nil {
+		ips = cfg.Pool.DistinctAddrs(rng, cfg.IPCount)
+	}
 
 	var usedAccounts []string
 	var events []groundtruth.LabeledEvent
