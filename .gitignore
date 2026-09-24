@@ -1,5 +1,9 @@
 # Generated datasets (can be hundreds of MB) — never committed, always reproducible from a seed.
 /data/
+/data-calibration/
+
+# Generated Markdown reports — always reproducible by re-running cmd/eval.
+/reports/
 
 # Compiled binaries.
 /bin/

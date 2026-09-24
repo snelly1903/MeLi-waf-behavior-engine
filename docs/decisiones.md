@@ -543,3 +543,407 @@ ventana del escenario. Esto le deja margen de sobra al futuro motor,
 con sus ventanas de tiempo configurables (minutos para correlacionar
 stuffing, horas para el escaneo lento), para operar sobre un solo
 archivo de escenario.
+
+## 2026-09-24 — El evaluador: `internal/eval` (tarea 0.7)
+
+**Alcance de esta tarea, confirmado antes de implementar:**
+`Evaluate` recibe `[]decision.Decision` en memoria — no lee ningún
+archivo `decisions.jsonl` todavía. Esa lectura, junto con el
+ejecutable `cmd/eval` y el reporte en Markdown, queda para la tarea
+0.8. Tampoco se implementó el motor WAF ni la API HTTP.
+
+**`internal/eval` es, junto con `internal/datagen`, el único paquete
+del proyecto que importa `internal/groundtruth`.** Vale la pena
+tenerlo claro para la entrevista: la regla de aislamiento de la tarea
+0.2 nunca fue "nadie puede ver el ground truth" — fue "el motor nunca
+lo ve". El evaluador existe precisamente para comparar el ground
+truth con las decisiones; verlo es su trabajo, no una excepción a la
+regla.
+
+**Cada métrica revisa su propio denominador, de forma independiente —
+no hay una regla del tipo "en el escenario de 0% todo es N/A".**
+Corrección importante hecha antes de implementar: `Precision` depende
+de cuántas veces el motor predijo positivo (`TP+FP`); `Recall` y
+`FNR` dependen de cuántos positivos reales había (`TP+FN`); `FPR`
+depende de cuántos negativos reales había (`FP+TN`). Son tres
+condiciones distintas. En el escenario de 0% de tráfico malicioso,
+`TP+FN` siempre es 0 (no hay ningún ataque real), así que `Recall` y
+`FNR` son N/A — pero si el motor bloqueó aunque sea un evento
+legítimo por error, `TP+FP > 0` y `Precision` SÍ está definida (va a
+dar 0%, porque ese positivo predicho fue un falso positivo). Cada uno
+de los dos casos tiene su propio test
+(`TestConfusionMatrix_Metrics_PrecisionDefinedWithoutPositives` y su
+espejo, `..._RecallDefinedWithoutPredictedPositives`).
+
+**Ninguna métrica indefinida se disimula con un 0 o un 1.** El tipo
+`Ratio` (`{Value float64; Defined bool}`) obliga a que quien lea el
+resultado compruebe explícitamente si el número tiene sentido, en vez
+de asumirlo.
+
+**Dos políticas, siempre las dos, nunca una a elección.** Estricta
+(solo `BLOCK` es positivo) y amplia (`CHALLENGE` o `BLOCK`) — porque
+un `CHALLENGE` es una molestia mucho más barata que un `BLOCK`, y
+evaluar solo con la política estricta penalizaría injustamente a un
+motor que contiene el ataque con fricción baja en vez de bloquear
+directamente.
+
+**Recall separado por `credential_stuffing` y `slow_scan`, pero
+Precision y FPR siguen siendo globales.** Un falso positivo (molestar
+a un usuario legítimo) no "pertenece" a ningún tipo de ataque en
+particular, así que desglosarlo por tipo no tendría sentido — solo el
+recall (¿de los ataques de este tipo, cuántos atrapé?) se desglosa.
+
+**Atribución del vector de ataque: tres categorías, no dos, y solo
+sobre los verdaderos positivos.** Correcto / Desconocido / Incorrecto
+— nunca se mezcla "desconocido" con "incorrecto": un motor que dice
+honestamente `unknown` cuando no está seguro no debería penalizarse
+igual que uno que afirma un vector concreto y se equivoca. La
+precisión de atribución (`Correct / (Correct + Incorrect)`) deja
+`Unknown` fuera del denominador — y si un motor siempre responde
+`unknown`, esa precisión es N/A, no 0% (verificado por test). Esto
+solo se evalúa entre los verdaderos positivos de la política amplia:
+no tiene sentido preguntar "¿acertó el vector?" sobre un falso
+positivo (no hay ningún ataque real con el cual comparar) ni sobre un
+evento que ni siquiera se marcó.
+
+**Integridad de datos: cuatro problemas detectados, ninguno frena el
+cálculo, pero todos quedan marcados.** `request_id` duplicado en las
+etiquetas, `request_id` duplicado entre las decisiones, etiqueta
+desconocida, decisión faltante y decisión sobrante. Las decisiones
+faltantes o sobrantes se **excluyen** del cálculo de la matriz de
+confusión (no se puede contar una acción que no existe, y tratar una
+decisión faltante como un `ALLOW` implícito escondería posibles bugs
+del motor). `Issues.Clean()` es la señal explícita de que un
+resultado es un diagnóstico parcial, no definitivo — el criterio que
+pediste ("no permitir que un reporte con decisiones faltantes se
+interprete como resultado definitivo") queda resuelto acá: cualquier
+código que lea un `Result` tiene que comprobar `Clean()` antes de
+darlo por bueno, no puede ignorarlo.
+
+**Evaluación por entidad o por campaña: documentada como trabajo
+futuro, no implementada.** Esta tarea mide únicamente por
+`request_id`, que es la unidad natural de `Decision`. Queda anotado
+para más adelante: una campaña de credential stuffing distribuido
+puede involucrar cientos de IPs, y — como ya vimos en la tarea 0.6 —
+una IP compartida no necesariamente tiene una única etiqueta (un
+mismo cliente podría, en un dataset más realista, mezclar tráfico
+legítimo y malicioso). Por eso la evaluación por entidad, si se
+construye en el futuro, tiene que seguir agregando sobre etiquetas
+por `request_id` — nunca asumir que "esta IP = este resultado". El
+campo `EntityID` que ya tiene `Decision` alcanza para construir esa
+métrica más adelante sin tener que tocar el contrato.
+
+**Motores ficticios, solo dentro de los tests.** `decideAllowAll`,
+`decideBlockAll` y `decidePerfectOracle` viven únicamente en
+`evaluate_test.go` — no son código de producción, existen para
+confirmar que el propio evaluador es confiable antes de usarlo contra
+un motor real: "permitir todo" tiene que dar recall 0%, "bloquear
+todo" tiene que dar FPR 100%, y el "oráculo perfecto" (que hace
+trampa mirando la etiqueta — algo que ningún motor real puede hacer)
+tiene que dar 100% en todo.
+
+**Prueba de extremo a extremo con datos reales de la tarea 0.6.** Se
+generó un escenario del 10% con `datagen.BuildScenario`, se escribió
+a un directorio temporal con `datagen.WriteScenario`, y se aplicó una
+regla de juguete construida **únicamente a partir de `events.jsonl`**
+(nunca mirando `labels.jsonl`) para simular decisiones de un motor.
+Sobre 1.292 eventos reales, la tubería completa (cargar, cruzar,
+calcular) corrió sin errores y con los números internamente
+consistentes (el total de cada matriz de confusión coincide con la
+cantidad de eventos cruzados). No mide si la regla es buena — mide
+que el evaluador funciona sobre datos con la forma real, no solo
+sobre los 7 a 15 casos armados a mano.
+
+## 2026-09-24 — Ejecutable de evaluación y reporte Markdown: `cmd/eval` (tarea 0.8)
+
+**Alcance.** `cmd/eval` es la puerta de entrada por archivo del
+evaluador de la tarea 0.7: lee `labels.jsonl` y `decisions.jsonl` de
+una carpeta de escenario, corre `eval.Evaluate` (sin duplicar ningún
+cálculo — `EvaluateDecisions` es una envoltura fina, ver más abajo) y
+genera un reporte Markdown legible. Sigue sin existir ningún motor
+WAF, ninguna API HTTP: `decisions.jsonl` es siempre un archivo que
+alguien (hoy, un motor ficticio de test) generó aparte.
+
+**Carga de decisiones: tres categorías de problema, no dos.**
+`LoadDecisions` (`internal/eval/decisions.go`) separa cada línea de
+`decisions.jsonl` en tres resultados posibles:
+
+1. Decisión utilizable (JSON válido, `request_id` no vacío, pasa
+   `decision.Validate()`).
+2. `InvalidIDs`: JSON válido y `request_id` identificable, pero la
+   decisión no pasa `decision.Validate()` — por ejemplo, un `BLOCK`
+   sin `Explanation` ni `ContributingSignals`. Se identifica por su
+   `request_id`.
+3. `CorruptLines`: la línea no se pudo interpretar en absoluto — JSON
+   inválido, o JSON válido con `request_id` vacío. No hay ningún ID
+   confiable para identificarla, así que se reporta por número de
+   línea (1-indexado).
+
+Ninguna de las dos categorías de problema entra al cálculo de
+métricas, y ninguna se convierte silenciosamente en un `ALLOW`
+implícito — es el requisito explícito que pediste. `decision.Validate`
+se reutiliza tal cual (tarea 0.3): `LoadDecisions` no reimplementa
+ninguna regla de validación semántica, solo decide qué hacer con el
+resultado.
+
+**Evitar reportar el mismo problema dos veces.** Si la única decisión
+de un `request_id` es inválida, `Join` (tarea 0.7) no tiene forma de
+distinguir "nunca llegó ninguna decisión" de "llegó una decisión
+inválida y se descartó" — sin ajuste extra, ese `request_id`
+terminaría apareciendo tanto en `InvalidDecisionIDs` como en
+`MissingDecisionIDs`, contando el mismo problema con dos nombres.
+`EvaluateDecisions` (`internal/eval/evaluate.go`) corrige esto
+después de llamar a `Evaluate`: quita de `MissingDecisionIDs`
+cualquier `request_id` que ya esté en `InvalidDecisionIDs`, dejando el
+diagnóstico más preciso (`InvalidDecisionIDs`) como único registro del
+problema. Probado en
+`TestEvaluateDecisions_InvalidDecisionIsExcludedNotAllow`.
+
+**`Issues` creció, pero `Clean()` sigue siendo la única señal a
+comprobar.** Se agregaron `InvalidDecisionIDs` y
+`CorruptDecisionLines` a la struct `Issues` de la tarea 0.7, y
+`Clean()` los incluye en su chequeo — cualquier código que ya
+comprobaba `Clean()` sigue funcionando sin cambios, ahora con una
+cobertura más completa de problemas.
+
+**Reporte Markdown: nunca disimula un N/A, nunca esconde una
+advertencia.** `RenderMarkdown` (`internal/eval/report.go`) es una
+función pura que solo formatea un `eval.Result` ya calculado — no
+recalcula ninguna métrica. Reutiliza `Ratio.Defined` de la tarea 0.7
+para imprimir literalmente `N/A` en vez de un `0.000` cuando un
+denominador es cero (la misma regla, ahora expuesta en el texto que
+lee un humano). Si `Issues.Clean()` es `false`, el reporte abre con
+un bloque de advertencia (⚠️, en negrita, con la lista completa de
+problemas) **antes** de mostrar cualquier matriz o métrica — probado
+explícitamente en `TestRenderMarkdown_DirtyResult_ShowsWarningAndLists`,
+que confirma que la advertencia aparece antes que las secciones de
+política.
+
+**`cmd/eval/main.go`: tres códigos de salida, no dos.**
+
+- `0` (`exitClean`): reporte generado, sin problemas de integridad.
+- `1` (`exitIntegrityIssues`): el reporte SÍ se generó — el comando
+  hizo su trabajo — pero `Issues.Clean()` es `false`. No es un error
+  operativo: es información sobre la calidad del dato de entrada.
+- `2` (`exitOperationalError`): el comando no pudo completar su
+  trabajo — archivo inexistente, fallo de lectura o escritura.
+
+Separar estos dos últimos casos importa porque un script (o vos, a
+mano) necesita poder distinguir "esto no corrió" de "esto corrió pero
+avisa que el dato está incompleto" sin tener que parsear el texto del
+reporte.
+
+Flags: `--scenario` (obligatorio, carpeta con `labels.jsonl` y
+`decisions.jsonl`) y `--out` (opcional; si se omite, el reporte se
+imprime por stdout en vez de escribirse a disco).
+
+**Pruebas.** `internal/eval/decisions_test.go` (carga de decisiones
+válidas, JSON corrupto, `request_id` vacío, decisión semánticamente
+inválida, líneas en blanco ignoradas — usando el fixture
+`testdata/eval/decisions_sample.jsonl`, con los cinco casos a
+propósito), `internal/eval/evaluate_decisions_test.go` (decisión
+inválida excluida sin duplicar el problema, líneas corruptas ensucian
+`Clean()`, y una comprobación defensiva explícita de que
+`TP+FP+FN+TN` coincide exactamente con `TotalJoined` en las dos
+políticas, incluso con decisiones inválidas o corruptas de por
+medio), `internal/eval/report_test.go` (reporte limpio sin
+advertencia, reporte sucio con la advertencia y las listas, y un
+escenario totalmente en cero donde cada métrica tiene que salir
+`N/A`), y `cmd/eval/main_test.go` (prueba de extremo a extremo de
+`run()` — la función interna que arma `main`, sin invocar el binario
+como subproceso, para que el test sea rápido — con un escenario chico
+limpio, uno sucio, un directorio sin archivos, y el caso sin `--out`
+imprimiendo a stdout). Todos los motores y datasets usados son
+ficticios, construidos solo para el test.
+
+**Makefile.** Se agregó el target `eval`, parametrizado con
+`SCENARIO` y `OUT` (por defecto `data/scenario-0` y
+`reports/scenario-0.md`), análogo a los targets `data-*` de la tarea
+0.6. No se corrió contra ningún escenario real todavía: sin motor,
+`decisions.jsonl` no existe para ningún escenario generado por
+`cmd/datagen`, así que no hay nada real que evaluar todavía — el
+target queda listo para cuando exista.
+
+## 2026-09-24 — Línea base de rate limiting por IP: `internal/baseline` (tarea 0.9)
+
+**Qué es y qué NO es.** `internal/baseline` es un rate limiter
+tradicional por IP, con ventana deslizante — la técnica de
+mitigación más simple y más común contra tráfico abusivo. Su único
+propósito es servir de punto de comparación conocido, medido sobre
+los mismos escenarios y con el mismo `cmd/eval`, contra el que se va
+a comparar el motor conductual de la Fase 1. El nombre del paquete
+(`baseline`, no `engine` ni nada parecido) es deliberado, para que
+nunca se confunda con el detector real del challenge. Nunca importa
+`internal/groundtruth` — decide únicamente con lo que ve en
+`event.Event`, la misma separación que ya exigía la tarea 0.2 para
+cualquier detector real.
+
+**Dos modos de conteo, sin duplicar la identificación de rutas de
+login.** `Config.Mode` puede ser `"all"` (cuenta toda petición de la
+IP) o `"auth"` (cuenta únicamente las peticiones que
+`event.AuthPathMatcher` reconoce como ruta de autenticación —
+reutilizado tal cual de la tarea 0.2, sin ninguna lógica nueva de
+reconocimiento de rutas). En modo `"auth"`, una petición que no es de
+login siempre es `ALLOW` y ni siquiera entra al conteo de ninguna IP:
+modela un rate limiter específico de `/login`, la forma más común en
+la práctica de mitigar credential stuffing.
+
+**Ventana deslizante, no de bloques fijos.** Para el evento actual
+(timestamp `t`, IP `X`), se cuentan las peticiones contadas de `X`
+con timestamp en el intervalo cerrado `[t-Window, t]` — que siempre
+incluye al propio evento actual. Se eligió deslizante en vez de fija
+(“se resetea cada minuto en punto”) porque una ventana fija tiene un
+hueco conocido: un atacante puede mandar el límite completo justo
+antes de que cierre una ventana y el límite completo otra vez apenas
+abre la siguiente, duplicando el volumen real en segundos sin que
+ningún contador lo vea. La implementación usa una cola por IP
+(`map[netip.Addr][]time.Time]`) que se recorta por adelante (lo que
+ya salió de la ventana) y crece por atrás (el evento actual) — costo
+amortizado bajo por evento, sin recorrer el historial completo de
+cada IP en cada petición.
+
+**Validación explícita, nunca un reloj real.** `Config.Validate()`
+exige `MaxRequests > 0` y `Window > 0`, y `Detect` además exige que
+`events` venga ordenado por `Timestamp` de forma no decreciente —
+si no lo está, devuelve `ErrEventsOutOfOrder` en vez de calcular
+algo sin sentido sobre una entrada desordenada. El único reloj que
+existe es `event.Event.Timestamp`, igual que en el resto del
+proyecto desde la tarea 0.4.
+
+**Acciones: solo ALLOW y BLOCK, vector siempre `unknown`.** Sin
+`CHALLENGE` — un rate limiter tradicional de referencia tiene
+tradicionalmente un único umbral binario, y mantenerlo así simplifica
+la comparación contra la política estricta del evaluador. El
+`AttackVector` de toda decisión `BLOCK` es `AttackVectorUnknown`: un
+conteo de peticiones por IP no tiene ninguna forma de distinguir
+credential stuffing de escaneo — ambos "se ven" igual (muchas
+peticiones). Esta limitación de atribución es intencional y es
+justamente parte de la comparación contra el motor conductual.
+
+**`ConfidenceScore`: revisado, ya no satura de entrada.** La primera
+versión del plan proponía `min(count/MaxRequests, 1.0)`, que con el
+doble del límite ya da `1.0` y no distingue más entre el doble y las
+cien veces el límite. La fórmula final es `1 - MaxRequests/count`
+(solo para `BLOCK`; `ALLOW` siempre tiene `ConfidenceScore = 0`):
+
+```
+count = MaxRequests+1 (recién se cruzó el límite) → score ≈ 0
+count = 2×MaxRequests                             → score = 0.5
+count = 10×MaxRequests                             → score = 0.9
+count → ∞                                          → score → 1 (nunca lo toca)
+```
+
+Sigue siendo, como ya advertía `decision.Decision.ConfidenceScore`
+desde la tarea 0.3, una heurística legible — cuántas veces se superó
+el límite —, NO una probabilidad estadísticamente calibrada de que
+el tráfico sea un ataque.
+
+**`decisions.jsonl` compatible con `cmd/eval`, sin tocar las tareas
+0.7/0.8.** `cmd/baseline --scenario ... --mode ... --max-requests ...
+--window ...` lee `events.jsonl` y escribe un `decisions.jsonl` con
+el mismo contrato que ya consume `cmd/eval`. Como `Detect` siempre
+devuelve exactamente una decisión por evento de entrada, el archivo
+resultante nunca genera decisiones faltantes/sobrantes al cruzarlo —
+confirmado en `TestDetect_IntegratesWithEval`. Para evitar pisar
+resultados al probar distintos modos/umbrales, `--out` por defecto
+arma un nombre que incluye el modo, el umbral y la ventana (ej.
+`decisions-baseline-auth-max5-win5m0s.jsonl`); como `cmd/eval` sigue
+esperando el nombre exacto `decisions.jsonl` dentro de `--scenario`
+(no se tocó su lógica), evaluar una corrida puntual requiere pasarle
+`--out <scenario>/decisions.jsonl` explícitamente — el propio
+`cmd/baseline` lo recuerda en su último log.
+
+**Calibración: semilla distinta a la del reporte, y una predicción
+escrita antes de correr el número.** Se generaron datasets de
+calibración con `--seed 1` (`data-calibration/scenario-10` y
+`scenario-30`, jamás comprometidos al repo — ver `.gitignore`),
+separados de los datasets de reporte que ya usa el proyecto desde la
+tarea 0.6 (`--seed 42`, en `data/scenario-*`). El umbral se eligió
+mirando *solo* los datos de calibración, y recién después se corrió,
+ya fijo, contra los datos de reporte — para que el número final no
+haya "memorizado" las particularidades de la corrida que se muestra.
+
+Antes de correr nada, la predicción explícita (ya escrita en el plan
+aprobado) era: esta línea base tiene que verse mal contra el
+credential stuffing distribuido de baja intensidad de la tarea 0.5
+(150 IPs con 1-3 intentos cada una, repartidos en una campaña de 3
+horas) — por diseño, ningún umbral razonable de "peticiones por IP en
+una ventana corta" puede cruzarse con esos números.
+
+Barrido sobre `scenario-10`/`scenario-30` de calibración, política
+estricta, `MaxRequests` ∈ {2, 3, 5, 10, 20, 50, 100, 200} y `Window`
+∈ {60s, 300s, 600s}, en los dos modos:
+
+- **Modo `all`:** con umbrales laxos (≥20 en 60s) nunca bloquea nada
+  (Recall=0%, FPR=0%) — el tráfico legítimo del generador (sobre
+  todo `ProfileNavegante` trayendo varios recursos estáticos
+  seguidos) igual nunca llega a esos volúmenes por IP en tan poco
+  tiempo, así que tampoco lo hacen los ataques. Con umbrales
+  ajustados (≤10 en 60s) empieza a haber falsos positivos —FPR de
+  6% a 80% según el umbral— sin que el recall suba nunca de 0%: el
+  tráfico legítimo "en ráfaga" (fetch de assets, clústeres de
+  oficina compartiendo IP) dispara el límite antes que ningún
+  ataque, porque ambos ataques están diseñados para ser de baja
+  intensidad por IP.
+- **Modo `auth`:** FPR = 0.000 en absolutamente todos los umbrales
+  probados (nadie más que los intentos reales de login entra al
+  conteo, y `ProfileNavegante`/`ProfileAPIClient` casi nunca
+  reintentan login) — pero Recall = 0.000 también en todos los
+  umbrales probados: la campaña de credential stuffing de la tarea
+  0.5 nunca manda más de 3 intentos de login por IP en 3 horas,
+  muy por debajo de cualquier umbral probado incluso en la ventana
+  más ancha (600s). El escaneo lento, además, ni siquiera pasa por
+  `/login` la mayoría de las veces, así que el modo `auth`
+  estructuralmente no puede tocarlo.
+
+**Configuración final elegida:** `mode=auth, max-requests=5,
+window=300s` (5 minutos) — un valor de referencia habitual para rate
+limiting de login en la práctica (similar al recomendado por OWASP
+para políticas de bloqueo de intentos), y la única combinación que en
+la calibración nunca generó un falso positivo. Se aplicó, sin
+cambios, contra los tres escenarios de reporte (`data/scenario-0/10/30`,
+semilla 42). Resultado real medido:
+
+```
+scenario-10 (política estricta): TP=0 FP=0 FN=121 TN=1246 — Precision=N/A Recall=0.000 FPR=0.000 Accuracy=0.911
+  por vector: credential_stuffing TP=0 FN=41 Recall=0.000 · slow_scan TP=0 FN=80 Recall=0.000
+```
+
+0 BLOCK en los tres escenarios de reporte (0/10/30). Esto no es un
+error del baseline ni de la evaluación: es exactamente la predicción
+escrita antes de medir. Confirma con datos reales, no solo en teoría,
+por qué un rate limit tradicional por IP —incluso bien calibrado, sin
+ningún falso positivo— no alcanza contra un ataque distribuido de
+baja intensidad, y es la justificación medida (no solo argumentada)
+de por qué hace falta el motor conductual de la Fase 1.
+
+**Limitación documentada, no resuelta acá: NAT.** Varias sesiones
+legítimas distintas detrás de la misma IP comparten el mismo
+contador y pueden terminar bloqueadas entre sí aunque cada una sea
+individualmente legítima (`TestDetect_NATManySessions_SameIPStillShared`).
+Con el `mode=auth` elegido esto es improbable en la práctica (pocos
+intentos de login por sesión), pero sigue siendo una limitación
+estructural de cualquier rate limit puramente por IP — el motor
+conductual de la Fase 1 va a necesitar señales más finas que la IP
+sola (sesión, cuenta probada) para no heredar el mismo problema.
+
+**Tests.** `internal/baseline/ratelimit_test.go`: umbral no
+alcanzado, umbral exacto vs. primera petición que lo supera, dos IPs
+con contadores independientes, NAT con varias sesiones detrás de la
+misma IP, ventana deslizante liberando eventos viejos, determinismo
+(misma entrada → misma salida corrida dos veces), modo `all` vs.
+modo `auth` contando distinto sobre el mismo tráfico, configuraciones
+inválidas (`MaxRequests`/`Window`/`Mode`, individualmente y
+combinadas, con `errors.Is`), eventos fuera de orden, y que toda
+decisión generada (`ALLOW` y `BLOCK`, en los dos modos) pase
+`decision.Validate()`. `internal/baseline/ratelimit_integration_test.go`:
+genera un escenario real con `datagen.BuildScenario`, corre
+`Detect`, escribe `decisions.jsonl`, y confirma con
+`eval.EvaluateDecisions` que el pipeline completo
+(generar→detectar→escribir→cargar→cruzar→evaluar) es autoconsistente
+(`Issues.Clean()==true`, totales coinciden) — mismo patrón que la
+prueba de extremo a extremo de la tarea 0.7.
+
+**Makefile.** Target `baseline`, parametrizado con
+`SCENARIO`/`MODE`/`MAX_REQUESTS`/`WINDOW`/`BASELINE_OUT`, análogo a
+`eval` y `data-*`.

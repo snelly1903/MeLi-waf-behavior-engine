@@ -1,0 +1,5 @@
+{"request_id":"r-1","label":"legit"}
+{"request_id":"r-2","label":"credential_stuffing"}
+{"request_id":"r-3","label":"slow_scan"}
+{"request_id":"r-2","label":"credential_stuffing"}
+{"request_id":"r-4","label":"unknown_attack"}
