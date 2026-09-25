@@ -1166,3 +1166,149 @@ presente/ausente, conteo por ruta); que `Metrics.PathCounts` sea una
 copia propia; una clave nunca observada devuelve `Metrics` vacío, no
 error; `Sweep` elimina solo lo inactivo; y los dos tests de
 concurrencia con `go test -race` ya descritos.
+
+## 2026-09-25 — Detector de credential stuffing distribuido: `internal/credstuffing` (tarea 1.3)
+
+**Qué es y qué NO es.** El primer detector real del motor. Busca
+credential stuffing distribuido de bajo volumen por IP, correlacionando
+actividad entre múltiples IPs de un mismo grupo de red dentro de una
+ventana. Deliberadamente no depende de que ninguna IP individual
+supere ningún umbral — el baseline de la Fase 0
+(`internal/baseline`, tarea 0.9) ya demostró con datos reales que esa
+técnica falla contra este patrón (recall 0% en los tres escenarios de
+reporte). No se conectó con `cmd/engine` en esta tarea; no se integró
+ninguna fuente real de ASN.
+
+**Dos paquetes nuevos:** `internal/finding` (el tipo `Finding`,
+compartido por todos los futuros detectores) y `internal/credstuffing`
+(el detector en sí).
+
+**`Finding` reutiliza `decision.AttackVector` y
+`decision.ContributingSignal` tal cual**, sin duplicar esos tipos —
+combinar los `Finding` de varios detectores (credential stuffing, y
+más adelante slow scan) en un `decision.Decision` va a ser concatenar
+listas, no convertir tipos.
+
+**Correlación sin depender del perfil de una sola IP.** El estado no
+está indexado por IP ni por sesión (eso ya lo cubre `internal/profile`,
+tarea 1.2) — está indexado por **grupo de red**. Cada observación
+agrega su IP a un *conjunto*, no a un contador: una sola IP mandando
+mil requests solo aporta 1 al conteo de IPs distintas, así que un
+flood de una sola IP estructuralmente nunca puede cruzar
+`MinDistinctIPs` por sí solo — sale gratis de usar un conjunto, no de
+un caso especial en el código. Probado en
+`TestEvaluate_SingleIP_ManyAttempts_DoesNotTrigger`.
+
+**`NetworkResolver`: interfaz mínima, definida donde se consume.**
+Mismo criterio que `engine.Decider` (tarea 1.1): la interfaz vive en
+`internal/credstuffing`, no en quien la vaya a implementar. Los tests
+usan un `fakeResolver` (`map[netip.Addr]string`), exclusivamente en
+`_test.go` — ninguna API real de ASN se integró; queda para una tarea
+posterior.
+
+**IP no resoluble: excluida de toda correlación, deliberadamente
+conservador.** Si `Resolve` devuelve `ok=false`, el evento no crea ni
+contamina ningún grupo. Se descartó agrupar todo lo "desconocido" en
+un único balde global porque mezclaría tráfico legítimo no relacionado
+de todo el mundo en una falsa campaña. El costo — un atacante detrás
+de una IP no resoluble es invisible para este detector — queda
+documentado como limitación explícita, no como bug. Probado en
+`TestObserve_UnresolvedIP_ExcludedFromCorrelation`, que además
+confirma que las IPs no resueltas no contaminan un grupo real conocido.
+
+**Señales, por grupo de red, dentro de la ventana:** IPs distintas,
+cuentas distintas (`login_user_hash`, excluyendo vacío — misma
+convención que `internal/profile.Metrics.DistinctAccounts`,
+consistencia entre componentes), intentos totales, y ratio de 401/403.
+Solo se observan eventos de rutas de autenticación —
+`event.AuthPathMatcher` reutilizado tal cual de la tarea 0.2.
+
+**Gate conjuntivo (AND, no un promedio que compensa señales débiles
+con fuertes).** `Triggered` exige las CUATRO condiciones a la vez:
+`DistinctIPs≥MinDistinctIPs`, `DistinctAccounts≥MinDistinctAccounts`,
+`TotalAttempts≥MinAttempts`, `FailedRatio≥MinFailedRatio`. Es la
+defensa principal contra falsos positivos: `ProfileHostedTenant`
+(datagen, mismo ASN simulado que el pool atacante) puede tener muchas
+IPs y muchas cuentas, pero sus logins mayormente tienen éxito — nunca
+cruza el umbral de ratio, así que nunca dispara, sin importar
+diversidad. Probado en
+`TestEvaluate_LegitTenantSharingASNWithAttackers_DoesNotTrigger`, y en
+los otros dos casos "parciales" pedidos:
+`TestEvaluate_ManyFailuresFewAccounts_DoesNotTrigger` (posible
+brute-force de una sola cuenta desde muchas IPs — no es el patrón que
+busca este gate) y `TestEvaluate_ManyAccountsFewFailures_DoesNotTrigger`
+(login masivo legítimo).
+
+**Corrección aplicada tras la revisión: `RiskScore` nunca puede dar 0
+cuando `Triggered` es `true`.** La fórmula original
+(`1 - umbral/valor` por señal, promediado) da exactamente 0 en las
+cuatro componentes cuando las señales están justo en su umbral — y
+sin embargo `Triggered` ya es `true` ahí, porque el gate usa `≥`. Un
+detector que disparó no puede reportar riesgo cero: sería
+contradictorio para quien lea la decisión. Solución mínima aplicada:
+un piso configurable, `ScoreFloor ∈ (0,1)`, estrictamente entre 0 y 1
+(validado), con
+`RiskScore = ScoreFloor + (1-ScoreFloor)·promedio_ponderado`. Sigue
+siendo puramente heurístico — arranca en `ScoreFloor` apenas se cruzan
+los cuatro umbrales, y crece hacia 1 (sin tocarlo nunca) cuanto más se
+los supera — nunca se presenta como una probabilidad calibrada, misma
+advertencia que `decision.Decision.ConfidenceScore` desde la tarea
+0.3. Probado explícitamente en
+`TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore`:
+seis intentos armados a mano para que las cuatro señales caigan
+EXACTO en su umbral (5 IPs, 4 cuentas, 6 intentos, ratio 0.5) — el
+test confirma `Triggered=true` y `RiskScore` exactamente igual a
+`ScoreFloor` (0.2 en la configuración de prueba), ni más ni menos.
+
+**`login_user_hash` vacío.** Cuenta en `TotalAttempts` y en el ratio
+401/403, pero nunca se agrega al conjunto de cuentas distintas —
+mismo criterio que `internal/profile`. Probado en
+`TestEvaluate_MissingLoginUserHash_ExcludedFromAccountSet`.
+
+**Sin umbrales de `CHALLENGE`/`BLOCK` en este detector**, según lo
+acordado: ya está documentado desde la tarea 0.3 que esos umbrales son
+configuración del *policy* del futuro `engine.Decider`, no de cada
+detector — este entrega solo `Triggered` + `RiskScore`.
+
+**Eventos fuera de orden: mismo mecanismo de watermark que la tarea
+1.2, reimplementado de forma autocontenida.** Se evaluó explícitamente
+extraer un `internal/window` genérico del que dependieran tanto
+`internal/profile` como `internal/credstuffing`, y se descartó para
+esta tarea: mantener el detector autocontenido evita modificar un
+componente ya probado (`internal/profile`) sin necesidad, dado el
+cronograma corto del challenge. Si aparece un tercer consumidor de
+este patrón, ahí sí conviene extraerlo. Costo aceptado: `Observe` es
+`O(k)` (reescanea la ventana completa del grupo en cada llamada), no
+`O(1)` amortizado — mismo trade-off ya aceptado y documentado en la
+tarea 1.2.
+
+**Concurrencia y limpieza.** Un único `sync.Mutex` (acá alcanza con
+uno solo: a diferencia de `internal/profile`, hay un solo índice —por
+grupo de red—, no dos). `Evaluate` copia el estado antes de soltar el
+lock. `Sweep(now, idleTTL)` por simetría con la tarea 1.2, aunque la
+cardinalidad de grupos de red es naturalmente chica (a lo sumo unos
+pocos miles de ASN reales), así que el riesgo de crecimiento sin
+límite es menor acá que en `internal/profile`. Confirmado sin
+condiciones de carrera con `go test -race`
+(`TestObserve_ConcurrentWrites_SameGroup`, 60 goroutines con IPs y
+cuentas distintas y timestamps deterministas sobre el mismo grupo).
+
+**Ningún umbral final elegido mirando la semilla 42.** Los valores
+usados en los tests (`baseConfig`, tarea 1.3) son valores de prueba
+elegidos para poder calcularlos a mano, explícitamente documentados
+como no-finales. La calibración real contra un dataset separado del
+de reporte queda para una tarea posterior, mismo criterio que
+`internal/baseline` (tarea 0.9).
+
+**Tests.** Los 16 casos: validación de configuración (tabla, cada
+regla individual + combinaciones); campaña distribuida clara que
+dispara; el caso del umbral exacto con `RiskScore>0` ya descrito; una
+sola IP con muchos intentos que no dispara; tenant legítimo
+compartiendo ASN con atacantes que no dispara; muchos 401 con pocas
+cuentas que no dispara; muchas cuentas con pocos fallos que no
+dispara; eventos fuera de ventana (un lote que dispara, expira, y un
+evento posterior aislado ya no dispara); IP no resoluble excluida sin
+contaminar un grupo real; `login_user_hash` vacío excluido del
+conjunto de cuentas; un evento que no es de autenticación nunca
+dispara ni toca estado; concurrencia con `go test -race`; y `Sweep`
+elimina solo lo inactivo.
