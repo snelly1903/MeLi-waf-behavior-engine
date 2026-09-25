@@ -1312,3 +1312,165 @@ contaminar un grupo real; `login_user_hash` vacío excluido del
 conjunto de cuentas; un evento que no es de autenticación nunca
 dispara ni toca estado; concurrencia con `go test -race`; y `Sweep`
 elimina solo lo inactivo.
+
+## 2026-09-25 — Detector de escaneo/enumeración lenta: `internal/slowscan` (tarea 1.4)
+
+**Qué es y qué NO es.** El segundo detector real del motor. Busca
+escaneo/enumeración lenta de rutas HTTP — un atacante que mantiene una
+tasa baja de requests a propósito, para evitar un rate limiter, pero
+deja un patrón de exploración acumulado dentro de una ventana. A
+diferencia de `internal/credstuffing` (tarea 1.3), esta señal es por
+entidad individual (IP y/o sesión), nunca correlacionada entre IPs —
+mismo criterio que usa `internal/datagen` para generar este tráfico.
+No se conectó con `cmd/engine`.
+
+**Reutiliza `internal/profile.Store` en vez de duplicarlo.** Se
+evaluó explícitamente antes de escribir código: `profile.Metrics`
+(tarea 1.2) ya cubre `Total`, `DistinctPaths` (`len(PathCounts)`),
+`Status404`, `WithReferer`/`WithoutReferer`, por IP y por sesión, con
+watermark y `Sweep` ya resueltos. `internal/slowscan` construye un
+`*profile.Store` propio (no compartido con otros detectores todavía)
+y lo consulta — nada de esa lógica se reimplementó. Lo único que
+`profile.Store` no puede dar es la popularidad de una ruta *entre
+distintas entidades* (necesaria para `NovelPathRatio`); esa es la
+única pieza de estado genuinamente nueva de esta tarea
+(`pathPopularity`), autocontenida por la misma razón que
+`internal/credstuffing` en la tarea 1.3: es una agregación distinta
+(por ruta, no por IP/sesión), no hay nada de `profile.Store` para
+reutilizar ahí específicamente.
+
+**Entropía de Shannon normalizada.** `H = -Σp_i·log2(p_i)` sobre la
+distribución de `PathCounts`, dividida por `log2(DistinctPaths)` para
+que perfiles con distinta cantidad de rutas sean comparables con el
+mismo umbral (`RouteEntropy=0` si `DistinctPaths≤1`, por definición —
+sin diversidad que medir). Confirmado con dos ejemplos calculados a
+mano y verificados en `TestNormalizedEntropy_HandComputed`: 4 rutas
+con 1 visita cada una → `1.0` (máxima diversidad); 4 rutas muy
+concentradas (`17,1,1,1` sobre 20) → `≈0.424`.
+
+**Novedad de rutas: rareza poblacional, no un catálogo externo.** No
+existe ninguna fuente de "rutas reales de la aplicación" en la Fase 1,
+y usar la lista `SensitivePaths` de `datagen` sería trampa (es
+literalmente el ground truth del generador, y el motor no puede
+importarlo). La opción mínima técnicamente correcta con los datos
+disponibles: cuántas IPs *distintas*, en todo el tráfico que este
+detector observó, pidieron cada ruta dentro de la ventana —
+`pathPopularity`, con el mismo mecanismo de watermark ya usado dos
+veces antes (tercera implementación autocontenida, ver más abajo).
+`NovelPathRatio` = fracción de las rutas distintas de la entidad cuyo
+conteo global de visitantes es `≤ MaxVisitorsForNovelPath`. Confirmado
+a mano en `TestNovelPathRatio_HandComputed`.
+
+**Gate conjuntivo de cinco condiciones — `WithoutRefererRatio`
+deliberadamente afuera.** `Triggered` exige `TotalRequests`,
+`DistinctPaths`, `NotFoundRatio`, `RouteEntropy` y `NovelPathRatio`
+todos a la vez por encima de su umbral. `WithoutRefererRatio` **nunca**
+es parte del gate — solo aporta al `RiskScore`, ponderado. Así, la
+ausencia de Referer, sea 0% o 100%, no puede por sí sola cambiar
+`Triggered`, porque ni siquiera es una de las condiciones — no por una
+regla especial, sino porque estructuralmente no participa. Probado
+explícitamente en `TestEvaluate_MissingRefererAlone_DoesNotTrigger`.
+
+El gate se verificó contra cada falso positivo pedido: crawler
+legítimo y SPA (`NotFoundRatio` bajo — las rutas existen, dan 200);
+cliente API sin Referer con navegación estable (`DistinctPaths`/
+`RouteEntropy` bajos — pocos endpoints fijos repetidos); enlaces rotos
+ocasionales y tráfico normal con algún 404 (`DistinctPaths` bajo o el
+volumen de éxitos diluye el ratio); health checks (una sola ruta
+repetida, `RouteEntropy=0`) — cada uno con su propio test.
+
+**Corrección de diseño aplicada durante la revisión: IP y sesión se
+evalúan SIEMPRE las dos, nunca "sesión si existe, si no IP".** El
+diseño original de la tarea (aprobado inicialmente) evaluaba por
+sesión cuando existía y por IP solo como respaldo — con un hueco: un
+atacante que rota `session_id` cada pocos requests mantiene cada
+sesión individual por debajo de los umbrales, mientras la IP agregada
+sí muestra el patrón completo, y ese diseño nunca llegaba a mirarla.
+
+La corrección: `Evaluate` calcula **siempre** el candidato por IP y,
+si `e.SessionID != ""`, **también** el candidato por sesión, y
+devuelve como máximo un único `Finding`:
+
+- las dos dispararon → gana la de mayor `RiskScore`; en empate exacto,
+  gana **sesión**, por ser la entidad más específica (evita atribuir
+  el hallazgo a todo un NAT cuando alcanza con señalar la sesión
+  concreta) — probado con un empate real y verificado en
+  `TestEvaluate_IPAndSessionBothTrigger_ReturnsSingleFinding`;
+- solo una disparó → esa;
+- ninguna → `Finding{}`.
+
+**Por qué evaluar la IP siempre NO reintroduce el falso positivo del
+NAT.** El punto clave: a la IP se le aplica el MISMO gate completo de
+cinco condiciones, no una versión relajada. Un NAT de oficina con
+varias sesiones legítimas, agregado a nivel IP, tiene muchas rutas
+distintas — pero son rutas reales (`NotFoundRatio` bajo), así que
+nunca cruza esa condición, sin importar cuánta diversidad sume el
+NAT. El escáner que rota sesiones sí cruza esa misma condición a nivel
+IP, porque sigue pidiendo rutas del wordlist (404). Es el mismo
+mecanismo — el gate de cinco condiciones — el que distingue ambos
+casos, no una regla especial para NAT. Probado en
+`TestEvaluate_ScannerRotatingSessions_DetectedByIP` (dispara por IP,
+ninguna sesión individual lo hace) y
+`TestEvaluate_LegitNATMultipleSessions_DoesNotTrigger` (varias
+sesiones legítimas agregadas en una IP no disparan).
+
+**Limitación honesta documentada, no resuelta acá:** si una IP tiene,
+a la vez, tráfico legítimo de un NAT y un atacante real enumerando
+rutas, el `Finding` a nivel IP puede terminar asociado también a
+algún evento de un usuario legítimo de esa misma IP — mismo trade-off
+ya aceptado para cualquier señal a nivel IP (`internal/baseline`,
+tarea 0.9). Lo que esta solución sí evita es el falso positivo cuando
+nadie malicioso está presente.
+
+**Pendiente explícito para la tarea 1.5, anotado en el código
+(`internal/slowscan/detector.go`, tipo `scope`) y acá:**
+`finding.Finding` sigue sin ningún campo estructurado para indicar qué
+entidad (IP o sesión, y cuál) originó un hallazgo — hoy esa
+información solo vive, en texto libre, dentro de `Explanation`
+(`"ip:203.0.113.7: ..."` o `"session:s-9f2a: ..."`). El futuro
+`engine.Decider` va a necesitar esto de forma estructurada, no
+parseando texto, para poder correlacionar varios detectores sobre la
+misma entidad o auditar decisiones. Se mantuvo `Finding` sin campos
+nuevos en esta tarea, según lo acordado — esta es la anotación
+explícita de la deuda, para resolverla cuando `engine.Decider` la
+necesite de verdad, no antes.
+
+**`RiskScore`: mismo mecanismo de piso que la tarea 1.3.** Seis
+componentes (los cinco del gate + `WithoutRefererRatio`, que solo
+aporta al score), combinados en un promedio ponderado
+(`ScoreWeights`, normalizado por su suma) con el mismo piso
+`ScoreFloor ∈ (0,1)` estricto. Probado con un caso construido a mano
+donde las cinco señales del gate caen EXACTO en su umbral (incluyendo
+`MinRouteEntropy=1.0`, el máximo posible, y `WithoutRefererRatio=0`
+para que el promedio dé exactamente 0) —
+`TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore`
+confirma `Triggered=true` y `RiskScore` exactamente igual a
+`ScoreFloor`.
+
+**Eventos fuera de orden: mismo mecanismo de watermark, tercera
+implementación autocontenida.** Igual que se decidió en la tarea 1.3,
+se evaluó extraer un `internal/window` genérico y se descartó de
+nuevo por la misma razón (mantener el cronograma corto, no arriesgar
+componentes ya probados) — con tres implementaciones independientes
+del mismo patrón ahora (`internal/profile`, `internal/credstuffing`,
+`internal/slowscan`), la extracción queda como una limpieza cada vez
+más razonable para una tarea futura, pero sigue sin ser necesaria hoy.
+
+**Ningún umbral final elegido mirando la semilla 42.** Los valores de
+`baseConfig` en los tests son valores de prueba para poder calcularlos
+a mano, explícitamente no-finales — la calibración real queda para
+una tarea posterior, mismo criterio que `internal/baseline` e
+`internal/credstuffing`.
+
+**Tests.** Los 20 casos: validación de configuración; escaneo lento
+claro que dispara; volumen concentrado en una sola ruta que no
+dispara; muchas rutas legítimas con pocos 404 que no disparan;
+muchos 404 sobre pocas rutas repetidas que no disparan; cliente API
+sin Referer con navegación estable que no dispara; ausencia de
+Referer sola que no dispara; escaneo con gaps grandes que sí se
+acumula dentro de una ventana suficientemente ancha; eventos fuera de
+ventana dejan de contribuir; invariancia ante eventos fuera de orden;
+evento sin `session_id` cae a IP; entropía calculada a mano; novedad
+calculada a mano; el caso de umbral exacto con `RiskScore>0`; los tres
+tests nuevos de IP+sesión ya descritos; concurrencia con
+`go test -race`; y `Sweep` elimina solo lo inactivo.
