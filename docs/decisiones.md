@@ -947,3 +947,222 @@ prueba de extremo a extremo de la tarea 0.7.
 **Makefile.** Target `baseline`, parametrizado con
 `SCENARIO`/`MODE`/`MAX_REQUESTS`/`WINDOW`/`BASELINE_OUT`, análogo a
 `eval` y `data-*`.
+
+# Fase 1
+
+## 2026-09-25 — Servicio HTTP mínimo de ingestión y decisión: `cmd/engine` (tarea 1.1)
+
+**Qué es y qué NO es.** Primera pieza de la Fase 1: un servicio HTTP
+que recibe un evento por `POST /v1/events`, lo valida y devuelve una
+decisión — pero **sin ningún detector conductual todavía**. La
+decisión siempre es `ALLOW`, con `AttackVector=unknown`. El objetivo
+de esta tarea es la tubería completa (HTTP → validación → decisión),
+no la inteligencia — eso es explícitamente trabajo de tareas
+posteriores de la Fase 1.
+
+**Tres paquetes nuevos, cada uno con una sola responsabilidad:**
+
+- `internal/engine`: la abstracción `Decider` — `Decide(ctx, event.Event) decision.Decision`
+  — y su única implementación de hoy, `AllowAllDecider`. Ningún
+  detector real vive acá todavía; cuando exista, va a implementar esta
+  misma interfaz.
+- `internal/httpapi`: la capa HTTP — decodifica JSON, normaliza y
+  valida con `event.Validator` (reutilizado tal cual de la tarea 0.2,
+  sin duplicar ninguna regla), y le pasa el evento ya validado al
+  `Decider`. No sabe nada de cómo se toma una decisión.
+- `cmd/engine`: arma las piezas (`event.NewValidator(event.SystemClock{})`
+  + `engine.AllowAllDecider{}` + `httpapi.NewServer(...)`) y levanta
+  `http.ListenAndServe`.
+
+**Ninguna incompatibilidad encontrada con los contratos existentes.**
+Se revisó `internal/event` y `internal/decision` antes de escribir
+código: `event.Event` (con `netip.Addr` en `ClientIP`) y
+`decision.Decision` ya se serializan/deserializan en JSON sin
+problemas — lo prueban `internal/baseline/io.go` y
+`internal/eval/decisions.go`, que hacen exactamente eso contra
+archivo desde la tarea 0.8. No se modificó ningún archivo de
+`internal/event`, `internal/decision`, `internal/datagen`,
+`internal/eval` ni `internal/baseline`.
+
+**`Decider` recibe `context.Context` desde el día uno.**
+`AllowAllDecider` no lo usa todavía, pero la interfaz ya lo pide —
+para poder propagar después cancelación del cliente HTTP, tracing de
+OpenTelemetry, o timeouts de dependencias reales (un store, una
+llamada al LLM), sin tener que rediseñar la interfaz ni tocar a cada
+implementación existente cuando eso llegue. La capa HTTP pasa
+`r.Context()` tal cual. `Decide` deliberadamente no devuelve `error`
+todavía: en esta etapa no existe ningún modo de falla real (no hay
+ninguna dependencia externa que pueda fallar), así que agregarlo
+sería anticipar una necesidad que todavía no existe.
+
+**`Explanation` fijo también en `ALLOW`, por decisión explícita.**
+El contrato de `decision.Decision` (tarea 0.3) solo exige
+`Explanation` para `CHALLENGE`/`BLOCK` — pero acá se decidió incluirlo
+siempre, con un texto fijo y determinista
+(`"no behavioral detector is implemented yet; default policy is ALLOW"`),
+para que incluso una decisión de `ALLOW` quede auditable desde el
+primer día, sin esperar a que exista un motor real.
+
+**Dos códigos de error, según qué falló.** `400 Bad Request` cuando
+el body no es JSON válido (`error: "invalid_json"`); `422 Unprocessable Entity`
+cuando el JSON es válido pero el evento no pasa
+`event.Validator.Validate()` (`error: "validation_failed"`, con el
+texto ya combinado por `errors.Join` como `message`, sin desglosar
+campo por campo — mantenerlo simple). `405 Method Not Allowed` con
+header `Allow` para el método incorrecto. Los tres casos comparten el
+mismo formato de cuerpo (`errorResponse{Error, Message}`), para que
+quien integre contra esta API tenga un único formato de error que
+parsear.
+
+**Límite de tamaño del body.** `http.MaxBytesReader` a 64 KiB en
+`POST /v1/events` — un evento es un objeto JSON chico; esto evita que
+un body arbitrariamente grande consuma memoria antes de llegar
+siquiera a la validación.
+
+**Tests.** `internal/engine/engine_test.go`: `AllowAllDecider.Decide`
+produce una `Decision` que pasa `decision.Validate()`, con
+`RequestID`/`Timestamp`/`EntityID` derivados correctamente del
+evento. `internal/httpapi/server_test.go`, todos con `httptest` (sin
+levantar ningún servidor real): evento válido → 200 con una decisión
+válida; JSON corrupto → 400; evento inválido (IP privada) → 422 con
+el mensaje del validador; método incorrecto → 405 con header `Allow`;
+`/healthz` → 200.
+
+**Verificación manual real con `curl`** (además de los tests
+automatizados) contra `cmd/engine` corriendo de verdad — confirmó el
+mismo comportamiento que los tests, incluyendo un detalle real:
+un evento con timestamp fijo del pasado (por ejemplo, de una prueba
+escrita minutos antes) es rechazado por `ErrTimestampTooOld` al usar
+`event.SystemClock{}` — el mismo comportamiento correcto que ya
+garantizaba el `Validator` desde la tarea 0.2, ahora visible en vivo
+contra un reloj real en vez de uno simulado.
+
+## 2026-09-25 — Perfiles temporales de comportamiento en memoria: `internal/profile` (tarea 1.2)
+
+**Qué es y qué NO es.** El componente con estado que le va a permitir
+al futuro motor "recordar" comportamiento reciente de una IP y, si
+existe, de una sesión, dentro de una ventana temporal. Todavía no es
+un detector — no decide ninguna acción, solo acumula observaciones y
+expone métricas agregadas (`Metrics`) para que un detector futuro las
+consuma. No se conectó con `cmd/engine` en esta tarea.
+
+**Corrección importante incorporada antes de implementar: los eventos
+NO llegan ordenados.** El diseño original (calcado del recorte por
+adelante de `internal/baseline`, tarea 0.9) asumía orden cronológico,
+válido ahí porque `datagen` genera `events.jsonl` ya ordenado. Pero
+`internal/profile` recibe eventos desde `net/http`, donde dos
+requests concurrentes pueden procesarse en cualquier orden respecto a
+sus propios `Event.Timestamp`. La corrección: cada clave (IP o
+sesión) mantiene un **watermark** — el máximo `Timestamp` visto hasta
+ahora para esa clave —, que **nunca retrocede**
+(`if obs.timestamp.After(state.watermark) { state.watermark = obs.timestamp }`).
+La ventana se interpreta siempre respecto al watermark, nunca respecto
+al evento que acaba de llegar: un evento atrasado pero todavía dentro
+de `[watermark-Window, watermark]` cuenta; uno anterior a ese corte
+nunca se agrega, y tampoco puede "revivir" observaciones que ya habían
+expirado, porque el watermark con el que se calcula el corte tampoco
+retrocede para él.
+
+**Costo aceptado: `Observe` pasó de O(1) amortizado a O(k).** El
+truco de `internal/baseline` (recortar solo por adelante de una cola
+ordenada) deja de ser válido si el orden de llegada no está
+garantizado — insertar un evento fuera de orden puede dejar la cola
+sin ordenar, así que ya no alcanza con mirar el frente. La solución
+elegida fue la más simple posible: en cada `Observe`, filtrar toda la
+cola de esa clave contra el corte actual (recalculado con el
+watermark ya actualizado) y agregar la observación nueva si
+corresponde — O(k), con k = observaciones retenidas para esa clave
+dentro de la ventana. Se decidió explícitamente priorizar corrección y
+simplicidad por sobre preservar la complejidad O(1): para el volumen
+de este challenge, k está acotado por cuánto tráfico generó una sola
+entidad dentro de una sola ventana (chico incluso en escenarios de
+ataque), y una estructura de datos más compleja (por ejemplo, un
+árbol balanceado por timestamp para mantener el orden con inserciones
+arbitrarias) sería optimizar algo que todavía no es un problema
+medido.
+
+**Un solo `Window` por `Store`, confirmado.** Si en el futuro hacen
+falta varios tamaños de ventana (por ejemplo, un detector que mira 5
+minutos y otro que mira 24 horas), se construyen `Store` independientes,
+cada uno observando los mismos eventos. Se descartó pasar un `window`
+explícito por cada llamada a `Snapshot` (más flexible) porque abría
+un error silencioso: pedir una ventana de consulta más ancha que la
+ventana de retención del `Store` daría un resultado truncado sin
+ningún aviso.
+
+**`NewStore(window) (*Store, error)`, sin panic.** `window <= 0`
+devuelve `ErrInvalidWindow` — mismo patrón que
+`baseline.Config.Validate()` de la tarea 0.9, consistente con el resto
+del proyecto.
+
+**Qué se retiene por observación, y qué NUNCA se retiene.** Se
+retiene únicamente: `timestamp`, `path`, `status_code`,
+"tiene o no tiene referer" (nunca su contenido), `login_user_hash`
+(ya hasheado desde la tarea 0.2 — nunca un username ni un email en
+claro, así que reusarlo acá no agrega riesgo de privacidad nuevo), y
+`session_id`. Nunca se retienen: el body del request (nunca existió
+en `Event`), `UserAgent`, los valores de `QueryParams` (ni falta
+hacían para las métricas pedidas), ni el contenido de `Referer`.
+
+**Dos mecanismos de limpieza, con propósitos distintos.** (1) El
+recorte automático en cada `Observe`, determinista y basado
+exclusivamente en `Event.Timestamp` — acota el tamaño de la cola de
+**cada clave individual**. (2) `Sweep(now, idleTTL)`, manual y
+opcional — resuelve lo que el recorte automático no puede: una IP que
+mandó un solo request y nunca volvió queda con una entrada residual
+en el mapa para siempre, porque nada dispara su limpieza si no llegan
+más eventos suyos. "¿Ya pasó suficiente tiempo real sin noticias de
+esta entidad?" es deliberadamente la única pregunta de todo este
+componente que toca un reloj real — porque es una pregunta operativa
+(cuánta memoria se usa), no una pregunta de detección (que siempre
+usa tiempo de evento). `Sweep` recibe `now` como parámetro (nunca
+`time.Now()` internamente), así que sigue siendo determinista y
+testeable; conectarlo a un scheduler real (un ticker en `cmd/engine`)
+queda fuera del alcance de esta tarea.
+
+**Concurrencia: un `sync.Mutex` por índice (IP y sesión), no uno
+global.** Así una escritura sobre perfiles de IP no bloquea una
+lectura de perfiles de sesión. `Snapshot` nunca modifica el mapa —
+copia el slice retenido antes de soltar el lock. Confirmado sin
+condiciones de carrera con `go test -race` sobre dos escenarios de
+escritura concurrente (misma IP desde 200 goroutines; y 10 IPs × 50
+goroutines cada una, más una sesión compartida entre todas, para
+ejercitar también el mutex del índice de sesiones).
+
+**`Metrics` es siempre una copia propia del snapshot.** El slice de
+observaciones se copia en `keyedWindow.snapshot` antes de agregar, y
+`aggregate` arma un `PathCounts` nuevo en cada llamada — modificar el
+`Metrics` devuelto (incluido su mapa) nunca afecta al estado interno
+del `Store` ni a un snapshot posterior. Probado explícitamente en
+`TestSnapshotMetrics_PathCountsIsOwnedCopy`.
+
+**Sin interfaz `Profiler` separada todavía.** Mismo criterio que
+`engine.Decider` (tarea 1.1): cuando exista el primer detector real
+que consuma este `Store`, ese paquete define su propia interfaz
+angosta con lo que necesita, en su propio código — no antes, con un
+solo consumidor hipotético.
+
+**Tests.** Expiración en orden + borde exacto de la ventana; el caso
+explícito de fuera de orden pedido (`10:06 → 10:03 → 09:59`, `Window=5min`,
+`Total` esperado 2, watermark siempre en `10:06`); **invariancia
+respecto al orden de llegada**
+(`TestObserve_OrderInvariance_SameEventsDifferentArrivalOrder`,
+agregado tras una revisión): los mismos cuatro timestamps
+(`10:00, 10:01, 10:03, 10:06`, `Window=5min`) procesados una vez en
+orden cronológico y otra vez en el orden `10:06, 10:00, 10:03, 10:01`
+tienen que dar exactamente el mismo resultado — `Total=3` (`10:00`
+expira una vez que el watermark llega a `10:06`) y
+`WindowStart=10:01`/`WindowEnd=10:06` en los dos casos; confirma que
+el recorte inspecciona toda la cola (no solo el frente, como si
+estuviera ordenada) y que `WindowStart`/`WindowEnd` salen del
+mínimo/máximo timestamp real entre las observaciones, no de la
+posición del elemento en el slice; un evento tardío
+que no puede revivir datos ya expirados; IPs independientes; sesiones
+independientes (incluyendo el caso NAT: una IP con dos sesiones
+distintas detrás reporta `DistinctSessions=2`); un evento sin
+`SessionID` no crea ninguna entrada de sesión; todas las métricas
+calculadas a mano (401/403, 404, cuentas distintas, referer
+presente/ausente, conteo por ruta); que `Metrics.PathCounts` sea una
+copia propia; una clave nunca observada devuelve `Metrics` vacío, no
+error; `Sweep` elimina solo lo inactivo; y los dos tests de
+concurrencia con `go test -race` ya descritos.

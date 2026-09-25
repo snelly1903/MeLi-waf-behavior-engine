@@ -21,8 +21,25 @@ explicación de cada decisión y observabilidad completa.
 
 ## Cómo ejecutar
 
-_Pendiente — se documenta a medida que existan `cmd/datagen`, `cmd/eval` y
-`cmd/engine`._
+> Sección mínima — se completa a medida que avancen las tareas de la Fase 1.
+
+### Servicio HTTP (`cmd/engine`)
+
+Todavía sin detectores conductuales: `POST /v1/events` siempre responde `ALLOW`.
+
+```
+go run ./cmd/engine --addr :8080
+```
+
+```
+curl -X POST localhost:8080/v1/events \
+  -H "Content-Type: application/json" \
+  -d '{"request_id":"r-1","timestamp":"2026-09-25T10:00:00Z","client_ip":"203.0.113.7","method":"GET","path":"/","status_code":200}'
+
+curl localhost:8080/healthz
+```
+
+El resto de las herramientas (`cmd/datagen`, `cmd/eval`, `cmd/baseline`) se documentan más adelante.
 
 ## Arquitectura
 
