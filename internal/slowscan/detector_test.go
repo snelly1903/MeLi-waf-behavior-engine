@@ -3,7 +3,6 @@ package slowscan
 import (
 	"fmt"
 	"net/netip"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -127,8 +126,9 @@ func TestEvaluate_ClearSlowScan_Triggers(t *testing.T) {
 	if len(last.ContributingSignals) != 6 {
 		t.Errorf("ContributingSignals has %d entries, want 6", len(last.ContributingSignals))
 	}
-	if !strings.HasPrefix(last.Explanation, "ip:") {
-		t.Errorf("Explanation = %q, want it to start with \"ip:\" (no session on this traffic)", last.Explanation)
+	wantEntityID := "ip:" + ipFor(0).String()
+	if last.EntityID != wantEntityID {
+		t.Errorf("EntityID = %q, want %q (no session on this traffic)", last.EntityID, wantEntityID)
 	}
 }
 
@@ -306,8 +306,9 @@ func TestEvaluate_EventWithoutSessionID_FallsBackToIP(t *testing.T) {
 	if !last.Triggered {
 		t.Fatal("Triggered = false, want true")
 	}
-	if !strings.HasPrefix(last.Explanation, "ip:") {
-		t.Errorf("Explanation = %q, want it to start with \"ip:\" when there is no session_id", last.Explanation)
+	wantEntityID := "ip:" + ip.String()
+	if last.EntityID != wantEntityID {
+		t.Errorf("EntityID = %q, want %q when there is no session_id", last.EntityID, wantEntityID)
 	}
 }
 
@@ -427,8 +428,9 @@ func TestEvaluate_ScannerRotatingSessions_DetectedByIP(t *testing.T) {
 	if !last.Triggered {
 		t.Fatal("Triggered = false, want true — the IP-level aggregate across rotated sessions should trigger")
 	}
-	if !strings.HasPrefix(last.Explanation, "ip:") {
-		t.Errorf("Explanation = %q, want it to start with \"ip:\" (no single session should have triggered on its own)", last.Explanation)
+	wantEntityID := "ip:" + ip.String()
+	if last.EntityID != wantEntityID {
+		t.Errorf("EntityID = %q, want %q (no single session should have triggered on its own)", last.EntityID, wantEntityID)
 	}
 }
 
@@ -477,8 +479,9 @@ func TestEvaluate_IPAndSessionBothTrigger_ReturnsSingleFinding(t *testing.T) {
 	if len(last.ContributingSignals) != 6 {
 		t.Errorf("ContributingSignals has %d entries, want exactly 6 (a single evaluation, not two concatenated)", len(last.ContributingSignals))
 	}
-	if !strings.HasPrefix(last.Explanation, "session:") {
-		t.Errorf("Explanation = %q, want it to start with \"session:\" — on an exact tie, session must win", last.Explanation)
+	wantEntityID := "session:" + sessionID
+	if last.EntityID != wantEntityID {
+		t.Errorf("EntityID = %q, want %q — on an exact tie, session must win", last.EntityID, wantEntityID)
 	}
 }
 

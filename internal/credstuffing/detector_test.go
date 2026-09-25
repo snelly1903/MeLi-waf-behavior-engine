@@ -165,6 +165,9 @@ func TestEvaluate_DistributedCampaign_Triggers(t *testing.T) {
 	if last.Explanation == "" {
 		t.Error("Explanation is empty, want a deterministic message")
 	}
+	if last.EntityID != "network:asn:64512" {
+		t.Errorf("EntityID = %q, want %q", last.EntityID, "network:asn:64512")
+	}
 }
 
 // --- El caso central de la tarea: RiskScore nunca cero al disparar ------

@@ -1474,3 +1474,145 @@ evento sin `session_id` cae a IP; entropía calculada a mano; novedad
 calculada a mano; el caso de umbral exacto con `RiskScore>0`; los tres
 tests nuevos de IP+sesión ya descritos; concurrencia con
 `go test -race`; y `Sweep` elimina solo lo inactivo.
+
+## 2026-09-25 — `engine.Decider` real: `BehavioralDecider` (tarea 1.5)
+
+**Qué es y qué NO es.** `POST /v1/events` deja de depender de
+`engine.AllowAllDecider` — `cmd/engine` ahora arma un
+`engine.BehavioralDecider`, que alimenta `internal/credstuffing` e
+`internal/slowscan` con cada evento, combina la evidencia que
+produzcan y aplica una `Policy` configurable para decidir
+`ALLOW`/`CHALLENGE`/`BLOCK`. Sin anomaly detection general, sin LLM,
+sin ASN real, sin OTel/Grafana/k6/AWS, sin calibración final contra la
+semilla 42 — todo eso sigue fuera de alcance.
+
+**Deuda de la tarea 1.4 resuelta: `finding.Finding` ahora tiene
+`EntityID string`.** Mismo formato de prefijo que
+`decision.Decision.EntityID` desde la tarea 0.3 (`"ip:..."`,
+`"session:..."`, y nuevo: `"network:..."` para credential stuffing).
+**Sin `EntityType` separado** — se analizó explícitamente y se
+descartó: `decision.Decision` nunca tuvo uno, usa el mismo prefijo
+desde el día uno, y `BehavioralDecider` nunca necesita ramificar sobre
+el tipo de entidad, solo copiar el `EntityID` de la evidencia
+principal. `internal/credstuffing` e `internal/slowscan` ahora
+producen este campo estructuradamente, y sus `Explanation` se
+simplificaron (ya no repiten el scope en texto, que ahora sería
+redundante con `EntityID`).
+
+**`internal/engine/policy.go`: `Policy{ChallengeThreshold, BlockThreshold}`**,
+validando `0 ≤ ChallengeThreshold < BlockThreshold ≤ 1`. Los dos
+límites son inclusive (`score ≥ BlockThreshold → BLOCK`,
+comprobado primero; si no, `score ≥ ChallengeThreshold → CHALLENGE`;
+si no, `ALLOW`). Los umbrales viven acá, nunca en un detector
+individual — reconfirmado, no nuevo (ya documentado desde la tarea
+0.3 y aplicado en 1.3/1.4).
+
+**`FinalRiskScore = máximo entre los `Finding` disparados` — nunca se
+suman ni se promedian.** Cada detector mide algo distinto con su
+propia escala heurística; sumarlos inventaría un número sin
+significado. El principal (mayor score) determina `AttackVector`,
+`EntityID` y la explicación central.
+
+**Empate exacto: gana `credential_stuffing`, regla fija y
+documentada.** La evidencia de credential stuffing distribuido exige
+corroboración entre múltiples IPs independientes (el gate de la tarea
+1.3) — una forma de evidencia estructuralmente más difícil de disparar
+por casualidad que el patrón de una sola entidad que mira
+`internal/slowscan`. Probado con un empate genuino, construido a mano
+con las nueve señales del gate de los dos detectores exactamente en su
+umbral (`TestDecide_ExactTie_CredentialStuffingWins`): ambos dan
+`RiskScore = ScoreFloor = 0.2` exacto, gana `credential_stuffing`.
+
+**`Decision.ContributingSignals` = solo las del finding principal.**
+Se evaluó concatenar las señales de todos los detectores que
+dispararon, y se descartó: los `Weight` de cada detector están
+normalizados dentro de su propio modelo de score — mezclarlas haría
+parecer que son parte de un único modelo ponderado, cuando son dos
+sistemas de puntaje independientes. Si un segundo detector también
+disparó (con menor score), se lo menciona en una frase corta dentro de
+`Explanation` — auditable, sin mezclar listas de señales de
+proveniencia distinta.
+
+**Semántica consistente para "disparó pero queda en `ALLOW`".** La
+`Decision` siempre refleja la evidencia real observada
+(`AttackVector`, `ConfidenceScore`, `EntityID`, señales); `Action`
+refleja qué se hizo con esa evidencia. Son preguntas distintas. Si
+**algún** `Finding` disparó, aunque el score no alcance
+`ChallengeThreshold`, la `Decision` conserva el vector, el score real
+(no 0), el `EntityID` del principal y sus señales — nunca se tiran
+solo porque la acción terminó en `ALLOW`. Válido contra
+`decision.Validate()` (tarea 0.3): esos campos nunca están prohibidos
+en `ALLOW`, solo no son obligatorios. Solo cuando **ningún** detector
+disparó cae al default "nada que reportar"
+(`AttackVector=unknown`, score `0`, `EntityID="ip:"+client_ip` — misma
+convención que `AllowAllDecider` desde la tarea 1.1). Probado en
+`TestDecide_FindingBelowChallengeThreshold_StaysAllowButPreservesEvidence`.
+
+**Flujo verificado contra el código real, no asumido:**
+`credstuffing.Observe` → `slowscan.Observe` → `credstuffing.Evaluate`
+→ `slowscan.Evaluate` → selección del principal → `Policy`. El orden
+entre los dos detectores entre sí no importa (no comparten estado); el
+de `Observe` antes que `Evaluate`, para el mismo evento, sí — mismo
+contrato de dos pasos que ya exigían por separado `internal/credstuffing`
+e `internal/slowscan`.
+
+**`cmd/engine`, credential stuffing sin ASN real:
+`credstuffing.UnavailableNetworkResolver`.** Tipo nuevo, de
+**producción** (no el `fakeResolver` de ningún test) — `Resolve`
+siempre devuelve `ok=false`, así que, por la propia regla de
+`internal/credstuffing.Observe` (tarea 1.3), ninguna IP entra jamás a
+ninguna correlación: el detector queda estructuralmente inerte pero
+corriendo de verdad (`Observe`/`Evaluate` se llaman en cada evento).
+Se evaluaron tres alternativas: (1) este resolver placeholder — la
+elegida; (2) un `*credstuffing.Detector` nulable en
+`BehavioralDecider`, tratado como "desactivado" — descartada, obliga a
+chequeos de `nil` en cada punto de uso, con riesgo de panic si alguno
+se olvida; (3) reutilizar el `fakeResolver` de los tests — descartada
+explícitamente, sería un fake de test terminando en producción.
+Reemplazar por un resolver real, cuando exista un proveedor, es
+cambiar una sola línea en `cmd/engine/main.go`, sin tocar
+`BehavioralDecider`.
+
+**Concurrencia: sin lock nuevo.** `BehavioralDecider` no agrega
+ningún estado mutable propio — solo dos punteros a detectores (ya
+seguros para concurrencia, tareas 1.3/1.4) y un `Policy` (value type
+inmutable). `Decide` es seguro para llamadas concurrentes porque sus
+dependencias ya lo son. Confirmado con `go test -race`
+(`TestDecide_Concurrent_NoRaces`).
+
+**Sin interfaces nuevas para los detectores.** Se evaluó una interfaz
+angosta (`Observe`/`Evaluate`) para poder inyectar dobles de test en
+`BehavioralDecider`, y se descartó: hoy hay una sola implementación de
+cada ataque, y los tests arman escenarios reales con umbrales
+pequeños — mismo patrón que ya probó ser suficiente en las tareas 1.3
+y 1.4. Habría sido sobrearquitectura para un solo consumidor.
+
+**Tests.** `internal/engine/behavioral_test.go` (17 tests): validación
+de `Policy` (tabla) y sus dos bordes exactos probados directamente
+sobre `actionFor` (`score` exactamente en `ChallengeThreshold` y en
+`BlockThreshold`); construcción inválida de `BehavioralDecider`;
+ningún detector dispara → `ALLOW`; finding bajo `ChallengeThreshold`
+preserva evidencia; sobre `ChallengeThreshold` → `CHALLENGE`; sobre
+`BlockThreshold` → `BLOCK`; `credential_stuffing` como principal
+(aislado); `slow_scan` como principal (aislado); ambos disparan, gana
+el mayor score; el empate exacto ya descrito; `EntityID` correcto para
+IP, sesión y grupo de red; toda `Decision` resultante verificada
+contra `decision.Validate()`; concurrencia con `go test -race`.
+`cmd/engine/main_test.go`: `buildServer()` extraído de `main()` (mismo
+patrón que `cmd/eval/main.go`, tarea 0.8, con `run()`) para poder
+probarlo con `httptest` — confirma que un evento normal da `ALLOW` y
+que un patrón real de escaneo lento (50 rutas sensibles distintas,
+todas 404) sobre el `*httpapi.Server` real termina en `CHALLENGE` o
+`BLOCK`, con `attack_vector="slow_scan"`, usando la configuración real
+de `cmd/engine` (no una de test); y que una `Policy` inválida hace
+fallar `buildServer`.
+
+**Verificación manual real con `curl`**, además de los tests
+automatizados, contra `cmd/engine` corriendo de verdad
+(`--challenge-threshold 0.5 --block-threshold 0.8`): un evento normal
+dio `ALLOW` (`confidence_score:0`, `attack_vector:"unknown"`); 50
+peticiones a rutas sensibles distintas, todas 404, sin Referer, desde
+la misma IP, terminaron en `BLOCK` real
+(`confidence_score:0.929`, `attack_vector:"slow_scan"`, con las seis
+señales completas en `contributing_signals` y una `explanation`
+determinista).

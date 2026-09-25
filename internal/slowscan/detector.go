@@ -259,17 +259,14 @@ func (d *Detector) Observe(e event.Event) {
 	d.paths.observe(e.Path, e.ClientIP, e.Timestamp)
 }
 
-// scope identifica, solo para el texto de Explanation, si un
-// candidato de Finding salió de la perspectiva de IP o de sesión.
+// scope identifica si un candidato de Finding salió de la perspectiva
+// de IP o de sesión, y se usa para construir Finding.EntityID
+// (formato "ip:<addr>" o "session:<id>", ver evaluateMetrics).
 //
-// PENDIENTE EXPLÍCITO PARA LA TAREA 1.5: finding.Finding no tiene hoy
-// ningún campo estructurado para esto — el futuro engine.Decider va a
-// necesitar saber, de forma estructurada (no parseando el texto de
-// Explanation), qué entidad originó cada Finding, para poder correlar
-// varios detectores sobre la misma entidad o auditar decisiones. Se
-// mantiene Finding sin campos nuevos en esta tarea, según lo acordado
-// — este comentario es el registro explícito de la deuda, ver también
-// docs/decisiones.md.
+// Resuelto en la tarea 1.5 lo que quedó pendiente en la 1.4:
+// finding.Finding ahora tiene un campo EntityID estructurado — antes,
+// esta información solo vivía en texto libre dentro de Explanation, y
+// el motor no podía depender de parsearlo.
 type scope struct {
 	label string // "ip" o "session"
 	key   string
@@ -368,10 +365,14 @@ func (d *Detector) evaluateMetrics(m profile.Metrics, sc scope) finding.Finding 
 			{Name: "novel_path_ratio", Value: novelPathRatio, Weight: w.Novelty},
 			{Name: "without_referer_ratio", Value: withoutRefererRatio, Weight: w.Referer},
 		},
+		// El scope (IP o sesión) ya queda identificado en EntityID —
+		// acá no se repite, Explanation se enfoca en el porqué (tarea
+		// 1.5).
 		Explanation: fmt.Sprintf(
-			"%s:%s: %d requests across %d distinct paths, %.0f%% not-found, entropy=%.2f, %.0f%% novel paths within the window",
-			sc.label, sc.key, total, distinctPaths, notFoundRatio*100, routeEntropy, novelPathRatio*100,
+			"%d requests across %d distinct paths, %.0f%% not-found, entropy=%.2f, %.0f%% novel paths within the window",
+			total, distinctPaths, notFoundRatio*100, routeEntropy, novelPathRatio*100,
 		),
+		EntityID: sc.label + ":" + sc.key,
 	}
 }
 

@@ -41,6 +41,24 @@ type NetworkResolver interface {
 	Resolve(ip netip.Addr) (group string, ok bool)
 }
 
+// UnavailableNetworkResolver es un NetworkResolver de PRODUCCIÓN (no
+// un fake de test) para usar mientras no exista ningún proveedor real
+// de ASN/grupo de red — ver docs/decisiones.md, tarea 1.5. Resolve
+// siempre devuelve ok=false, así que, según la propia regla de
+// Detector.Observe, ninguna IP entra jamás a ninguna correlación: el
+// detector queda estructuralmente inerte (Triggered siempre false),
+// pero corriendo de verdad — Observe/Evaluate se siguen llamando en
+// cada evento, la degradación es explícita y segura, no un bypass
+// oculto. Reemplazar esto por un NetworkResolver real (cuando exista
+// un proveedor) es un cambio de una sola línea en quien construye el
+// Detector — no requiere tocar nada de este paquete.
+type UnavailableNetworkResolver struct{}
+
+// Resolve implementa NetworkResolver.
+func (UnavailableNetworkResolver) Resolve(netip.Addr) (string, bool) {
+	return "", false
+}
+
 // ScoreWeights son los pesos relativos de cada señal en el cálculo de
 // RiskScore (ver Detector.Evaluate). No hace falta que sumen 1 — se
 // normalizan por su suma en el momento de calcular el score, mismo
@@ -336,10 +354,13 @@ func (d *Detector) evaluateGroup(group string, obs []observation) finding.Findin
 			{Name: "auth_attempts_in_window", Value: float64(total), Weight: w.Attempts},
 			{Name: "failed_auth_ratio", Value: failedRatio, Weight: w.Ratio},
 		},
+		// El grupo de red ya queda identificado en EntityID — acá no se
+		// repite, Explanation se enfoca en el porqué (tarea 1.5).
 		Explanation: fmt.Sprintf(
-			"network group %q: %d distinct IPs, %d distinct accounts, %d auth attempts, %.0f%% failed (401/403) within the window",
-			group, len(distinctIPs), len(distinctAccounts), total, failedRatio*100,
+			"%d distinct IPs, %d distinct accounts, %d auth attempts, %.0f%% failed (401/403) within the window",
+			len(distinctIPs), len(distinctAccounts), total, failedRatio*100,
 		),
+		EntityID: "network:" + group,
 	}
 }
 
