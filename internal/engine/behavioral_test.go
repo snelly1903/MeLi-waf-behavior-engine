@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/anomaly"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/credstuffing"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/decision"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
@@ -102,7 +103,30 @@ func testPolicy() Policy {
 	return Policy{ChallengeThreshold: 0.5, BlockThreshold: 0.8}
 }
 
+// inertAnomalyConfig tiene un MinSamples tan alto que el detector
+// estadístico nunca termina de calentar (nunca dispara) dentro de
+// estos tests — usado por defecto en newTestDecider para que los
+// escenarios de credential_stuffing/slow_scan ya probados en la tarea
+// 1.5 sigan funcionando exactamente igual con un tercer detector
+// agregado. Los tests que sí ejercitan el detector estadístico usan
+// newTestDeciderFull con su propia anomaly.Config activa.
+func inertAnomalyConfig() anomaly.Config {
+	return anomaly.Config{
+		Window:           time.Hour,
+		MinSamples:       1_000_000,
+		ZSaturation:      2.0,
+		TriggerThreshold: 0.5,
+		Weights:          anomaly.FeatureWeights{NotFound: 1, FailedAuth: 1, PathDiversity: 1, Referer: 1, AccountDiversity: 1},
+		ScoreFloor:       0.2,
+	}
+}
+
 func newTestDecider(t *testing.T, resolver credstuffing.NetworkResolver, ss slowscan.Config, policy Policy) *BehavioralDecider {
+	t.Helper()
+	return newTestDeciderFull(t, resolver, ss, inertAnomalyConfig(), policy)
+}
+
+func newTestDeciderFull(t *testing.T, resolver credstuffing.NetworkResolver, ss slowscan.Config, an anomaly.Config, policy Policy) *BehavioralDecider {
 	t.Helper()
 	cs, err := credstuffing.NewDetector(csConfig(resolver))
 	if err != nil {
@@ -112,7 +136,11 @@ func newTestDecider(t *testing.T, resolver credstuffing.NetworkResolver, ss slow
 	if err != nil {
 		t.Fatalf("slowscan.NewDetector: %v", err)
 	}
-	d, err := NewBehavioralDecider(cs, ssDetector, policy)
+	anDetector, err := anomaly.NewDetector(an)
+	if err != nil {
+		t.Fatalf("anomaly.NewDetector: %v", err)
+	}
+	d, err := NewBehavioralDecider(cs, ssDetector, anDetector, policy)
 	if err != nil {
 		t.Fatalf("NewBehavioralDecider: %v", err)
 	}
@@ -178,14 +206,21 @@ func TestNewBehavioralDecider_InvalidInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("slowscan.NewDetector: %v", err)
 	}
+	an, err := anomaly.NewDetector(inertAnomalyConfig())
+	if err != nil {
+		t.Fatalf("anomaly.NewDetector: %v", err)
+	}
 
-	if _, err := NewBehavioralDecider(nil, ss, testPolicy()); !errors.Is(err, ErrNilCredentialStuffingDetector) {
+	if _, err := NewBehavioralDecider(nil, ss, an, testPolicy()); !errors.Is(err, ErrNilCredentialStuffingDetector) {
 		t.Errorf("nil credstuffing: error = %v, want ErrNilCredentialStuffingDetector", err)
 	}
-	if _, err := NewBehavioralDecider(cs, nil, testPolicy()); !errors.Is(err, ErrNilSlowScanDetector) {
+	if _, err := NewBehavioralDecider(cs, nil, an, testPolicy()); !errors.Is(err, ErrNilSlowScanDetector) {
 		t.Errorf("nil slowscan: error = %v, want ErrNilSlowScanDetector", err)
 	}
-	if _, err := NewBehavioralDecider(cs, ss, Policy{ChallengeThreshold: 0.8, BlockThreshold: 0.5}); !errors.Is(err, ErrInvalidPolicy) {
+	if _, err := NewBehavioralDecider(cs, ss, nil, testPolicy()); !errors.Is(err, ErrNilAnomalyDetector) {
+		t.Errorf("nil anomaly: error = %v, want ErrNilAnomalyDetector", err)
+	}
+	if _, err := NewBehavioralDecider(cs, ss, an, Policy{ChallengeThreshold: 0.8, BlockThreshold: 0.5}); !errors.Is(err, ErrInvalidPolicy) {
 		t.Errorf("invalid policy: error = %v, want ErrInvalidPolicy", err)
 	}
 }
@@ -530,6 +565,115 @@ func TestDecide_ExactTie_CredentialStuffingWins(t *testing.T) {
 	}
 	if err := decision.Validate(final); err != nil {
 		t.Errorf("decision.Validate(%+v) = %v, want nil", final, err)
+	}
+}
+
+// --- El detector estadístico como tercera fuente de Finding ---------------
+
+// TestDecide_AnomalyFindingCanBePrincipal_WhenHigherScore confirma que
+// el Finding del detector estadístico puede llegar a ser el principal
+// de la Decision — no solo credential_stuffing/slow_scan. Usa un
+// resolver vacío (credential stuffing nunca resuelve ningún grupo,
+// estructuralmente inerte) y un slowscan.Config con MinRequests muy
+// alto (nunca se alcanza con estos lotes, estructuralmente inerte
+// también), así que la única fuente de evidencia posible es
+// internal/anomaly.
+func TestDecide_AnomalyFindingCanBePrincipal_WhenHigherScore(t *testing.T) {
+	ss := ssConfig()
+	ss.MinRequests = 1000 // nunca se alcanza acá: slow_scan queda inerte
+
+	an := anomaly.Config{
+		Window:           time.Hour,
+		MinSamples:       5,
+		ZSaturation:      2.0,
+		TriggerThreshold: 0.1,
+		Weights:          anomaly.FeatureWeights{NotFound: 1, FailedAuth: 1, PathDiversity: 1, Referer: 1, AccountDiversity: 1},
+		ScoreFloor:       0.2,
+	}
+	d := newTestDeciderFull(t, fakeResolver{}, ss, an, testPolicy())
+
+	// Tráfico "normal" de cinco entidades: mayormente 200, un puñado
+	// de 404 ocasionales — calienta el baseline estadístico.
+	var last decision.Decision
+	for i := 0; i < 5; i++ {
+		ip := ipFor(i)
+		for j := 0; j < 20; j++ {
+			status := 200
+			if j%10 == 0 { // ~10% not-found
+				status = 404
+			}
+			e := scanEvent(ip, time.Duration(i*30+j)*time.Second, "/normal", status, true, "")
+			last = d.Decide(context.Background(), e)
+		}
+	}
+
+	// Una entidad claramente anómala: 90% not-found.
+	anomalousIP := ipFor(50)
+	for j := 0; j < 20; j++ {
+		status := 200
+		if j < 18 {
+			status = 404
+		}
+		e := scanEvent(anomalousIP, time.Duration(1000+j)*time.Second, "/normal", status, true, "")
+		last = d.Decide(context.Background(), e)
+	}
+
+	if last.AttackVector != decision.AttackVectorUnknown {
+		t.Fatalf("AttackVector = %v, want unknown (the statistical anomaly detector should be principal here — neither of the other two can trigger by construction): %+v", last.AttackVector, last)
+	}
+	if last.ConfidenceScore <= 0 {
+		t.Errorf("ConfidenceScore = %v, want it > 0 (evidence preserved even if Action stays ALLOW below ChallengeThreshold)", last.ConfidenceScore)
+	}
+	if !strings.HasPrefix(last.EntityID, "ip:") {
+		t.Errorf("EntityID = %q, want it to start with \"ip:\"", last.EntityID)
+	}
+	if err := decision.Validate(last); err != nil {
+		t.Errorf("decision.Validate(%+v) = %v, want nil", last, err)
+	}
+}
+
+// TestDecide_OtherDetectorStaysPrincipal_OverAnomaly confirma lo
+// contrario: aunque el detector estadístico también dispare, un
+// detector con un score claramente mayor (acá, slow_scan, con un
+// escaneo lento evidente) sigue siendo el principal — el estadístico
+// no "gana" solo por existir.
+func TestDecide_OtherDetectorStaysPrincipal_OverAnomaly(t *testing.T) {
+	an := anomaly.Config{
+		Window:           time.Hour,
+		MinSamples:       5,
+		ZSaturation:      2.0,
+		TriggerThreshold: 0.1,
+		Weights:          anomaly.FeatureWeights{NotFound: 1, FailedAuth: 1, PathDiversity: 1, Referer: 1, AccountDiversity: 1},
+		ScoreFloor:       0.2,
+	}
+	d := newTestDeciderFull(t, fakeResolver{}, ssConfig(), an, testPolicy())
+
+	// Calienta el baseline estadístico con tráfico modesto de otras
+	// entidades, antes del escaneo lento real.
+	for i := 0; i < 5; i++ {
+		ip := ipFor(i)
+		for j := 0; j < 20; j++ {
+			status := 200
+			if j%10 == 0 {
+				status = 404
+			}
+			d.Decide(context.Background(), scanEvent(ip, time.Duration(i*30+j)*time.Second, "/normal", status, true, ""))
+		}
+	}
+
+	// Escaneo lento real y evidente — score muy por encima de lo que
+	// puede dar el detector estadístico con una sola señal dominante.
+	ip := ipFor(0)
+	var last decision.Decision
+	for i := 0; i < 50; i++ {
+		last = d.Decide(context.Background(), scanEvent(ip, time.Duration(2000+i)*time.Second, sensitivePath(i), 404, false, ""))
+	}
+
+	if last.AttackVector != decision.AttackVectorSlowScan {
+		t.Fatalf("AttackVector = %v, want slow_scan (its score must stay higher than the anomaly detector's): %+v", last.AttackVector, last)
+	}
+	if err := decision.Validate(last); err != nil {
+		t.Errorf("decision.Validate(%+v) = %v, want nil", last, err)
 	}
 }
 

@@ -1,11 +1,11 @@
 // Command engine levanta el servicio HTTP de ingestión y decisión.
 // Desde la tarea 1.5, POST /v1/events ya no depende de
 // engine.AllowAllDecider: usa engine.BehavioralDecider, que combina
-// internal/credstuffing e internal/slowscan detrás de una Policy
-// configurable. El detector de credential stuffing corre con
-// credstuffing.UnavailableNetworkResolver mientras no exista un
-// proveedor real de ASN/grupo de red — ver buildServer y
-// docs/decisiones.md, tarea 1.5, para el porqué.
+// internal/credstuffing, internal/slowscan y (desde la tarea 1.6)
+// internal/anomaly detrás de una Policy configurable. El detector de
+// credential stuffing corre con credstuffing.UnavailableNetworkResolver
+// mientras no exista un proveedor real de ASN/grupo de red — ver
+// buildServer y docs/decisiones.md, tarea 1.5, para el porqué.
 package main
 
 import (
@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/anomaly"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/credstuffing"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/engine"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
@@ -22,7 +23,7 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/slowscan"
 )
 
-// Configuración de los dos detectores — NINGÚN valor acá está
+// Configuración de los tres detectores — NINGÚN valor acá está
 // calibrado todavía contra un dataset real (esa calibración es una
 // tarea posterior, mismo criterio que ya se aplicó a
 // internal/baseline en la tarea 0.9). Son puntos de partida
@@ -50,6 +51,21 @@ var (
 		MaxVisitorsForNovelPath: 2,
 		Weights:                 slowscan.ScoreWeights{Requests: 1, Paths: 1, NotFound: 1, Entropy: 1, Novelty: 1, Referer: 1},
 		ScoreFloor:              0.2,
+	}
+
+	// anomalyConfig: TriggerThreshold queda deliberadamente bajo
+	// (0.15) porque, con las cinco features pesadas por igual, una
+	// desviación clara en una sola de ellas nunca puede empujar el
+	// score combinado mucho más allá de ~0.2 (el resto de las
+	// features, cerca de su media, aportan ~0 al promedio) — ver
+	// docs/decisiones.md, tarea 1.6.
+	anomalyConfig = anomaly.Config{
+		Window:           time.Hour,
+		MinSamples:       50,
+		ZSaturation:      2.0,
+		TriggerThreshold: 0.15,
+		Weights:          anomaly.FeatureWeights{NotFound: 1, FailedAuth: 1, PathDiversity: 1, Referer: 1, AccountDiversity: 1},
+		ScoreFloor:       0.2,
 	}
 )
 
@@ -83,8 +99,13 @@ func buildServer(challengeThreshold, blockThreshold float64) (*httpapi.Server, e
 		return nil, fmt.Errorf("engine: slow scan detector: %w", err)
 	}
 
+	anomalyDetector, err := anomaly.NewDetector(anomalyConfig)
+	if err != nil {
+		return nil, fmt.Errorf("engine: anomaly detector: %w", err)
+	}
+
 	policy := engine.Policy{ChallengeThreshold: challengeThreshold, BlockThreshold: blockThreshold}
-	decider, err := engine.NewBehavioralDecider(csDetector, ssDetector, policy)
+	decider, err := engine.NewBehavioralDecider(csDetector, ssDetector, anomalyDetector, policy)
 	if err != nil {
 		return nil, fmt.Errorf("engine: behavioral decider: %w", err)
 	}
@@ -105,7 +126,7 @@ func main() {
 	}
 
 	log.Printf(
-		"engine: escuchando en %s (POST /v1/events, GET /healthz) — decider=BehavioralDecider (credential_stuffing sin ASN real: UnavailableNetworkResolver; challenge=%.2f block=%.2f, sin calibrar)",
+		"engine: escuchando en %s (POST /v1/events, GET /healthz) — decider=BehavioralDecider (credential_stuffing+slow_scan+statistical_anomaly; credential_stuffing sin ASN real: UnavailableNetworkResolver; challenge=%.2f block=%.2f, sin calibrar)",
 		*addr, *challengeThreshold, *blockThreshold,
 	)
 	if err := http.ListenAndServe(*addr, server.Routes()); err != nil {

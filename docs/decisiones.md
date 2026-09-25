@@ -1616,3 +1616,193 @@ la misma IP, terminaron en `BLOCK` real
 (`confidence_score:0.929`, `attack_vector:"slow_scan"`, con las seis
 señales completas en `contributing_signals` y una `explanation`
 determinista).
+
+## 2026-09-25 — Detector estadístico de anomalías online: `internal/anomaly` (tarea 1.6)
+
+**Qué es y qué NO es.** El tercer detector real, y el que satisface el
+requisito del challenge de incluir "un modelo de detección de
+anomalías estadístico o de ML". Es genuinamente estadístico, no otro
+grupo de reglas disfrazado: media/varianza calculadas online con el
+algoritmo de Welford, z-scores unilaterales, y un único umbral sobre
+un score COMBINADO — a diferencia de `credstuffing`/`slowscan`, que
+exigen varias señales crudas cruzando SUS PROPIOS umbrales a la vez.
+Justifica de forma técnicamente correcta la frase: *"The engine
+includes an online statistical anomaly detection model based on
+running mean/variance and standardized deviations (z-scores)."* Sin
+Isolation Forest, sin One-Class SVM, sin autoencoders, sin
+dependencias Python — se descartaron explícitamente por agregar
+complejidad real sin necesidad concreta para este prototipo.
+
+**Modelo:** Welford (media, M2, varianza = M2/(n-1)) + z-score
+unilateral (`z = max(0, (x-mean)/stddev)`, apropiado porque las cinco
+features elegidas son todas "más alto = más sospechoso" en este
+dominio).
+
+**Features — todas ratios derivados de `profile.Metrics`, nunca
+conteos crudos:** `NotFoundRatio`, `FailedAuthRatio`,
+`PathDiversityRatio` (`len(PathCounts)/Total`), `WithoutRefererRatio`,
+`AccountDiversityRatio` (`DistinctAccounts/Total` — señal distinta de
+la correlación entre IPs que ya cubre `credstuffing`: acá mide cuántas
+cuentas distintas probó **una sola entidad** por su cuenta).
+Excluidas, con motivo: `Total` crudo (ver limitación 2 más abajo),
+`WithReferer` (complemento exacto de `WithoutRefererRatio`, no suma
+información), `DistinctSessions` (solo tiene sentido claro por IP, no
+por sesión, complejidad no justificada).
+
+**Dos limitaciones documentadas explícitamente, según lo pedido —
+en el código (`internal/anomaly/detector.go`, docstring de `baseline`)
+y acá:**
+
+1. El baseline global mezcla poblaciones con formas de tráfico
+   naturalmente distintas (un cliente de API y un navegador humano no
+   son "iguales" solo porque ninguno es sospechoso), y una sola muestra
+   por evento evaluado significa que una entidad muy activa aporta
+   muchas muestras correlacionadas entre sí, pudiendo sesgar el
+   baseline hacia su propia forma de tráfico.
+2. Al excluir el volumen crudo (`Total`) de las features, este
+   detector se enfoca en anomalías de la FORMA/proporciones del
+   comportamiento — no pretende detectar por sí solo un incremento
+   puramente volumétrico; eso ya es responsabilidad de
+   `credstuffing`/`slowscan`.
+
+**Población: global, no por IP/sesión — analizado y justificado.**
+Un modelo por entidad nunca calentaría con el propio patrón de
+credential stuffing distribuido de este proyecto (1-3 requests por
+IP en total, tarea 0.5) — sería ciego exactamente al ataque que el
+challenge pide detectar. Un baseline global, alimentado por el
+snapshot de features de cada entidad evaluada, resuelve esto: una IP
+nueva, con una sola observación, ya se puede puntuar contra "cómo se
+ve normalmente un perfil", sin esperar su propia historia. IP y
+sesión comparten el mismo baseline — un `NotFoundRatio` significa lo
+mismo sin importar el tipo de entidad que lo produjo.
+
+**Reutiliza `internal/profile.Store`, con un `*Store` privado** —
+mismo criterio, mismo costo de memoria aceptado, que
+`internal/slowscan` (tarea 1.4): el mismo evento queda retenido dos
+(ahora tres) veces, una por cada detector, acotado por la ventana de
+cada uno — trivial a esta escala, evita compartir un `Store` entre
+detectores con necesidades de ventana potencialmente distintas. El
+baseline de Welford en sí (un puñado de escalares) nunca crece con la
+cantidad de entidades — a diferencia de `profile.Store`, no necesita
+`Sweep` propio.
+
+**Warm-up y orden score-antes-actualizar (tu preferencia explícita),
+resuelto como una excepción documentada al patrón del proyecto.**
+`n < MinSamples` → `Evaluate` siempre `Finding{}`, sin importar el
+valor. `Observe(e)` en este detector **solo** alimenta el
+`profile.Store` privado; el baseline de Welford se actualiza **dentro
+de `Evaluate`**, después de puntuar contra una foto tomada al
+principio (antes de que nada la modifique) — así el propio punto
+anómalo nunca reduce artificialmente su propio z-score por haberse
+promediado a sí mismo antes de calcularlo. Es una excepción
+documentada al patrón "`Observe` muta, `Evaluate` solo lee" que sí
+siguen `credstuffing`/`slowscan` — el contrato público (`Observe`
+y después `Evaluate`) no cambia, el detalle es interno.
+
+**Varianza cero → z=0, nunca NaN/Inf.** No se puede afirmar "cuántos
+desvíos estándar" de algo que todavía no tiene desvío — se trata esa
+feature como no informativa esta ronda, la opción conservadora.
+
+**Anti-contaminación del baseline (baseline poisoning), analizado y
+resuelto con la opción mínima.** Después del warm-up, una muestra
+`Triggered=true` **no** se agrega al baseline — solo lo "normal"
+actualiza la media/varianza. Durante el warm-up, toda muestra se
+agrega sin excepción (no hay juicio de "anómalo" todavía, y excluir
+desde el arranque podría dejar el baseline sin calentar nunca si el
+tráfico inicial ya es mayormente ataque) — limitación conocida,
+documentada, no resuelta acá (es un límite de cualquier baseline
+aprendido sin supervisión).
+
+**Combinación de z-scores en `RiskScore`, sin sumar z crudos.** Cada
+`z_i` se normaliza a `[0,1)` con la misma familia de heurística
+asintótica ya usada en `baseline`/`credstuffing`/`slowscan`, adaptada
+a un z-score: `component = z/(z+ZSaturation)`. Los componentes se
+combinan en un promedio ponderado (`Weights`, normalizado por su
+suma). `Triggered` es un único umbral sobre ese score COMBINADO
+(`TriggerThreshold`), no un gate conjuntivo de señales — la diferencia
+de fondo con los otros dos detectores, ya explicada arriba.
+`RiskScore = ScoreFloor + (1-ScoreFloor)*combined`, mismo mecanismo de
+piso que 1.3/1.4, acá más una defensa adicional que la única barrera
+(`TriggerThreshold > 0` ya garantiza `RiskScore > 0` en el borde
+exacto).
+
+**`AttackVector = unknown`, siempre — verificado contra el código
+real, no solo argumentado.** `internal/eval/vector.go`
+(`EvaluateVectorAttribution`, tarea 0.7) ya excluye
+`decision.AttackVectorUnknown` del balde "Incorrecto" y lo cuenta
+aparte como "Desconocido" — la semántica honesta que corresponde.
+Inventar un vector nuevo (`"anomaly"`) rompería esto: como el ground
+truth del evaluador solo conoce `legit`/`credential_stuffing`/
+`slow_scan`, cualquier decisión con un vector nuevo caería siempre en
+"Incorrecto" en esa comparación, penalizando injustamente a un
+detector que está siendo honesto sobre sus límites. `unknown` no es
+una limitación de este diseño, es la respuesta técnicamente correcta
+dado cómo ya funciona el evaluador.
+
+**`BehavioralDecider` generalizado a N detectores — interfaz privada
+mínima, justificada recién ahora.** Con dos detectores (tarea 1.5),
+comparar a mano alcanzaba. Con el tercero, `selectPrincipal` ya no
+podía extenderse sin reescribirse — la misma "regla de tres" que ya
+decidió cuándo extraer el patrón de ventana con watermark en este
+proyecto. `internal/engine` agrega una interfaz `detector` privada
+(`Observe`/`Evaluate`/`Sweep`), definida donde se consume — los tres
+detectores ya la cumplen tal cual, sin tocarles ninguna firma. El
+constructor `NewBehavioralDecider` sigue recibiendo los tres
+detectores como parámetros explícitos y tipados (no una lista
+genérica): el sitio de construcción en `cmd/engine` queda legible.
+Prioridad de desempate fija: `credential_stuffing(0) > slow_scan(1) >
+statistical_anomaly(2)` — el más específico gana un empate exacto; el
+genérico es el último recurso. `explanationFor` se generalizó para
+mencionar a todos los detectores secundarios que dispararon, no solo
+"el otro".
+
+**`cmd/engine`: `TriggerThreshold` deliberadamente bajo (0.15).** Con
+las cinco features pesadas por igual, una desviación clara en una
+sola de ellas nunca puede empujar el score combinado mucho más allá
+de ~0.2 (las otras cuatro, cerca de su media, aportan ~0 al
+promedio) — un `TriggerThreshold` alto haría que este detector nunca
+dispare en la práctica. Mismo fenómeno encontrado y corregido durante
+el desarrollo de los tests (ver más abajo).
+
+**Tests.** `internal/anomaly/detector_test.go` (19 tests): validación
+de configuración; media/varianza de Welford calculadas a mano
+(secuencia `[1,2,3,4,5]`, mean=3, varianza=2.5); z-score calculado a
+mano contra un `baselineSnapshot` armado directamente (mismo test
+prueba a la vez que se puntúa contra el baseline PREVIO, no uno que
+ya incluya la observación, porque el snapshot se arma antes de llamar
+`evaluateFeatures` y nunca se modifica); varianza cero sin NaN/Inf;
+`RiskScore` siempre en `[0,1)` sobre un barrido de magnitudes; warm-up
+nunca dispara, sin importar el valor; tráfico estable no dispara;
+desviación clara dispara; anomalía por `NotFoundRatio` y por
+`FailedAuthRatio` por separado; entidad nueva puntuada contra un
+baseline ya calentado por otras entidades; test explícito de
+anti-contaminación (la misma muestra extrema enviada dos veces desde
+entidades distintas da el mismo `RiskScore`, probando que la primera
+nunca se filtró al baseline); `EntityID` correcto para IP y sesión;
+concurrencia con `go test -race`. `internal/engine/behavioral_test.go`
+(2 tests nuevos, más los 15 de la tarea 1.5 verificados sin cambios de
+comportamiento gracias al `inertAnomalyConfig` de warm-up
+deliberadamente inalcanzable): el `Finding` del detector estadístico
+puede ser el principal cuando tiene mayor score; otro detector
+(`slow_scan`) sigue siendo principal cuando su score es mayor aunque
+el estadístico también dispare.
+
+**Bug de test encontrado y corregido durante el desarrollo (no del
+código de producción):** el primer intento de test de "desviación
+clara dispara" usaba `TriggerThreshold=0.5`, y fallaba — no por un
+error del detector, sino porque, con cinco features pesadas por igual
+y una desviación en una sola de ellas, el score combinado
+estructuralmente no puede superar ~0.2 (4 de 5 componentes quedan en
+~0 si esa única feature es la que se disparó). Se bajó
+`TriggerThreshold` a `0.1` en los tests (y a `0.15` en `cmd/engine`,
+con margen), documentado como un valor de prueba, nunca calibrado
+contra la semilla 42.
+
+**Verificación manual real con `curl`**, además de los tests
+automatizados: se calentó el baseline con 60 requests normales (10%
+de 404, seis IPs distintas), y una entidad nueva mandó 20 requests a
+la MISMA ruta (para no cruzar el gate de `slow_scan`, que exige
+diversidad de rutas) con 90% de 404 — el motor real respondió
+`CHALLENGE` con `attack_vector:"unknown"` y `not_found_ratio_z:29.4`,
+confirmando que el detector estadístico, y no los otros dos, fue quien
+disparó.
