@@ -1973,3 +1973,335 @@ camino síncrono de cada request — exactamente la limitación ya
 documentada arriba ("el lookup remoto síncrono es aceptable para el
 prototipo, no sería el diseño de producción"), ahora observada en la
 práctica, no solo teorizada.
+
+## 2026-09-26 — Observabilidad con OpenTelemetry + Grafana (tarea 1.8)
+
+**Objetivo.** Cumplir el requisito de observabilidad del challenge con
+una solución pequeña, local, reproducible y fácil de explicar: métricas
+reales del motor (no decorativas), visibles en un dashboard de Grafana
+provisionado automáticamente, sin exigirle Docker/Internet a ningún
+test unitario.
+
+### Arquitectura
+
+```
+cmd/engine (Go)  --OTLP/gRPC-->  OpenTelemetry Collector  --scrape-->  Prometheus  --query-->  Grafana
+```
+
+Se evaluó la alternativa más simple — el exportador Prometheus del
+propio SDK de OTel, exponiendo `/metrics` directamente desde
+`cmd/engine`, sin Collector — y se descartó: acoplaría el proceso Go al
+formato de exposición de Prometheus específicamente, mientras que con
+OTLP el proceso Go nunca sabe qué backend hay detrás (mañana se cambia
+Prometheus por otra cosa tocando solo el Collector). El costo extra —
+un contenedor y un YAML — es chico frente a lo que se gana.
+
+**Qué corre en Docker Compose vs. en el proceso Go.** Los tres
+contenedores (`otel-collector`, `prometheus`, `grafana`) corren en
+`docker-compose.yml`. `cmd/engine` sigue corriendo local
+(`go run ./cmd/engine`), apuntando su exportador OTLP a
+`localhost:4317` — evita escribir un `Dockerfile` para el motor y
+mantiene el ciclo de desarrollo tan simple como en las tareas
+anteriores.
+
+**Versiones de imagen fijas, nunca `latest`** (verificadas contra el
+registry antes de fijarlas): `otel/opentelemetry-collector-contrib:0.113.0`,
+`prom/prometheus:v2.54.1`, `grafana/grafana:11.2.0`.
+
+### Paquetes de Go y dónde vive Init/Shutdown
+
+`go.opentelemetry.io/otel`, `otel/sdk`, `otel/sdk/metric`,
+`otel/exporters/otlp/otlpmetric/otlpmetricgrpc`, y
+`go.opentelemetry.io/contrib/.../otelhttp`. Fijar estas versiones
+(`go get ... @latest`, después congeladas en `go.mod`/`go.sum`) subió
+automáticamente el `go` directive del módulo de 1.23.1 a 1.25.0 — las
+versiones actuales del SDK de OTel ya piden un Go más nuevo; Go
+descargó su propio toolchain 1.25.0 sin ninguna intervención manual y
+el proyecto sigue compilando y pasando todos los tests igual. Se deja
+documentado como un efecto observado, no una decisión buscada.
+
+Un paquete nuevo, `internal/telemetry`, es el ÚNICO del proyecto que
+importa el SDK de OpenTelemetry para las métricas de dominio.
+`internal/telemetry.Init(ctx, cfg)` se llama una sola vez, al principio
+de `cmd/engine/main()`; el `shutdown` que devuelve se llama una sola
+vez, al final, con un contexto nuevo y acotado (ver "Apagado
+ordenado" más abajo). Ni `internal/engine`, ni `internal/asn`, ni
+`internal/httpapi` importan OpenTelemetry — cada uno define su propia
+interfaz mínima de consumo (`engine.FindingsRecorder`,
+`asn.MetricsRecorder`, `httpapi.DecisionRecorder`), que
+`internal/telemetry` implementa desde afuera por tipado estructural —
+mismo criterio que `internal/asn.Resolver` satisface
+`credstuffing.NetworkResolver` desde la tarea 1.3.
+
+### Métricas — verificadas de verdad, no asumidas
+
+El ajuste 1 pedía explícitamente no asumir el nombre real que
+`otelhttp` exporta y verificarlo durante la integración. Se hizo: se
+corrió el stack completo, se generó tráfico real, y se leyó
+directamente `curl http://localhost:8889/metrics` (el exportador
+Prometheus del Collector). Nombres reales confirmados:
+
+| Métrica (nombre real en Prometheus) | Tipo | Unidad | Labels | Dónde se registra | Pregunta que responde |
+|---|---|---|---|---|---|
+| `http_server_request_duration_seconds` | Histogram | s | `http_route` (2 valores), `http_request_method`, `http_response_status_code` | `otelhttp.NewHandler` envolviendo el mux en `cmd/engine/main.go` | Volumen y latencia end-to-end de cada endpoint |
+| `waf_decisions_total` | Counter | 1 | `action` (3), `attack_vector` (3) | `httpapi.handleEvents`, justo después de `Decide` | Decisiones por action y por attack_vector |
+| `waf_detector_findings_total` | Counter | 1 | `detector` (3) | `engine.BehavioralDecider.Decide`, por cada detector con `Finding.Triggered` | Qué detector dispara, incluso el que pierde el desempate |
+| `waf_asn_cache_total` | Counter | 1 | `result` (hit/miss) | `asn.Resolver.Resolve`, según `cacheGet` | Efectividad del caché de ASN |
+| `waf_asn_resolve_total` | Counter | 1 | `result` (success/failure/capacity_timeout) | `asn.Resolver.Resolve`, tras `fetch` o tras el timeout de capacidad | ¿RIPEstat responde? ¿Cuánto pesa la contención local? |
+| `waf_asn_provider_duration_seconds` | Histogram | s | `result` (success/failure) | `asn.Resolver.Resolve`, alrededor de `fetch` | Cuánto tarda realmente la llamada HTTP al proveedor |
+
+**Ajuste 2 (renombre) aplicado**: la métrica de duración del ASN mide
+específicamente la llamada HTTP a `fetch`, nunca `Resolve()` completo
+(que también incluye la espera de capacidad y el caché) — por eso se
+llama `waf.asn.provider.duration` (→ `waf_asn_provider_duration_seconds`
+en Prometheus), no `waf.asn.resolve.duration`. Verificado en la demo:
+`waf_asn_resolve_total{result="success"}=30` junto con
+`waf_asn_provider_duration_seconds_count{result="success"}=30` —
+exactamente una medición de duración por cada resolución real, nunca
+por los `capacity_timeout` (ahí nunca hubo ninguna llamada que medir).
+
+**Decisión explícita de NO agregar** una métrica de latencia solo para
+`engine.Decide`: `httpapi.handleEvents` hace decode→validate→Decide→encode,
+y decode/validate/encode de un evento son microsegundos frente al
+trabajo de los detectores — sería casi idéntica a la latencia HTTP de
+`POST /v1/events` y solo agregaría una serie más para mantener sin
+información nueva.
+
+### Cardinalidad
+
+Ningún label es `client_ip`, `request_id`, `entity_id`, `session_id`,
+`login_user_hash`, ruta cruda ni un número de ASN individual. Todos los
+labels son conjuntos fijos y chicos: `action` (3), `attack_vector` (3),
+`detector` (3), `result` (2 o 3), `http_route` (2). Combinación máxima
+observada: `waf_decisions_total` con 3×3=9 series.
+
+### Dónde se instrumenta sin contaminar el dominio
+
+`internal/credstuffing`, `internal/slowscan` e `internal/anomaly`:
+**cero cambios**, ningún import de OpenTelemetry. `internal/httpapi`
+agrega `DecisionRecorder` (interfaz mínima, nil-safe con un no-op por
+defecto). `internal/engine` agrega `FindingsRecorder` a
+`BehavioralDecider`, con la misma convención. `internal/asn` agrega
+`MetricsRecorder` a `Resolver`. Las tres son implementadas desde
+`internal/telemetry`, cableadas en `cmd/engine/main.go`.
+
+**Ajuste 6 aplicado**: `waf.detector.findings` usa el nombre del
+detector ya registrado explícitamente en `namedDetector.name`
+("credential_stuffing", "slow_scan", "statistical_anomaly", fijado en
+`NewBehavioralDecider` desde la tarea 1.6) — nunca se infiere con un
+`type switch` sobre el detector concreto; de hecho no hizo falta
+escribir ningún código nuevo para esto, el campo ya existía con el
+nombre correcto.
+
+### Fail-open: el ajuste central de esta tarea
+
+`internal/telemetry.Init` nunca devuelve un estado que le impida a
+`cmd/engine` arrancar. Tres casos, probados en
+`internal/telemetry/telemetry_test.go`:
+
+1. `--otel-endpoint` vacío (default) → no-op sin ningún intento de red
+   (`TestInit_EmptyEndpoint_IsNoopWithoutDialing`).
+2. `--otel-endpoint` configurado pero el Collector no responde dentro
+   de `--otel-connect-timeout` → no-op, `usedNoop=true`, tiempo total
+   acotado cerca del timeout — nunca un error que frene el arranque
+   (`TestInit_CollectorUnreachable_FallsBackToNoop`, contra un puerto
+   TCP real cerrado, sin mocks).
+3. Collector alcanzable → `MeterProvider` real.
+
+La verificación de "alcanzable o no" es síncrona y ocurre en `dial()`:
+se arma un `*grpc.ClientConn` con `grpc.NewClient` (la forma moderna,
+que nunca conecta por sí sola) y se espera explícitamente
+`connectivity.Ready` con `conn.WaitForStateChange`, acotado por
+`ConnectTimeout` — se evitó la vieja `grpc.WithBlock()` porque su
+propia documentación dice que `NewClient` ya no la soporta.
+
+`cmd/engine/main.go` logea la advertencia de fallback (`usedNoop &&
+endpoint != ""`) — `internal/telemetry` nunca escribe logs por su
+cuenta, para quedar testeable sin capturar stdout.
+
+### `--otel-insecure` (ajuste 4)
+
+La conexión gRPC local de esta tarea usa `insecure.NewCredentials()`
+explícitamente vía `--otel-insecure=true` (default). Documentado sin
+ambigüedad: esto es válido únicamente para un Collector local en la
+misma máquina/red de confianza — un endpoint remoto de producción
+debería correr con `--otel-insecure=false`, que activa
+`credentials.NewTLS` con la configuración estándar de verificación
+contra las CA del sistema.
+
+### `otelhttp` con el `MeterProvider` explícito (ajuste 5)
+
+`cmd/engine/main.go` pasa `otelhttp.WithMeterProvider(recorders.Provider)`
+en vez de depender del proveedor global — se confirmó en la versión
+usada (`otelhttp` v0.71.0) que la opción existe exactamente para esto
+("If none is specified, the global provider is used"), así que no
+hubo ninguna razón técnica para no pasarlo explícito. Es la única
+excepción, documentada, a preferir la convención propia del proyecto
+(inyección explícita) sobre la convención estándar de OTel (proveedor
+global): las métricas de dominio (`waf.decisions`, `waf.detector.findings`,
+`waf.asn.*`) sí siguen la inyección explícita de siempre.
+
+### Apagado ordenado (ajuste 8)
+
+`cmd/engine/main.go` no tenía manejo de señales — `main()` ahora usa
+`signal.NotifyContext(context.Background(), os.Interrupt,
+syscall.SIGTERM)`. Al recibir la señal: `httpServer.Shutdown` con un
+contexto acotado a 5s (deja de aceptar conexiones nuevas, drena las en
+curso), y — recién después de que `ListenAndServe` retorna — un
+**segundo** contexto nuevo y acotado a 5s, exclusivamente para
+`telemetry` `Shutdown` (que hace flush del `MeterProvider` y cierra la
+conexión gRPC). Nunca se reutiliza el `ctx` de la señal, que para ese
+momento ya está cancelado y no le daría ningún margen real al flush
+final. Verificado manualmente (no con un test automatizado — es
+comportamiento de `main`, no de un paquete): se envió `SIGTERM` a un
+binario real corriendo con `--otel-endpoint` configurado, y el log
+mostró "señal de apagado recibida, cerrando ordenadamente" seguido de
+una terminación limpia, sin quedar colgado.
+
+### Tests sin Docker/Prometheus/Grafana/Internet
+
+Las interfaces mínimas se prueban con fakes en memoria
+(`fakeFindingsRecorder` en `internal/engine`, `fakeMetricsRecorder` en
+`internal/asn`, `fakeDecisionRecorder` en `internal/httpapi`) — mismo
+estilo que `fakeResolver` desde la tarea 1.3. El adaptador real de
+`internal/telemetry` se prueba con `sdkmetric.NewManualReader()` (sin
+ningún exportador de red): se registra una medición y se lee
+sincrónicamente el resultado ya agregado, la forma oficialmente
+soportada por el SDK de OTel para testear instrumentación sin
+Collector. `TestEngineRecorder_...`, `TestHTTPRecorder_...` y
+`TestASNRecorder_...` verifican, contra el `ManualReader`, el nombre
+exacto de cada instrumento y sus atributos — el mismo nombre que
+después se confirmó en la demo real.
+
+### Docker Compose y provisioning de Grafana
+
+`otel/collector-config.yaml` (receiver `otlp` gRPC, processor
+`batch`, exporter `prometheus` en `:8889`); `prometheus/prometheus.yml`
+(un único scrape job hacia `otel-collector:8889`);
+`grafana/provisioning/datasources/datasource.yml` (datasource
+Prometheus con `uid: prometheus` fijo, para que el JSON del dashboard
+pueda referenciarlo sin variables de plantilla);
+`grafana/provisioning/dashboards/dashboard-provider.yml` +
+`grafana/dashboards/waf-engine.json` (8 paneles). Acceso anónimo de
+solo lectura habilitado en Grafana (`GF_AUTH_ANONYMOUS_ENABLED=true`,
+rol Viewer) — únicamente para que este demo local no le exija login al
+evaluador; el panel de administración sigue pidiendo `admin/admin`.
+Nunca se expondría así fuera de una demo local.
+
+### Verificación manual real, de punta a punta
+
+Se corrió `docker compose up -d`, se levantó `cmd/engine` local
+apuntando a `localhost:4317`, y se generó tráfico real de tres formas:
+
+1. **ALLOW**: 5 requests normales a `/` → `waf_decisions_total{action="ALLOW",attack_vector="unknown"}`.
+2. **slow_scan**: 50 requests a rutas distintas, todas 404, sobre una
+   misma IP → `action=BLOCK`, `attack_vector=slow_scan`,
+   `waf_detector_findings_total{detector="slow_scan"}=36`.
+3. **statistical_anomaly**: un baseline de 200 IPs de un solo request
+   cada una (≈1% sin `Referer`, variabilidad real, no un valor
+   idéntico repetido) seguido de una entidad nueva sosteniendo
+   `Referer` ausente en 10 requests → `Finding.Triggered=true` con
+   `without_referer_ratio_z≈9.87` (`risk score` 0.33, por debajo del
+   `challenge threshold` 0.50, así que `action` siguió en `ALLOW` pero
+   con la evidencia completa preservada — mismo diseño ya documentado
+   en la tarea 1.5) → `waf_detector_findings_total{detector="statistical_anomaly"}=10`.
+4. (Opcional, también verificado) **credential_stuffing con RIPEstat
+   real**: 30 IPs públicas de Google (`8.8.8.1`-`8.8.8.30`, AS15169),
+   15 cuentas, 80% de fallos → `entity_id=network:asn:15169`,
+   `waf_asn_cache_total{result="hit"}=30` y `{result="miss"}=30` (cada
+   IP se resuelve dos veces por evento — una vez desde
+   `credstuffing.Observe`, otra desde `Evaluate`; la primera es
+   siempre miss, la segunda siempre hit gracias al caché — ningún
+   comportamiento nuevo, solo confirma cómo ya funcionaba
+   `credstuffing.Detector` desde la tarea 1.3),
+   `waf_asn_resolve_total{result="success"}=30`,
+   `waf_asn_provider_duration_seconds_sum{result="success"}≈10.26s`
+   sobre 30 llamadas reales.
+
+Los ocho paneles se confirmaron cargados vía la propia API de Grafana
+(`GET /api/dashboards/uid/waf-behavior-engine` → 8 panels) y una query
+real ejecutada a través del proxy de Grafana hacia Prometheus devolvió
+datos reales — no solo "la config parece bien", sino "Grafana
+efectivamente sirve estos números".
+
+**Hallazgo real durante esta verificación, documentado porque es
+instructivo (mismo espíritu que el de la tarea 1.7):** el primer
+intento de forzar `statistical_anomaly` con tráfico real fue mucho más
+difícil de lo esperado, y expuso dos límites genuinos del diseño de la
+tarea 1.6, no solo teóricos:
+
+1. Un baseline con **cero varianza real** (todas las muestras
+   idénticas, ej. siempre con `Referer`) desactiva por completo el
+   z-score de esa feature — `evaluateFeatures` trata explícitamente
+   `stddev <= zEpsilon` como "sin información" (`z=0`), a propósito,
+   para no dividir por (casi) cero y explotar. Es correcto y
+   deseable, pero significa que un dataset sintético demasiado
+   homogéneo nunca puede disparar este detector, sin importar cuán
+   extrema sea la desviación — hace falta variabilidad real en el
+   baseline primero.
+2. Como el baseline es **global** (ya documentado como limitación
+   desde la tarea 1.6) y las muestras que no disparan se siguen
+   agregando al baseline, varios intentos fallidos consecutivos, sobre
+   el mismo proceso corriendo, terminaron **contaminando su propio
+   baseline** con las mismas muestras "anómalas" que no habían
+   disparado — inflando la varianza aprendida y haciendo cada intento
+   posterior más difícil, no más fácil. Reiniciar el proceso (baseline
+   en memoria, se pierde al reiniciar — tarea 1.6) y hacer un único
+   intento bien calculado fue lo que finalmente funcionó.
+
+Ninguno de los dos es un bug: son la consecuencia directa, observada en
+la práctica, de un diseño ya documentado (baseline global, z-score
+protegido contra varianza cero). Se deja constancia acá porque es
+exactamente el tipo de comportamiento que vale la pena poder explicar
+en una entrevista.
+
+### Criterios de cierre
+
+`gofmt -l .` limpio; `go vet ./...` sin hallazgos; `go test -race ./...`
+verde en todos los paquetes, incluido `internal/telemetry` (nuevo);
+`docker compose config` válido; el stack arranca localmente (3
+contenedores healthy); métricas reales (no inventadas) visibles en
+Prometheus y en Grafana; dashboard funcional con 8 paneles, cargado
+sin ningún paso manual del evaluador; esta sección de
+`docs/decisiones.md` actualizada con el resultado real, no un plan.
+
+No se hizo ningún `git add`/`git commit`. No se avanza a la tarea 1.9
+sin aprobación explícita.
+
+### Adenda — vulnerabilidades de dependencias detectadas post-implementación
+
+El IDE (plugin Red Hat Dependency Analytics, que usa OSV/GitHub
+Advisories) marcó `google.golang.org/grpc@v1.83.1` con una
+vulnerabilidad HIGH. Se investigó con dos fuentes independientes antes
+de tocar nada:
+
+1. **`govulncheck`** (el escáner oficial de Go, que hace análisis de
+   alcanzabilidad real contra el código propio) — no reportó ningún
+   problema en `grpc` en absoluto, ni siquiera como "no alcanzable".
+   En cambio encontró **31 vulnerabilidades reales de la librería
+   estándar de Go**, todas ya arregladas en parches posteriores a
+   `go1.25.0` — consecuencia directa de que `go get ... @latest`
+   había fijado el `go` directive del módulo en exactamente `1.25.0`
+   durante la implementación de esta tarea.
+2. **Consulta directa a la API de OSV.dev** por la versión exacta
+   `1.83.1`, para identificar la vulnerabilidad puntual del IDE:
+   `GHSA-2v4p-qf9q-27wj` / `CVE-2026-84445` / `GO-2026-6443` — un panic
+   de denegación de servicio en servidores gRPC configurados con
+   `xds.NewGRPCServer()` (xDS), cuando un request llega sin los
+   headers `:authority` ni `Host`. Este proyecto **nunca usa gRPC como
+   servidor XDS** — `internal/telemetry` solo lo usa como *cliente*
+   (`grpc.NewClient` para hablar con el Collector vía
+   `otlpmetricgrpc`) — exactamente por eso `govulncheck` no lo marcó:
+   el código vulnerable jamás es alcanzable desde este binario. El
+   aviso del IDE es correcto sobre la versión de la librería, pero no
+   distingue si el código vulnerable específico se usa o no.
+
+**Corrección aplicada, aunque el código no fuera alcanzable** (es un
+bump de parche, sin riesgo, y elimina el ruido de la alerta):
+`google.golang.org/grpc` a `v1.83.2` (la versión donde se arregló
+`GHSA-2v4p-qf9q-27wj`), y el `go` directive del módulo de `1.25.0` a
+`1.25.14` (el último parche de la misma línea 1.25 — no un salto de
+versión de lenguaje, solo la corrección de seguridad de la librería
+estándar). Verificado: `govulncheck ./...` pasó de 31+ hallazgos a
+`No vulnerabilities found`, y `gofmt -l .` / `go vet ./...` /
+`go test -race ./...` siguen en verde.

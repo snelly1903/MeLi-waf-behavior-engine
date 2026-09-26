@@ -95,7 +95,52 @@ type Config struct {
 	// HTTPClient es el cliente HTTP a usar. Si es nil, se construye
 	// uno por defecto. Inyectable para tests.
 	HTTPClient *http.Client
+
+	// Metrics recibe, si no es nil, las métricas de operación de este
+	// Resolver (caché hit/miss, resultado de cada resolución, y
+	// cuánto tarda la llamada real al proveedor) — tarea 1.8. Si es
+	// nil, se usa un noopMetricsRecorder: este paquete nunca importa
+	// OpenTelemetry directamente; internal/telemetry implementa esta
+	// interfaz desde afuera, por tipado estructural (mismo criterio
+	// que credstuffing.NetworkResolver, tarea 1.3).
+	Metrics MetricsRecorder
 }
+
+// MetricsRecorder es la interfaz mínima que Resolver usa para
+// reportar su actividad. result, en RecordResolveResult y
+// RecordProviderDuration, es siempre uno de "success", "failure" o
+// (solo en RecordResolveResult) "capacity_timeout" — nunca un ASN
+// individual ni ninguna otra cadena de alta cardinalidad; ver
+// docs/decisiones.md, tarea 1.8, sobre por qué.
+type MetricsRecorder interface {
+	// RecordCacheResult informa si Resolve encontró la IP en caché
+	// (hit=true) o no (hit=false) — incluye tanto "nunca se cacheó"
+	// como "estaba cacheada pero venció".
+	RecordCacheResult(hit bool)
+
+	// RecordResolveResult informa el resultado final de un intento de
+	// resolución que no vino de caché: "success", "failure" (el
+	// proveedor respondió pero sin un ASN utilizable, o falló la
+	// llamada) o "capacity_timeout" (el plazo se consumió esperando
+	// un cupo de concurrencia, sin llegar a llamar al proveedor).
+	RecordResolveResult(result string)
+
+	// RecordProviderDuration informa cuánto tardó la llamada HTTP
+	// real al proveedor (nunca incluye la espera de capacidad ni el
+	// tiempo de caché) — solo se llama para "success" o "failure",
+	// nunca para "capacity_timeout" (ahí no hubo ninguna llamada que
+	// medir).
+	RecordProviderDuration(result string, d time.Duration)
+}
+
+// noopMetricsRecorder es el valor por defecto cuando Config.Metrics
+// es nil: mantiene a Resolver libre de comprobaciones de nil en cada
+// llamada.
+type noopMetricsRecorder struct{}
+
+func (noopMetricsRecorder) RecordCacheResult(bool)                       {}
+func (noopMetricsRecorder) RecordResolveResult(string)                   {}
+func (noopMetricsRecorder) RecordProviderDuration(string, time.Duration) {}
 
 // Errores centinela de configuración, comprobables individualmente
 // con errors.Is.
@@ -147,6 +192,7 @@ type Resolver struct {
 	cfg        Config
 	httpClient *http.Client
 	clock      event.Clock
+	metrics    MetricsRecorder
 
 	sem chan struct{}
 
@@ -168,10 +214,15 @@ func NewResolver(cfg Config) (*Resolver, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
+	metrics := cfg.Metrics
+	if metrics == nil {
+		metrics = noopMetricsRecorder{}
+	}
 	return &Resolver{
 		cfg:        cfg,
 		httpClient: httpClient,
 		clock:      clock,
+		metrics:    metrics,
 		sem:        make(chan struct{}, cfg.MaxConcurrentRequests),
 		cache:      make(map[netip.Addr]cacheEntry),
 	}, nil
@@ -191,8 +242,10 @@ type networkInfoResponse struct {
 // cupo de concurrencia como la llamada HTTP.
 func (r *Resolver) Resolve(ip netip.Addr) (string, bool) {
 	if group, ok, found := r.cacheGet(ip); found {
+		r.metrics.RecordCacheResult(true)
 		return group, ok
 	}
+	r.metrics.RecordCacheResult(false)
 
 	ctx, cancel := context.WithTimeout(context.Background(), r.cfg.Timeout)
 	defer cancel()
@@ -203,13 +256,28 @@ func (r *Resolver) Resolve(ip netip.Addr) (string, bool) {
 		// es contención local pasajera, no una respuesta real del
 		// proveedor sobre esta IP, así que cachearlo podría suprimir
 		// injustamente un reintento una vez que la contención baje.
+		r.metrics.RecordResolveResult("capacity_timeout")
 		return "", false
 	}
 	defer r.release()
 
+	start := time.Now()
 	group, ok := r.fetch(ctx, ip)
+	r.metrics.RecordProviderDuration(resultLabel(ok), time.Since(start))
+	r.metrics.RecordResolveResult(resultLabel(ok))
+
 	r.cacheSet(ip, group, ok)
 	return group, ok
+}
+
+// resultLabel traduce ok a la etiqueta de bajo cardinalidad que usan
+// las métricas de este paquete — nunca el número de ASN ni ningún
+// otro dato de la IP en sí.
+func resultLabel(ok bool) string {
+	if ok {
+		return "success"
+	}
+	return "failure"
 }
 
 // acquire toma un cupo del semáforo de concurrencia, o devuelve false

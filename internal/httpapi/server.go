@@ -34,17 +34,39 @@ type errorResponse struct {
 	Message string `json:"message"`
 }
 
+// DecisionRecorder es la interfaz mínima que Server usa para
+// reportar, por cada decisión tomada, su Action y AttackVector
+// (tarea 1.8) — nunca ninguna señal de alta cardinalidad como
+// EntityID o RequestID. Server nunca importa OpenTelemetry
+// directamente: internal/telemetry implementa esta interfaz desde
+// otro paquete, por tipado estructural, mismo criterio que
+// engine.Decider.
+type DecisionRecorder interface {
+	RecordDecision(action, attackVector string)
+}
+
+// noopDecisionRecorder es el valor por defecto cuando NewServer
+// recibe recorder=nil.
+type noopDecisionRecorder struct{}
+
+func (noopDecisionRecorder) RecordDecision(string, string) {}
+
 // Server arma los handlers HTTP a partir de las piezas ya existentes
 // del proyecto: un event.Validator (tarea 0.2) y un engine.Decider
 // (tarea 1.1).
 type Server struct {
 	validator *event.Validator
 	decider   engine.Decider
+	recorder  DecisionRecorder
 }
 
-// NewServer construye un Server. validator y decider son obligatorios.
-func NewServer(validator *event.Validator, decider engine.Decider) *Server {
-	return &Server{validator: validator, decider: decider}
+// NewServer construye un Server. validator y decider son
+// obligatorios; recorder es opcional (nil = noopDecisionRecorder).
+func NewServer(validator *event.Validator, decider engine.Decider, recorder DecisionRecorder) *Server {
+	if recorder == nil {
+		recorder = noopDecisionRecorder{}
+	}
+	return &Server{validator: validator, decider: decider, recorder: recorder}
 }
 
 // Routes arma el *http.ServeMux con los endpoints de esta tarea:
@@ -83,6 +105,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d := s.decider.Decide(r.Context(), e)
+	s.recorder.RecordDecision(string(d.Action), string(d.AttackVector))
 	writeJSON(w, http.StatusOK, d)
 }
 

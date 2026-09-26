@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -258,6 +259,97 @@ func TestResolve_CachesSuccessfulResult_AvoidsSecondCall(t *testing.T) {
 
 	if got := callCount.Load(); got != 1 {
 		t.Errorf("provider was called %d times, want exactly 1 (the rest must come from cache)", got)
+	}
+}
+
+// fakeMetricsRecorder captura cada llamada — usado para verificar que
+// Resolve reporta caché hit/miss y el resultado de cada resolución
+// real, sin necesitar OpenTelemetry en este test (tarea 1.8).
+type fakeMetricsRecorder struct {
+	mu             sync.Mutex
+	cacheResults   []bool
+	resolveResults []string
+	durationCalls  int
+}
+
+func (r *fakeMetricsRecorder) RecordCacheResult(hit bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cacheResults = append(r.cacheResults, hit)
+}
+
+func (r *fakeMetricsRecorder) RecordResolveResult(result string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolveResults = append(r.resolveResults, result)
+}
+
+func (r *fakeMetricsRecorder) RecordProviderDuration(result string, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.durationCalls++
+}
+
+// TestResolve_ReportsMetrics_CacheAndResolveResult cubre el camino
+// feliz de la instrumentación: un primer Resolve (miss + success, con
+// su duración) y un segundo Resolve sobre la misma IP (hit, sin
+// llamada nueva al proveedor y sin una segunda medición de duración).
+func TestResolve_ReportsMetrics_CacheAndResolveResult(t *testing.T) {
+	srv := httptest.NewServer(networkInfoHandler([]string{"15169"}, "ok"))
+	defer srv.Close()
+
+	metrics := &fakeMetricsRecorder{}
+	cfg := testConfig(srv.URL, event.SystemClock{})
+	cfg.Metrics = metrics
+	r, err := NewResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	ip := netip.MustParseAddr("8.8.8.8")
+	r.Resolve(ip)
+	r.Resolve(ip)
+
+	if want := []bool{false, true}; !reflect.DeepEqual(metrics.cacheResults, want) {
+		t.Errorf("cacheResults = %v, want %v (miss y después hit)", metrics.cacheResults, want)
+	}
+	if want := []string{"success"}; !reflect.DeepEqual(metrics.resolveResults, want) {
+		t.Errorf("resolveResults = %v, want %v (solo se llamó al proveedor una vez)", metrics.resolveResults, want)
+	}
+	if metrics.durationCalls != 1 {
+		t.Errorf("durationCalls = %d, want 1 (la segunda llamada vino de caché, sin llamar al proveedor)", metrics.durationCalls)
+	}
+}
+
+// TestResolve_ReportsCapacityTimeout_WithoutDurationCall confirma que
+// el caso "el plazo se consumió esperando cupo de concurrencia" se
+// reporta como "capacity_timeout" y nunca dispara
+// RecordProviderDuration — ahí nunca hubo ninguna llamada real al
+// proveedor que medir.
+func TestResolve_ReportsCapacityTimeout_WithoutDurationCall(t *testing.T) {
+	metrics := &fakeMetricsRecorder{}
+	cfg := testConfig("http://example.invalid", event.SystemClock{})
+	cfg.MaxConcurrentRequests = 1
+	cfg.Timeout = 100 * time.Millisecond
+	cfg.Metrics = metrics
+	r, err := NewResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	r.sem <- struct{}{} // ocupa el único cupo posible a mano (mismo truco que TestResolve_TimeoutConsumedWaitingForCapacity_NeverCallsProvider)
+	defer func() { <-r.sem }()
+
+	_, ok := r.Resolve(netip.MustParseAddr("8.8.8.8"))
+	if ok {
+		t.Fatal("Resolve() ok = true, want false")
+	}
+
+	if want := []string{"capacity_timeout"}; !reflect.DeepEqual(metrics.resolveResults, want) {
+		t.Errorf("resolveResults = %v, want %v", metrics.resolveResults, want)
+	}
+	if metrics.durationCalls != 0 {
+		t.Errorf("durationCalls = %d, want 0 (nunca se llamó al proveedor)", metrics.durationCalls)
 	}
 }
 

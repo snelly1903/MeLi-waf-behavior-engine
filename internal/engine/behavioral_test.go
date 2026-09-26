@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -140,11 +141,23 @@ func newTestDeciderFull(t *testing.T, resolver credstuffing.NetworkResolver, ss 
 	if err != nil {
 		t.Fatalf("anomaly.NewDetector: %v", err)
 	}
-	d, err := NewBehavioralDecider(cs, ssDetector, anDetector, policy)
+	d, err := NewBehavioralDecider(cs, ssDetector, anDetector, policy, nil)
 	if err != nil {
 		t.Fatalf("NewBehavioralDecider: %v", err)
 	}
 	return d
+}
+
+// fakeFindingsRecorder captura cada llamada a RecordFinding — usado
+// para verificar que Decide reporta cada detector que dispara,
+// incluso el que pierde el desempate y queda como secundario (tarea
+// 1.8), sin necesitar OpenTelemetry en este test.
+type fakeFindingsRecorder struct {
+	calls []string
+}
+
+func (r *fakeFindingsRecorder) RecordFinding(detector string) {
+	r.calls = append(r.calls, detector)
 }
 
 func sensitivePath(i int) string { return fmt.Sprintf("/sensitive-%d", i) }
@@ -211,16 +224,16 @@ func TestNewBehavioralDecider_InvalidInputs(t *testing.T) {
 		t.Fatalf("anomaly.NewDetector: %v", err)
 	}
 
-	if _, err := NewBehavioralDecider(nil, ss, an, testPolicy()); !errors.Is(err, ErrNilCredentialStuffingDetector) {
+	if _, err := NewBehavioralDecider(nil, ss, an, testPolicy(), nil); !errors.Is(err, ErrNilCredentialStuffingDetector) {
 		t.Errorf("nil credstuffing: error = %v, want ErrNilCredentialStuffingDetector", err)
 	}
-	if _, err := NewBehavioralDecider(cs, nil, an, testPolicy()); !errors.Is(err, ErrNilSlowScanDetector) {
+	if _, err := NewBehavioralDecider(cs, nil, an, testPolicy(), nil); !errors.Is(err, ErrNilSlowScanDetector) {
 		t.Errorf("nil slowscan: error = %v, want ErrNilSlowScanDetector", err)
 	}
-	if _, err := NewBehavioralDecider(cs, ss, nil, testPolicy()); !errors.Is(err, ErrNilAnomalyDetector) {
+	if _, err := NewBehavioralDecider(cs, ss, nil, testPolicy(), nil); !errors.Is(err, ErrNilAnomalyDetector) {
 		t.Errorf("nil anomaly: error = %v, want ErrNilAnomalyDetector", err)
 	}
-	if _, err := NewBehavioralDecider(cs, ss, an, Policy{ChallengeThreshold: 0.8, BlockThreshold: 0.5}); !errors.Is(err, ErrInvalidPolicy) {
+	if _, err := NewBehavioralDecider(cs, ss, an, Policy{ChallengeThreshold: 0.8, BlockThreshold: 0.5}, nil); !errors.Is(err, ErrInvalidPolicy) {
 		t.Errorf("invalid policy: error = %v, want ErrInvalidPolicy", err)
 	}
 }
@@ -490,6 +503,66 @@ func TestDecide_BothTrigger_HigherScoreWins(t *testing.T) {
 	}
 	if err := decision.Validate(final); err != nil {
 		t.Errorf("decision.Validate(%+v) = %v, want nil", final, err)
+	}
+}
+
+// TestDecide_RecordsFindingForEveryTriggeredDetector_NotJustPrincipal
+// reusa el escenario de TestDecide_BothTrigger_HigherScoreWins (ambos
+// detectores disparan, pero solo slow_scan queda como principal) para
+// confirmar que RecordFinding se llama por CADA detector que
+// disparó, no solo por el que ganó el desempate — la métrica
+// waf.detector.findings de la tarea 1.8 existe justamente para ver
+// esto, que la Decision final por sí sola no muestra.
+func TestDecide_RecordsFindingForEveryTriggeredDetector_NotJustPrincipal(t *testing.T) {
+	resolver := fakeResolver{}
+	recorder := &fakeFindingsRecorder{}
+
+	cs, err := credstuffing.NewDetector(csConfig(resolver))
+	if err != nil {
+		t.Fatalf("credstuffing.NewDetector: %v", err)
+	}
+	ss, err := slowscan.NewDetector(ssConfig())
+	if err != nil {
+		t.Fatalf("slowscan.NewDetector: %v", err)
+	}
+	an, err := anomaly.NewDetector(inertAnomalyConfig())
+	if err != nil {
+		t.Fatalf("anomaly.NewDetector: %v", err)
+	}
+	d, err := NewBehavioralDecider(cs, ss, an, testPolicy(), recorder)
+	if err != nil {
+		t.Fatalf("NewBehavioralDecider: %v", err)
+	}
+
+	group := "asn:findings-test"
+	ip0 := ipFor(0)
+	other := []netip.Addr{ipFor(1), ipFor(2), ipFor(3), ipFor(4)}
+	for _, ip := range append(other, ip0) {
+		resolver[ip] = group
+	}
+
+	accounts := []string{"acct-A", "acct-C", "acct-D", "acct-D", "acct-A", "acct-B"}
+	statuses := []int{401, 401, 200, 403, 200, 200}
+	ips := []netip.Addr{other[0], other[1], other[2], other[3], ip0}
+	for i := 0; i < 4; i++ {
+		d.Decide(context.Background(), loginEvent(ips[i], time.Duration(i)*time.Second, accounts[i], statuses[i]))
+	}
+	d.Decide(context.Background(), loginEvent(ip0, 4*time.Second, accounts[4], statuses[4]))
+
+	for i := 0; i < 50; i++ {
+		d.Decide(context.Background(), scanEvent(ip0, time.Duration(10+i)*time.Second, sensitivePath(i), 404, false, ""))
+	}
+
+	recorder.calls = nil // solo nos importa el evento final, donde disparan los dos a la vez
+	final := d.Decide(context.Background(), loginEvent(ip0, 5*time.Second, accounts[5], statuses[5]))
+
+	if final.AttackVector != decision.AttackVectorSlowScan {
+		t.Fatalf("setup inválido: AttackVector = %v, want slow_scan (mismo escenario que TestDecide_BothTrigger_HigherScoreWins)", final.AttackVector)
+	}
+
+	want := []string{"credential_stuffing", "slow_scan"}
+	if !reflect.DeepEqual(recorder.calls, want) {
+		t.Errorf("RecordFinding calls = %v, want %v (los dos detectores dispararon, aunque solo slow_scan quedó como principal)", recorder.calls, want)
 	}
 }
 

@@ -50,6 +50,28 @@ type detector interface {
 	Sweep(now time.Time, idleTTL time.Duration) int
 }
 
+// FindingsRecorder es la interfaz mínima que BehavioralDecider usa
+// para reportar, por cada detector, si disparó un Finding en este
+// evento — sin importar si terminó siendo el principal de la
+// Decision o no (tarea 1.8). El nombre del detector es siempre uno
+// de los ya registrados explícitamente en namedDetector.name
+// ("credential_stuffing", "slow_scan", "statistical_anomaly"): nunca
+// se infiere con un type switch sobre el detector concreto.
+//
+// Exportada porque internal/telemetry la implementa desde otro
+// paquete, por tipado estructural — BehavioralDecider nunca importa
+// OpenTelemetry directamente, mismo criterio que
+// credstuffing.NetworkResolver (tarea 1.3).
+type FindingsRecorder interface {
+	RecordFinding(detector string)
+}
+
+// noopFindingsRecorder es el valor por defecto cuando
+// NewBehavioralDecider recibe recorder=nil.
+type noopFindingsRecorder struct{}
+
+func (noopFindingsRecorder) RecordFinding(string) {}
+
 // namedDetector empareja un detector con su prioridad de desempate
 // (menor número gana un empate exacto de RiskScore) y un nombre solo
 // para que quede legible en el código — nunca se expone en la
@@ -68,6 +90,7 @@ type namedDetector struct {
 type BehavioralDecider struct {
 	detectors []namedDetector
 	policy    Policy
+	recorder  FindingsRecorder
 }
 
 // NewBehavioralDecider construye un BehavioralDecider. Los tres
@@ -89,7 +112,10 @@ type BehavioralDecider struct {
 // gana un empate exacto de RiskScore; el genérico es el último
 // recurso. Generaliza la regla ya establecida en la tarea 1.5
 // ("credential_stuffing gana empates contra slow_scan").
-func NewBehavioralDecider(cs *credstuffing.Detector, ss *slowscan.Detector, an *anomaly.Detector, policy Policy) (*BehavioralDecider, error) {
+// recorder es opcional: si es nil, se usa noopFindingsRecorder — un
+// caller que no le importa la telemetría (por ejemplo, la mayoría de
+// los tests de este paquete) puede seguir pasando nil.
+func NewBehavioralDecider(cs *credstuffing.Detector, ss *slowscan.Detector, an *anomaly.Detector, policy Policy, recorder FindingsRecorder) (*BehavioralDecider, error) {
 	if cs == nil {
 		return nil, ErrNilCredentialStuffingDetector
 	}
@@ -102,13 +128,17 @@ func NewBehavioralDecider(cs *credstuffing.Detector, ss *slowscan.Detector, an *
 	if err := policy.Validate(); err != nil {
 		return nil, err
 	}
+	if recorder == nil {
+		recorder = noopFindingsRecorder{}
+	}
 	return &BehavioralDecider{
 		detectors: []namedDetector{
 			{name: "credential_stuffing", detector: cs, priority: 0},
 			{name: "slow_scan", detector: ss, priority: 1},
 			{name: "statistical_anomaly", detector: an, priority: 2},
 		},
-		policy: policy,
+		policy:   policy,
+		recorder: recorder,
 	}, nil
 }
 
@@ -128,6 +158,7 @@ func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.De
 	for _, nd := range d.detectors {
 		f := nd.detector.Evaluate(e)
 		if f.Triggered {
+			d.recorder.RecordFinding(nd.name)
 			triggered = append(triggered, triggeredFinding{finding: f, priority: nd.priority})
 		}
 	}

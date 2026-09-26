@@ -18,7 +18,22 @@ func testServer(t *testing.T) *Server {
 	t.Helper()
 	clock := event.NewManualClock(time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC))
 	validator := event.NewValidator(clock)
-	return NewServer(validator, engine.AllowAllDecider{})
+	return NewServer(validator, engine.AllowAllDecider{}, nil)
+}
+
+// fakeDecisionRecorder captura cada llamada a RecordDecision — usado
+// para verificar que Server la invoca con action/attack_vector
+// correctos, sin necesitar OpenTelemetry en este test (tarea 1.8).
+type fakeDecisionRecorder struct {
+	calls []fakeDecisionCall
+}
+
+type fakeDecisionCall struct {
+	action, attackVector string
+}
+
+func (r *fakeDecisionRecorder) RecordDecision(action, attackVector string) {
+	r.calls = append(r.calls, fakeDecisionCall{action: action, attackVector: attackVector})
 }
 
 func postEvents(t *testing.T, srv *Server, body []byte) *httptest.ResponseRecorder {
@@ -76,6 +91,39 @@ func TestHandleEvents_ValidEvent_ReturnsAllowDecision(t *testing.T) {
 	}
 	if d.Explanation == "" {
 		t.Error("Explanation is empty, want a deterministic message")
+	}
+}
+
+// TestHandleEvents_RecordsDecisionMetric verifica que handleEvents
+// llame al DecisionRecorder exactamente una vez, con el action y
+// attack_vector reales de la Decision devuelta — la métrica
+// waf.decisions de la tarea 1.8. Nunca con EntityID/RequestID (esos
+// campos ni siquiera están disponibles en la interfaz
+// DecisionRecorder).
+func TestHandleEvents_RecordsDecisionMetric(t *testing.T) {
+	clock := event.NewManualClock(time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC))
+	validator := event.NewValidator(clock)
+	recorder := &fakeDecisionRecorder{}
+	srv := NewServer(validator, engine.AllowAllDecider{}, recorder)
+
+	body := []byte(`{
+		"request_id": "r-1",
+		"timestamp": "2026-09-25T10:00:00Z",
+		"client_ip": "203.0.113.7",
+		"method": "GET",
+		"path": "/",
+		"status_code": 200
+	}`)
+	postEvents(t, srv, body)
+
+	if len(recorder.calls) != 1 {
+		t.Fatalf("RecordDecision calls = %d, want 1 (%+v)", len(recorder.calls), recorder.calls)
+	}
+	if recorder.calls[0].action != "ALLOW" {
+		t.Errorf("action = %q, want %q", recorder.calls[0].action, "ALLOW")
+	}
+	if recorder.calls[0].attackVector != "unknown" {
+		t.Errorf("attack_vector = %q, want %q", recorder.calls[0].attackVector, "unknown")
 	}
 }
 

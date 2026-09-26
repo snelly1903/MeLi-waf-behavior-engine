@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/telemetry"
 )
 
 // eventJSON arma el body JSON de un event.Event mínimo, con timestamp
@@ -51,7 +54,7 @@ func postEvent(t *testing.T, mux http.Handler, body []byte) map[string]any {
 // depende de engine.AllowAllDecider — un patrón real de escaneo lento
 // termina en CHALLENGE o BLOCK, no en ALLOW.
 func TestBuildServer_SlowScanPattern_ReturnsNonAllow(t *testing.T) {
-	server, err := buildServer(0.5, 0.8, asnProviderNone, 2*time.Second, time.Hour)
+	server, err := buildServer(0.5, 0.8, asnProviderNone, 2*time.Second, time.Hour, nil)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}
@@ -95,7 +98,7 @@ func TestBuildServer_SlowScanPattern_ReturnsNonAllow(t *testing.T) {
 }
 
 func TestBuildServer_InvalidPolicy_ReturnsError(t *testing.T) {
-	if _, err := buildServer(0.8, 0.5, asnProviderNone, 2*time.Second, time.Hour); err == nil {
+	if _, err := buildServer(0.8, 0.5, asnProviderNone, 2*time.Second, time.Hour, nil); err == nil {
 		t.Fatal("buildServer(0.8, 0.5) returned nil error, want an error (challenge >= block)")
 	}
 }
@@ -108,7 +111,7 @@ func TestBuildServer_InvalidPolicy_ReturnsError(t *testing.T) {
 // depender de Internet real.
 
 func TestBuildCredentialStuffingResolver_None_ReturnsUnavailable(t *testing.T) {
-	resolver, err := buildCredentialStuffingResolver(asnProviderNone, 2*time.Second, time.Hour)
+	resolver, err := buildCredentialStuffingResolver(asnProviderNone, 2*time.Second, time.Hour, nil)
 	if err != nil {
 		t.Fatalf("buildCredentialStuffingResolver: %v", err)
 	}
@@ -120,7 +123,7 @@ func TestBuildCredentialStuffingResolver_None_ReturnsUnavailable(t *testing.T) {
 }
 
 func TestBuildCredentialStuffingResolver_RIPEStat_ConstructsWithoutNetworkCalls(t *testing.T) {
-	resolver, err := buildCredentialStuffingResolver(asnProviderRIPEStat, 2*time.Second, time.Hour)
+	resolver, err := buildCredentialStuffingResolver(asnProviderRIPEStat, 2*time.Second, time.Hour, nil)
 	if err != nil {
 		t.Fatalf("buildCredentialStuffingResolver: %v", err)
 	}
@@ -130,13 +133,55 @@ func TestBuildCredentialStuffingResolver_RIPEStat_ConstructsWithoutNetworkCalls(
 }
 
 func TestBuildCredentialStuffingResolver_UnknownProvider_ReturnsError(t *testing.T) {
-	if _, err := buildCredentialStuffingResolver("bogus", 2*time.Second, time.Hour); err == nil {
+	if _, err := buildCredentialStuffingResolver("bogus", 2*time.Second, time.Hour, nil); err == nil {
 		t.Fatal("buildCredentialStuffingResolver(\"bogus\", ...) returned nil error, want an error")
 	}
 }
 
 func TestBuildServer_UnknownASNProvider_ReturnsError(t *testing.T) {
-	if _, err := buildServer(0.5, 0.8, "bogus", 2*time.Second, time.Hour); err == nil {
+	if _, err := buildServer(0.5, 0.8, "bogus", 2*time.Second, time.Hour, nil); err == nil {
 		t.Fatal("buildServer with an unknown --asn-provider returned nil error, want an error")
 	}
+}
+
+// --- Telemetría (tarea 1.8) --------------------------------------------
+
+// TestBuildServer_NilRecorders_StillWorks confirma que buildServer
+// sigue funcionando con recorders=nil (sin --otel-endpoint
+// configurado, o en cualquier test que no necesite verificar
+// telemetría) — cada componente interno ya sabe degradar a un
+// recorder no-op por su cuenta.
+func TestBuildServer_NilRecorders_StillWorks(t *testing.T) {
+	server, err := buildServer(0.5, 0.8, asnProviderNone, 2*time.Second, time.Hour, nil)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	if server == nil {
+		t.Fatal("server = nil, want a non-nil *httpapi.Server")
+	}
+}
+
+// TestBuildServer_WithRecorders_RecordsRealDecision verifica de punta
+// a punta que un *telemetry.Recorders real (construido con
+// telemetry.Init y Endpoint="", igual que --otel-endpoint sin
+// configurar) efectivamente termina conectado al Server que sirve
+// POST /v1/events -- sin pasar por ningún Collector real.
+func TestBuildServer_WithRecorders_RecordsRealDecision(t *testing.T) {
+	recorders, shutdown, _ := telemetry.Init(context.Background(), telemetry.Config{})
+	defer func() {
+		if err := shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown: %v", err)
+		}
+	}()
+
+	server, err := buildServer(0.5, 0.8, asnProviderNone, 2*time.Second, time.Hour, recorders)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+
+	postEvent(t, server.Routes(), eventJSON("r-telemetry", 0, "203.0.113.9", "/", 200))
+	// No hay Collector real detrás (Endpoint=""), así que esto solo
+	// confirma que la llamada no entra en pánico ni bloquea -- el
+	// valor exportado ya se prueba de forma aislada en
+	// internal/telemetry.
 }
