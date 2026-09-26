@@ -2,10 +2,12 @@
 // Desde la tarea 1.5, POST /v1/events ya no depende de
 // engine.AllowAllDecider: usa engine.BehavioralDecider, que combina
 // internal/credstuffing, internal/slowscan y (desde la tarea 1.6)
-// internal/anomaly detrás de una Policy configurable. El detector de
-// credential stuffing corre con credstuffing.UnavailableNetworkResolver
-// mientras no exista un proveedor real de ASN/grupo de red — ver
-// buildServer y docs/decisiones.md, tarea 1.5, para el porqué.
+// internal/anomaly detrás de una Policy configurable. Desde la tarea
+// 1.7, el resolver de ASN de credential stuffing es configurable vía
+// --asn-provider: "none" (default seguro, credstuffing.UnavailableNetworkResolver)
+// o "ripestat" (internal/asn, un enriquecimiento real). Ver
+// buildCredentialStuffingResolver y docs/decisiones.md, tareas 1.5 y
+// 1.7, para el porqué de cada uno.
 package main
 
 import (
@@ -16,11 +18,18 @@ import (
 	"time"
 
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/anomaly"
+	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/asn"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/credstuffing"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/engine"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/httpapi"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/slowscan"
+)
+
+// Nombres válidos de --asn-provider.
+const (
+	asnProviderNone     = "none"
+	asnProviderRIPEStat = "ripestat"
 )
 
 // Configuración de los tres detectores — NINGÚN valor acá está
@@ -69,26 +78,54 @@ var (
 	}
 )
 
-// buildServer arma el *httpapi.Server real, con los dos detectores y
-// la Policy configurada — separado de main() para poder probarlo con
-// httptest sin levantar un servidor real (mismo patrón que
-// cmd/eval/main.go, tarea 0.8, con su función run()).
-//
-// credential stuffing corre con credstuffing.UnavailableNetworkResolver:
-// todavía no existe ningún proveedor real de ASN/grupo de red. Se
-// evaluaron tres alternativas (ver docs/decisiones.md, tarea 1.5): (1)
-// este resolver placeholder explícito, de producción — la elegida:
+// buildCredentialStuffingResolver arma el credstuffing.NetworkResolver
+// según --asn-provider. Se evaluaron tres alternativas para el caso
+// "todavía no hay proveedor" (ver docs/decisiones.md, tarea 1.5): (1)
+// un resolver placeholder explícito de producción,
+// credstuffing.UnavailableNetworkResolver — la elegida por defecto:
 // el detector corre de verdad (Observe/Evaluate se llaman en cada
 // evento) pero queda estructuralmente inerte, porque ninguna IP se
 // puede resolver a un grupo; (2) un *credstuffing.Detector nulable en
-// BehavioralDecider, tratado como "desactivado" — descartada, obliga
-// a chequeos de nil en cada punto de uso; (3) reutilizar el fake de
-// los tests — descartada explícitamente, sería un fake de test
-// terminando en producción. Reemplazar por un NetworkResolver real,
-// cuando exista un proveedor, es cambiar esta única línea.
-func buildServer(challengeThreshold, blockThreshold float64) (*httpapi.Server, error) {
+// BehavioralDecider — descartada, obliga a chequeos de nil; (3)
+// reutilizar el fake de los tests — descartada explícitamente.
+//
+// "ripestat" (tarea 1.7) conecta internal/asn, que consulta RIPEstat
+// de verdad (https://stat.ripe.net) — una fuente pública y gratuita
+// apropiada para este challenge/prototipo, pero cuyos términos de uso
+// actuales restringen ciertos usos comerciales sin permiso explícito;
+// no se presenta como el proveedor definitivo de un despliegue de
+// producción. El default sigue siendo "none": el servicio nunca hace
+// tráfico de salida a Internet a menos que se lo pida explícitamente.
+func buildCredentialStuffingResolver(provider string, timeout time.Duration, successTTL time.Duration) (credstuffing.NetworkResolver, error) {
+	switch provider {
+	case "", asnProviderNone:
+		return credstuffing.UnavailableNetworkResolver{}, nil
+	case asnProviderRIPEStat:
+		return asn.NewResolver(asn.Config{
+			BaseURL:               asn.DefaultBaseURL,
+			SourceApp:             "meli-waf-behavior-engine-challenge",
+			Timeout:               timeout,
+			MaxConcurrentRequests: 5,
+			SuccessTTL:            successTTL,
+			FailureTTL:            5 * time.Minute,
+		})
+	default:
+		return nil, fmt.Errorf("engine: unknown --asn-provider %q (want %q or %q)", provider, asnProviderNone, asnProviderRIPEStat)
+	}
+}
+
+// buildServer arma el *httpapi.Server real, con los tres detectores y
+// la Policy configurada — separado de main() para poder probarlo con
+// httptest sin levantar un servidor real (mismo patrón que
+// cmd/eval/main.go, tarea 0.8, con su función run()).
+func buildServer(challengeThreshold, blockThreshold float64, asnProvider string, asnTimeout, asnCacheTTL time.Duration) (*httpapi.Server, error) {
+	resolver, err := buildCredentialStuffingResolver(asnProvider, asnTimeout, asnCacheTTL)
+	if err != nil {
+		return nil, err
+	}
+
 	csCfg := credentialStuffingConfig
-	csCfg.Resolver = credstuffing.UnavailableNetworkResolver{}
+	csCfg.Resolver = resolver
 	csDetector, err := credstuffing.NewDetector(csCfg)
 	if err != nil {
 		return nil, fmt.Errorf("engine: credential stuffing detector: %w", err)
@@ -118,16 +155,19 @@ func main() {
 	addr := flag.String("addr", ":8080", "dirección donde escuchar (host:puerto)")
 	challengeThreshold := flag.Float64("challenge-threshold", 0.5, "score mínimo (RiskScore) para CHALLENGE — sin calibrar todavía")
 	blockThreshold := flag.Float64("block-threshold", 0.8, "score mínimo (RiskScore) para BLOCK — sin calibrar todavía")
+	asnProvider := flag.String("asn-provider", asnProviderNone, `proveedor de ASN para credential stuffing: "none" (default seguro, sin tráfico de salida) o "ripestat"`)
+	asnTimeout := flag.Duration("asn-timeout", 2*time.Second, "timeout total de cada consulta de ASN (incluye espera de cupo de concurrencia)")
+	asnCacheTTL := flag.Duration("asn-cache-ttl", time.Hour, "TTL del caché positivo de resoluciones de ASN")
 	flag.Parse()
 
-	server, err := buildServer(*challengeThreshold, *blockThreshold)
+	server, err := buildServer(*challengeThreshold, *blockThreshold, *asnProvider, *asnTimeout, *asnCacheTTL)
 	if err != nil {
 		log.Fatalf("engine: %v", err)
 	}
 
 	log.Printf(
-		"engine: escuchando en %s (POST /v1/events, GET /healthz) — decider=BehavioralDecider (credential_stuffing+slow_scan+statistical_anomaly; credential_stuffing sin ASN real: UnavailableNetworkResolver; challenge=%.2f block=%.2f, sin calibrar)",
-		*addr, *challengeThreshold, *blockThreshold,
+		"engine: escuchando en %s (POST /v1/events, GET /healthz) — decider=BehavioralDecider (credential_stuffing+slow_scan+statistical_anomaly; asn-provider=%s; challenge=%.2f block=%.2f, sin calibrar)",
+		*addr, *asnProvider, *challengeThreshold, *blockThreshold,
 	)
 	if err := http.ListenAndServe(*addr, server.Routes()); err != nil {
 		log.Fatalf("engine: %v", err)

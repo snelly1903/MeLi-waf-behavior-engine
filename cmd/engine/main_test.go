@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 	"time"
 )
@@ -50,7 +51,7 @@ func postEvent(t *testing.T, mux http.Handler, body []byte) map[string]any {
 // depende de engine.AllowAllDecider — un patrón real de escaneo lento
 // termina en CHALLENGE o BLOCK, no en ALLOW.
 func TestBuildServer_SlowScanPattern_ReturnsNonAllow(t *testing.T) {
-	server, err := buildServer(0.5, 0.8)
+	server, err := buildServer(0.5, 0.8, asnProviderNone, 2*time.Second, time.Hour)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
 	}
@@ -94,7 +95,48 @@ func TestBuildServer_SlowScanPattern_ReturnsNonAllow(t *testing.T) {
 }
 
 func TestBuildServer_InvalidPolicy_ReturnsError(t *testing.T) {
-	if _, err := buildServer(0.8, 0.5); err == nil {
+	if _, err := buildServer(0.8, 0.5, asnProviderNone, 2*time.Second, time.Hour); err == nil {
 		t.Fatal("buildServer(0.8, 0.5) returned nil error, want an error (challenge >= block)")
+	}
+}
+
+// --- --asn-provider (tarea 1.7) --------------------------------------------
+//
+// Estos tests solo verifican la CONSTRUCCIÓN del resolver (nunca
+// llaman a Resolve) — construir un asn.Resolver no hace ninguna
+// llamada de red por sí solo, así que este archivo sigue sin
+// depender de Internet real.
+
+func TestBuildCredentialStuffingResolver_None_ReturnsUnavailable(t *testing.T) {
+	resolver, err := buildCredentialStuffingResolver(asnProviderNone, 2*time.Second, time.Hour)
+	if err != nil {
+		t.Fatalf("buildCredentialStuffingResolver: %v", err)
+	}
+	// El placeholder "none" nunca resuelve ninguna IP — llamar
+	// Resolve directamente no hace ninguna llamada de red.
+	if _, ok := resolver.Resolve(netip.MustParseAddr("203.0.113.1")); ok {
+		t.Error("Resolve() ok = true, want false for the \"none\" placeholder")
+	}
+}
+
+func TestBuildCredentialStuffingResolver_RIPEStat_ConstructsWithoutNetworkCalls(t *testing.T) {
+	resolver, err := buildCredentialStuffingResolver(asnProviderRIPEStat, 2*time.Second, time.Hour)
+	if err != nil {
+		t.Fatalf("buildCredentialStuffingResolver: %v", err)
+	}
+	if resolver == nil {
+		t.Fatal("resolver = nil, want a non-nil *asn.Resolver")
+	}
+}
+
+func TestBuildCredentialStuffingResolver_UnknownProvider_ReturnsError(t *testing.T) {
+	if _, err := buildCredentialStuffingResolver("bogus", 2*time.Second, time.Hour); err == nil {
+		t.Fatal("buildCredentialStuffingResolver(\"bogus\", ...) returned nil error, want an error")
+	}
+}
+
+func TestBuildServer_UnknownASNProvider_ReturnsError(t *testing.T) {
+	if _, err := buildServer(0.5, 0.8, "bogus", 2*time.Second, time.Hour); err == nil {
+		t.Fatal("buildServer with an unknown --asn-provider returned nil error, want an error")
 	}
 }

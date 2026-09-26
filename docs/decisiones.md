@@ -1806,3 +1806,170 @@ diversidad de rutas) con 90% de 404 — el motor real respondió
 `CHALLENGE` con `attack_vector:"unknown"` y `not_found_ratio_z:29.4`,
 confirmando que el detector estadístico, y no los otros dos, fue quien
 disparó.
+
+## 2026-09-26 — Enriquecimiento real de IP/ASN: `internal/asn` (tarea 1.7)
+
+**Qué es y qué NO es.** Reemplaza el placeholder
+`credstuffing.UnavailableNetworkResolver` por un `NetworkResolver`
+real cuando se pide explícitamente — satisface el requisito del
+challenge de enriquecer IPs con al menos una fuente pública/gratuita.
+`internal/credstuffing` **no cambió ni una línea**: la interfaz
+`NetworkResolver` (`Resolve(ip netip.Addr) (string, bool)`) ya existía
+desde la tarea 1.3, y `asn.Resolver` la satisface por tipado
+estructural de Go — `internal/asn` no importa `internal/credstuffing`
+para nada, el detector nunca sabe qué proveedor hay detrás.
+
+**Fuente: RIPEstat (RIPE NCC), `network-info`.** Gratuita, sin API
+key — nada que hardcodear como secreto. Es una fuente apropiada para
+este challenge/prototipo (RIPE NCC es uno de los cinco *Regional
+Internet Registries* reales, no un scraper de terceros), pero **no se
+presenta como el proveedor definitivo de un despliegue de
+producción**: sus términos de uso actuales
+(https://www.ripe.net/support/legal/terms/) restringen determinados
+usos comerciales sin permiso explícito. Se agregó el parámetro
+`sourceapp` (configurable, fijo por defecto al nombre del proyecto)
+en cada consulta, siguiendo la propia guía de uso de RIPEstat, para
+que un uso regular/automatizado quede identificable, no anónimo.
+
+**Ajuste 1 — política conservadora ante múltiples ASN, sin elegir
+arbitrariamente.** `network-info` puede devolver más de un ASN para
+una IP (multi-homing). En vez de tomar el primero (inventaría una
+correlación de grupo sin garantía), la regla es:
+
+```
+0 ASN        → ("", false)
+exactamente 1 → ("asn:<número>", true)
+más de 1      → ("", false)
+```
+
+Probado explícitamente en `TestResolve_MultipleASNs_ReturnsUnresolved`.
+
+**Ajuste 2 — el timeout acota TODO `Resolve`, incluida la espera de
+capacidad.** `Resolve` arma un único `context.WithTimeout` al
+principio, y lo usa TANTO para esperar un cupo del semáforo de
+concurrencia COMO para la llamada HTTP en sí
+(`http.NewRequestWithContext`). Si el plazo se consume esperando
+capacidad, devuelve `("", false)` sin haber llegado a consultar al
+proveedor — nunca una espera sin límite antes del timeout configurado.
+Probado en
+`TestResolve_TimeoutConsumedWaitingForCapacity_NeverCallsProvider`
+(ocupa el único cupo directamente sobre el campo interno del
+semáforo, desde el mismo paquete, para que el test sea determinista y
+no dependa de una carrera de tiempos entre dos timeouts — el primer
+intento de este test SÍ tenía esa carrera y falló intermitentemente;
+se corrigió antes de dejarlo).
+
+**Documentado explícitamente: el lookup remoto síncrono es aceptable
+para el prototipo, no sería el diseño de producción.** `Resolve` se
+llama de forma síncrona dentro de `credstuffing.Detector.Observe`, en
+el camino de cada request de `POST /v1/events`. Para este prototipo,
+el timeout corto + el caché agresivo (ver más abajo) alcanzan. Para
+tráfico masivo con muchas IPs nunca vistas, el diseño correcto sería
+un enriquecimiento asíncrono/diferido que no bloquee la decisión
+inicial — documentado como limitación conocida, no resuelta acá.
+
+**Caché positivo y negativo, con TTL — mismo patrón `Sweep` que el
+resto del proyecto.** Un mapa `IP → {grupo, ok, vencimiento}`
+protegido por mutex; TTL largo para aciertos (`SuccessTTL`, un ASN
+real cambia rara vez) y corto para fallos (`FailureTTL`, caché
+negativo: no reintenta en cada request contra un proveedor caído,
+pero sí reintenta pronto cuando vuelva). `Resolver.Sweep(now)` limpia
+entradas vencidas — mismo patrón exacto que
+`profile.Store`/`credstuffing.Detector`/`anomaly.Detector` (tareas
+1.2/1.3/1.6), no conectado todavía a ningún scheduler, mismo criterio
+ya documentado repetidamente.
+
+**Límite de concurrencia propio.** Un semáforo (`chan struct{}`)
+acota cuántas consultas HTTP puede haber en vuelo a la vez —
+protección hacia el servicio público gratuito y contra una ráfaga de
+IPs nunca vistas. **Sin deduplicación de ráfagas** (tipo
+`singleflight`): bajo una ráfaga de la misma IP nunca vista podrían
+salir 2-3 llamadas redundantes antes de que la primera cachee —
+limitación aceptada y documentada, no una dependencia externa nueva
+para un caso de baja probabilidad a esta escala.
+
+**Reutiliza `event.Clock`, no otra interfaz de reloj más.** El TTL
+del caché usa `event.Clock`/`event.SystemClock`/`event.ManualClock`
+(tarea 0.2) — mismo criterio de no duplicar abstracciones ya
+disponibles en el proyecto.
+
+**Advertencia importante, verificada, no solo mencionada: RFC 5737 no
+se puede enriquecer de verdad.** `internal/datagen` usa
+deliberadamente rangos de documentación (`192.0.2.0/24`, etc. —
+decisión de la tarea 0.4). Ningún proveedor real de ASN tiene datos
+para esos rangos — contra nuestros propios datasets sintéticos, el
+resolver real se comporta exactamente igual que
+`UnavailableNetworkResolver` (siempre `ok=false`). No es un bug: es
+la consecuencia correcta de una decisión de diseño ya tomada en la
+Fase 0. La demostración manual (ver más abajo) usa IPs públicas
+reales, no el dataset sintético, precisamente por esto.
+
+**`cmd/engine`: `--asn-provider`, default seguro.** `"none"`
+(default: `credstuffing.UnavailableNetworkResolver{}`, nunca hace
+tráfico de salida a menos que se pida explícitamente — importante en
+un contexto de seguridad y para entornos restringidos/offline) o
+`"ripestat"` (`internal/asn.Resolver` real). Más `--asn-timeout` y
+`--asn-cache-ttl`. Ningún secreto que configurar — RIPEstat no los
+necesita.
+
+**Tests.** `internal/asn/resolver_test.go` (17 tests, todos contra un
+`httptest.Server` fake — ninguno depende de Internet real): validación
+de configuración; parseo exitoso (con y sin el prefijo `"AS"`); el
+caso multi-ASN pedido explícitamente; cero ASN; JSON malformado;
+`status` HTTP distinto de 200; `status` de RIPEstat distinto de
+`"ok"`; timeout con el proveedor real colgado (`elapsed` acotado
+cerca del timeout configurado); timeout consumido esperando capacidad
+sin llegar a llamar al proveedor; caché positivo evita una segunda
+llamada; TTL positivo vence y vuelve a consultar; TTL negativo (más
+corto) vence y reintenta; `Sweep` elimina solo lo vencido; límite de
+concurrencia nunca superado (verificado contando conexiones
+simultáneas reales al fake server); concurrencia general con
+`go test -race`. `cmd/engine/main_test.go`: construcción del resolver
+para cada valor de `--asn-provider` (incluido uno desconocido → error)
+— sin llamadas de red, ya que construir un `asn.Resolver` no consulta
+a nadie por sí solo.
+
+**Verificación manual real, ejecutada con IPs públicas reales**
+(requiere acceso real a Internet, a diferencia de todo lo demás en
+este proyecto): se corrió `cmd/engine --asn-provider=ripestat` y se
+armó una campaña de credential stuffing con 30 IPs públicas reales
+dentro de `8.8.8.0/24` (Google, AS15169 — confirmado antes contra
+RIPEstat en vivo, sin ninguna ambigüedad de multi-ASN), 15 cuentas
+distintas, 84% de fallos. La `Decision` final:
+
+```json
+{
+  "entity_id": "network:asn:15169",
+  "action": "CHALLENGE",
+  "attack_vector": "credential_stuffing",
+  "confidence_score": 0.52,
+  "contributing_signals": [
+    {"name": "distinct_ips_in_window", "value": 30, "weight": 0.25},
+    {"name": "distinct_accounts_in_window", "value": 15, "weight": 0.25},
+    {"name": "auth_attempts_in_window", "value": 76, "weight": 0.25},
+    {"name": "failed_auth_ratio", "value": 0.84, "weight": 0.25}
+  ]
+}
+```
+
+correlación real de 30 IPs distintas de Internet en un mismo grupo de
+ASN, de punta a punta.
+
+**Hallazgo real durante esta verificación, documentado porque es
+genuinamente instructivo:** el primer intento de la demo, con
+exactamente 20 IPs (el mínimo configurado) y sin ninguna pausa entre
+requests, **no disparó** — no por un bug, sino porque, bajo una
+ráfaga rápida de 20 consultas distintas y casi simultáneas a un
+servicio público gratuito, RIPEstat ocasionalmente tardó o falló para
+alguna IP puntual (confirmado depurando paso a paso: `distinctIPs`
+quedó en 19, no en 20, en esa corrida). El detector se comportó
+exactamente como está diseñado: excluyó esa IP no resuelta de la
+correlación (tarea 1.3) en vez de arriesgar un grupo incompleto — el
+gate correctamente no disparó con evidencia insuficiente. La solución
+no fue "arreglar un bug": fue dar margen real (30 IPs en vez de 20, un
+pequeño `time.sleep(150ms)` entre requests) para absorber la
+variabilidad inherente de depender de un servicio de terceros en el
+camino síncrono de cada request — exactamente la limitación ya
+documentada arriba ("el lookup remoto síncrono es aceptable para el
+prototipo, no sería el diseño de producción"), ahora observada en la
+práctica, no solo teorizada.
