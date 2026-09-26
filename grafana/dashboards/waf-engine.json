@@ -2,16 +2,228 @@
   "title": "WAF Behavior Engine",
   "uid": "waf-behavior-engine",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "editable": true,
   "refresh": "10s",
   "time": { "from": "now-30m", "to": "now" },
   "panels": [
     {
+      "id": 20,
+      "type": "row",
+      "title": "Totales acumulados desde el arranque del proceso (se reinician al reiniciar el engine)",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "id": 21,
+      "title": "Total Decisions",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(waf_decisions_total) or vector(0)",
+          "instant": true,
+          "legendFormat": "Total Decisions"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "0" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 22,
+      "title": "ALLOW",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(waf_decisions_total{action=\"ALLOW\"}) or vector(0)",
+          "instant": true,
+          "legendFormat": "ALLOW"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "noValue": "0", "color": { "mode": "fixed", "fixedColor": "green" } },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 23,
+      "title": "CHALLENGE",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(waf_decisions_total{action=\"CHALLENGE\"}) or vector(0)",
+          "instant": true,
+          "legendFormat": "CHALLENGE"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "noValue": "0", "color": { "mode": "fixed", "fixedColor": "orange" } },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 24,
+      "title": "BLOCK",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(waf_decisions_total{action=\"BLOCK\"}) or vector(0)",
+          "instant": true,
+          "legendFormat": "BLOCK"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "noValue": "0", "color": { "mode": "fixed", "fixedColor": "red" } },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 25,
+      "title": "Slow Scan Findings",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(waf_detector_findings_total{detector=\"slow_scan\"}) or vector(0)",
+          "instant": true,
+          "legendFormat": "slow_scan"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "0" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 26,
+      "title": "Statistical Anomaly Findings",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(waf_detector_findings_total{detector=\"statistical_anomaly\"}) or vector(0)",
+          "instant": true,
+          "legendFormat": "statistical_anomaly"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "0" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 27,
+      "title": "Credential Stuffing Findings",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(waf_detector_findings_total{detector=\"credential_stuffing\"}) or vector(0)",
+          "instant": true,
+          "legendFormat": "credential_stuffing"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "0" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 28,
+      "title": "ASN Cache Hits",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(waf_asn_cache_total{result=\"hit\"}) or vector(0)",
+          "instant": true,
+          "legendFormat": "hits"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "0" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 29,
+      "title": "ASN Cache Misses",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(waf_asn_cache_total{result=\"miss\"}) or vector(0)",
+          "instant": true,
+          "legendFormat": "misses"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "0" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 30,
+      "title": "ASN Cache Hit Ratio",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "(sum(waf_asn_cache_total{result=\"hit\"}) or vector(0)) / clamp_min((sum(waf_asn_cache_total{result=\"hit\"}) or vector(0)) + (sum(waf_asn_cache_total{result=\"miss\"}) or vector(0)), 1) * 100",
+          "instant": true,
+          "legendFormat": "hit ratio"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "noValue": "0", "min": 0, "max": 100 }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 31,
+      "title": "ASN Provider Success",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(waf_asn_resolve_total{result=\"success\"}) or vector(0)",
+          "instant": true,
+          "legendFormat": "success"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "noValue": "0" }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "value" }
+    },
+    {
+      "id": 32,
+      "type": "row",
+      "title": "Tasas en el tiempo (rate() — velocidad, no acumulado)",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 }
+    },
+    {
       "id": 1,
       "title": "Volumen de requests (por ruta)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -26,7 +238,7 @@
       "id": 2,
       "title": "Decisiones por action (ALLOW / CHALLENGE / BLOCK)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -41,7 +253,7 @@
       "id": 3,
       "title": "Decisiones por attack_vector",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 22 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -56,7 +268,7 @@
       "id": 4,
       "title": "Findings por detector (dispare o no la Decision final)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 22 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -71,7 +283,7 @@
       "id": 5,
       "title": "Latencia p50/p95/p99 de POST /v1/events",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -96,7 +308,7 @@
       "id": 6,
       "title": "ASN: resultado de cada resolución (no-cache)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 12, "y": 16 },
+      "gridPos": { "h": 8, "w": 8, "x": 12, "y": 30 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -111,7 +323,7 @@
       "id": 7,
       "title": "ASN: hit ratio del caché",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 38 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
@@ -126,7 +338,7 @@
       "id": 8,
       "title": "ASN: latencia p95 de la llamada real al proveedor",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 38 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
