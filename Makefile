@@ -1,4 +1,4 @@
-.PHONY: test fmt vet data-0 data-10 data-30 data-all eval baseline tune-baseline
+.PHONY: test fmt vet data-0 data-10 data-30 data-all eval baseline tune-baseline perf-bench perf-load perf-load-otel perf
 
 # Runs every test in the module with the race detector enabled.
 test:
@@ -63,3 +63,32 @@ TUNE_RATIOS ?= 0,10,30
 TUNE_OUT ?= reports/tuning/baseline
 tune-baseline:
 	go run ./cmd/tune --seeds $(TUNE_SEEDS) --ratios $(TUNE_RATIOS) --data-dir data/tuning --out $(TUNE_OUT)
+
+# Performance / load testing (tarea 1.10). Detector layer, Policy y
+# ScoreFloor son los congelados tras el holdout (tarea 1.9) — estos
+# targets solo MIDEN, nunca los modifican.
+PERF_OUT ?= reports/performance
+
+# Microbenchmark de BehavioralDecider.Decide() (go test -bench,
+# ns/op, B/op, allocs/op) — perfiles normal/mixed/attack-heavy. Salida
+# cruda guardada en $(PERF_OUT)/microbench.txt.
+perf-bench:
+	mkdir -p $(PERF_OUT)
+	go test -run '^$$' -bench=. -benchmem ./internal/engine/... | tee $(PERF_OUT)/microbench.txt
+
+# Load test HTTP end-to-end (POST /v1/events) — matriz perfil x
+# concurrencia, 3 repeticiones cada una con servidor fresco. Escribe
+# $(PERF_OUT)/loadtest.csv, loadtest.json y summary.md. Sin
+# --otel-endpoint: solo la matriz principal, con OTel deshabilitado.
+perf-load:
+	go run ./cmd/loadtest --out $(PERF_OUT)
+
+# Igual que perf-load, pero además corre el comparativo chico OTel
+# ON/OFF contra un Collector local — requiere
+# "docker-compose up -d otel-collector" corriendo antes.
+perf-load-otel:
+	go run ./cmd/loadtest --out $(PERF_OUT) --otel-endpoint localhost:4317
+
+# Corre el microbenchmark y la matriz de load test completa, en ese
+# orden — el comando único, reproducible, para toda la tarea 1.10.
+perf: perf-bench perf-load

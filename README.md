@@ -41,6 +41,31 @@ curl localhost:8080/healthz
 
 El resto de las herramientas (`cmd/datagen`, `cmd/eval`, `cmd/baseline`) se documentan más adelante.
 
+### Reproducir los perfiles 0% / 10% / 30% y su ground truth
+
+```
+make data-all
+```
+
+Genera, de forma determinista (misma semilla siempre = mismo resultado), los tres escenarios de tráfico bajo `data/scenario-{0,10,30}/`:
+
+- `events.jsonl` — un evento por línea, exactamente lo que recibiría el motor (sin ninguna etiqueta).
+- `labels.jsonl` — el ground truth: `request_id` + `label` (`legit`/`credential_stuffing`/`slow_scan`) para cada evento, en un archivo que el motor nunca lee.
+- `manifest.json` — semilla, configuración y estadísticas reales de esa generación.
+
+Cada uno se puede regenerar individualmente con `make data-0`, `make data-10` o `make data-30` (o `go run ./cmd/datagen --seed 42 --ratio 10`).
+
+### Performance / load testing (`cmd/loadtest`, tarea 1.10)
+
+```
+make perf-bench       # microbenchmark de BehavioralDecider.Decide() (ns/op, B/op, allocs/op)
+make perf-load        # load test HTTP end-to-end (POST /v1/events), matriz perfil x concurrencia
+make perf-load-otel   # igual, más el comparativo OTel ON/OFF (requiere: docker-compose up -d otel-collector)
+make perf             # perf-bench + perf-load
+```
+
+Mide el prototipo tal como está — la detector layer, Policy y ScoreFloor congelados tras el holdout (tarea 1.9) — con tráfico determinista reutilizando `internal/datagen` (perfiles normal/mixed/attack-heavy = ratio 0/10/30%, semilla dedicada 901). Nunca usa RIPEstat real (resolver de ASN determinista). Reportes en `reports/performance/` (`microbench.txt`, `loadtest.csv`, `loadtest.json`, `summary.md`), con las limitaciones metodológicas documentadas ahí explícitamente (resultados de *loopback*, no de un servidor desplegado por separado; sin extrapolación a 1.000 millones de requests/hora — eso es la tarea 1.11).
+
 ## Arquitectura
 
 _Pendiente._

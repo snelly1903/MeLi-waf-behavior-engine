@@ -3659,3 +3659,333 @@ Detector config, Policy y ScoreFloor permanecen exactamente como se
 congelaron en el checkpoint pre-holdout. Reporte completo, por seed
 y agregado, en `reports/holdout/baseline-vs-final.md`. Se detiene
 acá — no se avanza todavía a performance/load.
+
+## 2026-09-28 — Infraestructura de performance/load testing (tarea 1.10)
+
+Implementado el harness completo (microbenchmark + load test HTTP),
+sin ejecutar todavía la matriz completa — solo verificado con tests
+y una corrida chica ("smoke test") de sanity, a la espera de revisar
+que el harness mide lo que se cree que mide antes de la corrida real.
+Cero cambios de detección/thresholds/features: la detector layer,
+Policy y ScoreFloor siguen exactamente los del checkpoint
+pre-holdout.
+
+### `internal/wiring` (nuevo): la construcción del motor, reutilizable
+
+`buildServer`/`buildCredentialStuffingResolver` vivían inline en
+`cmd/engine/main.go` (`package main`, no importable). Se extrajeron a
+`internal/wiring` — refactor puro, verificado sin cambio de
+comportamiento (los 8 tests que antes probaban `buildServer` se
+movieron tal cual, mismas aserciones, todos en verde).
+`cmd/engine/main.go` ahora llama `wiring.BuildServer(...)`.
+
+Se agregaron además `BuildDecider`/`BuildDeciderWithResolver`
+(decider sin la capa HTTP, para los microbenchmarks) y, sobre todo,
+`BuildDeciderWithConfigs`/`BuildServerWithConfigs` — los tres
+`Config` de detector como parámetro explícito, nunca desde los vars
+de paquete. Hacía falta: `cmd/engine` sigue sirviendo
+`engine.Default*Config()` sin cambios (esta tarea no lo toca), pero
+`cmd/loadtest` necesita medir la configuración FINAL CONGELADA
+(credential_stuffing CSw2, slow_scan S3, statistical_anomaly A3) —
+sin este parámetro explícito, no había forma de pedirle a
+`internal/wiring` esa configuración sin duplicar toda la lógica de
+construcción de detectores en `cmd/loadtest`. `internal/wiring` sigue
+sin importar `internal/datagen` (production nunca debe depender de un
+generador de datos de prueba) — el resolver ya construido se pasa
+como parámetro, quien llama decide de dónde sale.
+
+### Parte A — Microbenchmark (`internal/engine/decide_bench_test.go`)
+
+`go test -bench=. -benchmem ./internal/engine/...`, `package
+engine_test` (así puede importar `internal/wiring` sin ciclos). 3
+`Benchmark*` (`LegitOnly`/`Mixed`/`AttackHeavy`, ratio 0/10/30%),
+cada uno con un decider FRESCO propio (nunca compartido entre
+`Benchmark*` distintos) construido con la configuración final
+congelada + resolver determinista.
+
+**Ajuste 1 (timestamps monotónicos) implementado**:
+`monotonicEventStream` preserva el patrón real de deltas entre
+eventos consecutivos DENTRO de cada vuelta del escenario, pero en el
+borde entre una vuelta y la siguiente (donde el delta real sería
+negativo: último evento → primer evento) usa el delta PROMEDIO del
+escenario — así el timestamp queda SIEMPRE estrictamente creciente a
+lo largo de todo `b.N`, sin que la segunda vuelta cruce eventos como
+"tardíos" contra el watermark que los detectores ya alcanzaron en la
+primera. 3 tests dedicados
+(`monotonic_stream_test.go`): monotonía estricta a lo largo de +3
+vueltas completas, preservación exacta del patrón de deltas DENTRO
+de una vuelta, y que el contenido del evento (no el timestamp) se
+repite entre vueltas. Smoke test real:
+
+```
+BenchmarkDecide_LegitOnly-8       200    7297 ns/op   12580 B/op   27 allocs/op
+BenchmarkDecide_Mixed-8           200   11710 ns/op   11495 B/op   26 allocs/op
+BenchmarkDecide_AttackHeavy-8     200    8172 ns/op    7735 B/op   25 allocs/op
+```
+
+### Parte B — Load test HTTP end-to-end (`internal/loadtest` + `cmd/loadtest`)
+
+`internal/loadtest`: `Run(ctx, RunConfig) RunResult` (una repetición),
+`Aggregate(reps) AggregatedResult` (combina repeticiones),
+`WriteCSV`/`WriteJSON`. `cmd/loadtest` orquesta: arma los 3 perfiles
+una vez (semilla dedicada 901, nunca 101-103/201-203), y por cada
+combinación (perfil x concurrencia x modo OTel) corre repeticiones
+con servidor **fresco** (`httptest.NewServer` sobre
+`wiring.BuildServerWithConfigs` con la config final congelada).
+
+**Ajuste 2 (cursor atómico compartido) implementado**: un único
+`int64` atómico compartido entre TODOS los workers de una repetición
+— `request n -> events[n % len(events)]` — nunca cada worker
+recorriendo el escenario desde el evento 0 por su cuenta. Verificado
+con `TestRun_SharedCursor_DistributesEventsAcrossAllWorkers`: con 5
+eventos y concurrencia 4, los 5 aparecen repartidos de forma pareja
+(nunca "4 copias simultáneas del evento 0"). Los timestamps se
+reescriben a `time.Now()` en cada envío — documentado explícitamente
+como *serving-performance testing*, no comparable con la precisión
+de detección de tuning/holdout (la compresión temporal invalida las
+ventanas deslizantes).
+
+**Ajuste 3 (ASN)**: `--asn-mode=simulated` (default) usa
+`datagen.NewSimulatedASNResolver()` — determinista, ejercita la
+correlación real de credential_stuffing sin tocar la red. Nunca
+"ripestat" en este comando.
+
+**Ajuste 4 (repeticiones) implementado**: `--reps=3` por default,
+cada una con decider/servidor frescos
+(`TestRun_FreshStateBetweenRepetitions_NoSharedCursor` confirma que
+el cursor tampoco se comparte entre repeticiones). `Aggregate`
+reporta throughput como MEDIANA + min/max entre las 3 repeticiones
+(nunca un promedio simple —
+`TestAggregate_ThroughputIsMedianAndRange_NeverMean` prueba
+explícitamente que un conjunto asimétrico {10,10,100} da mediana 10,
+no el promedio engañoso 40) y latencias p50/p95/p99 sobre el POOL de
+las 3 repeticiones juntas. La matriz OTel comparativa queda acotada a
+`mixed@25` y `mixed@100`, ON vs. los mismos puntos OFF ya corridos en
+la matriz principal — nunca duplica toda la matriz.
+
+**Etiquetado explícito pedido**: el reporte (`summary.md`) llama a
+los resultados HTTP *"local end-to-end / loopback throughput"*
+—nunca capacidad absoluta de un servidor separado, cliente y
+servidor comparten proceso y máquina— y al delta de memoria
+*"proceso combinado cliente+servidor"*, nunca RAM exclusiva del
+servidor.
+
+### Verificación
+
+`gofmt`/`go vet`/`go test`/`go test -race` en verde en todo el repo.
+12 tests nuevos en `internal/loadtest`, 3 en
+`internal/engine/monotonic_stream_test.go`, 5 nuevos en
+`internal/wiring` (además de los 8 movidos sin cambios). Smoke test
+real de `cmd/loadtest` (1 perfil, concurrencias 1 y 5, 1 repetición,
+warmup/measurement mínimos) confirmó CSV/JSON/summary.md bien
+formados y coherentes (throughput sube con concurrencia, 0 errores,
+`Δ memoria` capturado). **No se corrió la matriz completa de
+performance ni el comparativo OTel** — pendiente de revisión del
+harness antes de la corrida real. Nuevos targets `make
+perf-bench`/`perf-load`/`perf-load-otel`/`perf`, y el README ahora
+documenta cómo reproducir los perfiles 0/10/30% (`make data-all`) y
+cómo correr la matriz de performance. No se usó pprof ni se optimizó
+nada — pedido explícito, medir primero.
+
+## 2026-09-28 — Correcciones al harness de performance, antes de la matriz completa (tarea 1.10)
+
+Seis correcciones sobre el harness ya implementado, todas verificadas
+con tests nuevos, sin correr todavía la matriz completa. Cero cambios
+de detección/thresholds/ScoreFloor/Policy.
+
+### Blocker: `wiring.FinalConfigs()`/`FinalPolicy()` — única fuente de verdad
+
+Se detectó que `cmd/engine` seguía sirviendo `engine.Default*Config()`
+sin calibrar (Policy default 0.50/0.80), mientras `internal/tuning`/
+`cmd/holdout` ya evaluaban con la configuración final (CSw2+S3+A3,
+Policy 0.50/0.75) — una brecha real entre lo que el motor decía sevir
+y lo que se validó. `internal/wiring.FinalConfigs()`/`FinalPolicy()`
+son ahora la ÚNICA fuente de verdad de la configuración runtime
+final; los vars de paquete que `BuildDecider`/`BuildServer` (usados
+por `cmd/engine`) sirven por default se inicializan desde ahí, nunca
+desde `engine.Default*Config()` directamente. `cmd/engine` ahora usa
+`wiring.FinalPolicy()` como default de sus flags
+`--challenge-threshold`/`--block-threshold` (siguen siendo
+overrideables). `cmd/loadtest` dejó de tener su propia copia local de
+`finalConfigs()` — ahora llama `wiring.BuildServerWithResolver`
+directamente, que ya sirve `FinalConfigs()`. La configuración BASELINE
+(`engine.Default*Config()`, sin ningún override) sigue viviendo
+exclusivamente ahí, consumida solo por
+`internal/tuning.BaselineCandidate()` — nunca expuesta como default
+de `internal/wiring`. No es un re-tuning: ningún valor cambió, solo
+se cerró la brecha de wiring. 3 tests nuevos: `TestFinalConfigs_ExactValues`
+(FinalConfigs difiere de los defaults en EXACTAMENTE los campos de
+CSw2/S3/A3, nada más), `TestFinalPolicy_ExactValues`,
+`TestPackageConfigVars_ServeFinalConfigs` (los vars que usa
+`cmd/engine` son literalmente `FinalConfigs()`).
+
+### Percentiles: mediana de percentiles por repetición, nunca pool
+
+`RunResult` ahora expone `P50()`/`P95()`/`P99()` calculados sobre las
+muestras de ESA repetición sola. `Aggregate` calcula el percentil
+POR repetición y reporta la MEDIANA de esos tres percentiles como
+P50/P95/P99 del agregado — corrigiendo el diseño anterior, que
+mezclaba las muestras crudas de las 3 repeticiones en un pool único
+antes de percentilar. `AggregatedResult.PerRepetition
+[]RepetitionSummary` conserva el resultado crudo de cada repetición
+(Requests/Errors/Throughput/percentiles propios) — expuesto en
+`loadtest.json` como `repetitions_detail`; el CSV, tabular, se queda
+con el agregado. Test explícito
+(`TestAggregate_PercentilesAreMedianOfPerRunPercentiles_NeverPooled`):
+dos repeticiones con P50 propios de 10ms y 20ms dan P50 agregado
+15ms (mediana), nunca 10ms (lo que daría el pool de las 4 muestras
+crudas).
+
+### HTTP client/transport: keep-alive y pool dimensionado para la concurrencia
+
+`loadtest.NewClient(concurrency)` arma un `*http.Transport` propio
+(nunca `http.DefaultTransport`, cuyo `MaxIdleConnsPerHost=2` de
+fábrica fuerza a reabrir conexión TCP en casi cada request bajo
+concurrencia alta, midiendo el costo de abrir conexiones en vez del
+costo real de servir) — `MaxIdleConns`/`MaxIdleConnsPerHost` >= la
+concurrencia pedida (mínimo 256), keep-alive habilitado (default de
+`http.Transport`). Un cliente por REPETICIÓN, compartido entre todos
+sus workers (nunca uno por worker, nunca uno para toda la
+combinación). Los `response.Body` ya se cerraban correctamente desde
+la implementación original (`io.Copy(io.Discard, ...)` +
+`Close()`) — confirmado, sin cambios ahí. 2 tests nuevos
+(`TestNewClient_TransportTunedForHighConcurrency`,
+`TestNewClient_LowConcurrency_StillUsesGenerousDefault`).
+
+### Warmup/measurement: separación estructural, no solo condicional
+
+`Run` se reescribió en dos fases de código FÍSICAMENTE separadas
+(`fireWorkers(..., record=false)` para warmup, después
+`fireWorkers(..., record=true)` para medición, con su propio reloj
+de referencia) — antes era un único loop con una condición
+"si el timestamp es posterior a X, grabar", que funcionaba pero
+dependía de esa condición nunca fallar. Ahora es estructuralmente
+imposible que una muestra de warmup llegue a un `RunResult`: la fase
+de warmup nunca escribe en ningún resultado, por diseño. El cursor
+atómico sigue siendo compartido entre las dos fases (nunca se
+resetea ahí — solo entre repeticiones). Test nuevo
+(`TestRun_WarmupResponseArrivingDuringMeasurement_NeverRecorded`):
+un servidor que tarda 200ms en responder, con
+Warmup=50ms/Measurement=400ms — el único request de warmup, aunque
+su respuesta llega bien entrada la ventana de medición nominal,
+nunca se cuenta (`result.Requests < total de requests que vio el
+servidor`).
+
+### Entorno: OS/versión, arquitectura, CPU, RAM, Go version, GOMAXPROCS
+
+`cmd/loadtest/envinfo.go` (nuevo): `detectEnv()` agrega, vía
+`os/exec` (sin dependencias nuevas), la versión exacta del SO y la
+RAM total — `sw_vers`/`sysctl` en macOS, `/proc/meminfo`/`uname` en
+Linux — con fallback silencioso a "desconocido"/0 si el comando no
+está disponible o el SO no está soportado (nunca bloquea la corrida
+por esto). `summary.md` ahora muestra SO/versión, arquitectura, CPU,
+RAM, Go version y GOMAXPROCS por separado.
+
+### OTel: comparación pareada, cercana en el tiempo
+
+El comparativo OTel ya no corre TODO OFF (como parte de la matriz
+principal) y TODO ON al final (con el resto de la matriz de por
+medio) — ahora, para cada uno de los dos puntos de interés
+(`mixed@25`, `mixed@100`), corre OFF x3 repeticiones INMEDIATAMENTE
+seguido de ON x3 repeticiones, cerca en el tiempo. Estas filas se
+marcan con `PairedOTelComparison=true` (nuevo campo en
+`CombinationResult`) y se reportan en una tabla separada de la
+matriz principal — nunca mezcladas con los puntos `mixed@25`/`mixed@100`
+que la matriz principal ya corrió por su cuenta (que quedan en su
+propia tabla, sin la marca de pareado).
+
+### Verificación
+
+`gofmt`/`go vet`/`go test`/`go test -race` en verde en todo el repo.
+Suite de `internal/loadtest` pasó de 12 a 20 tests. Smoke test real
+(`--profiles=normal,mixed --concurrencies=1,10 --reps=2 --warmup=100ms
+--measurement=300ms`) confirmó `summary.md` con Entorno completo
+(macOS 15.6.1, Darwin 24.6.0, 8 CPUs, 16.0 GB RAM, GOMAXPROCS=8) y
+`loadtest.json` con `repetitions_detail`/`paired_otel_comparison`
+bien formados. **No se corrió la matriz completa ni el comparativo
+OTel real** — pendiente de aprobación.
+
+## 2026-09-28 — Medición real de performance (tarea 1.10): matriz completa, microbenchmark y dos verificaciones
+
+Corrida real completa, sin cambiar ningún detector/threshold/Policy/
+ScoreFloor/harness. `docker compose up -d otel-collector` levantado
+para el comparativo OTel (sigue corriendo).
+
+### Microbenchmark (`go test -bench='BenchmarkDecide' -benchmem -count=3`)
+
+| Perfil | ns/op (3 reps) | B/op | allocs/op |
+|---|---|---|---|
+| LegitOnly | 9737/9843/9884 | ~16868 | 45 |
+| Mixed | 9804/9792/9914 | ~16408 | 45 |
+| AttackHeavy | 10251/10471/10316 | ~16835 | 46 |
+
+Guardado en `reports/performance/microbench.txt`.
+
+### Matriz HTTP completa (15 combinaciones: 3 ratios x 5 concurrencias, OTel OFF)
+
+Cero errores en las 45 combinaciones (15 puntos x 3 reps). Throughput
+sube fuerte de concurrencia 1→10, sigue subiendo despacio hasta 50, y
+se aplana (o cae levemente) de 50→100 en los tres perfiles —
+saturación entre concurrencia 25 y 50 en esta máquina (8 cores
+compartidos entre cliente y servidor en el mismo proceso). p95/p99
+crecen aproximadamente lineal con la concurrencia una vez saturado
+(firma de cola, no de un cuello de botella puntual). Detalle completo
+por combinación en `reports/performance/loadtest.csv`/`summary.md`.
+
+### Hallazgo sin causa atribuida: attack-heavy más rápido en HTTP pese a ser más caro en el microbenchmark
+
+Attack-heavy traffic showed approximately 20–27% higher local HTTP
+throughput than legitimate-only traffic, despite being approximately
+5% more expensive in the isolated decision-engine benchmark. Offline
+analysis found no supporting explanation based on request size,
+response size, entity cardinality, or path diversity. Therefore, no
+causal explanation is claimed. This result is treated as
+workload-dependent behavior of the local loopback benchmark rather
+than evidence that malicious traffic is intrinsically cheaper to
+process.
+
+**Verificación A** (diagnóstico offline, seed 901, sin HTTP, sin
+repetir la matriz — script temporal en `cmd/perfdiag_tmp`, borrado
+después de usarse): request size prácticamente idéntico entre
+perfiles (270-286 bytes de media); response size de attack-heavy es
+el MÁS ALTO de los tres (527.7 bytes de media, p50=707 — 30.7% de sus
+decisiones son CHALLENGE/BLOCK con `ContributingSignals`/`Explanation`,
+contra 7.1%/12.6% en normal/mixed) — predeciría lo CONTRARIO de lo
+observado; cardinalidad de IPs (151 vs 62) y diversidad de paths (48
+vs 19) también son mayores en attack-heavy, tampoco explican una
+ventaja de velocidad. Ninguna de las variables offline disponibles
+respalda la diferencia observada — no se afirma causa, no se abrieron
+experimentos adicionales para investigarlo más a fondo.
+
+### Comparativo OTel pareado — dos corridas (10s y 35s de medición)
+
+**Primera corrida** (measurement=10s, mismo momento que la matriz
+principal): mixed@25 Δthroughput=+0.27%, Δp95=-0.84%, Δp99=-1.66%;
+mixed@100 Δthroughput=-0.84%, Δp95=+0.90%, Δp99=+0.43%.
+
+**Verificación B** (measurement=35s — para que una corrida ON incluya
+varios ciclos completos del exportador de ~15s, no solo uno — SOLO
+estos 4 puntos, matriz principal no repetida, reporte separado en
+`reports/performance/otel-verify-35s/`): mixed@25
+Δthroughput=-0.27%, Δp50=-0.41%, Δp95=+1.49%, Δp99=+4.20%; mixed@100
+Δthroughput=-0.25%, Δp50=+0.24%, Δp95=-0.07%, Δp99=+1.17%. Cero
+errores en las 4 combinaciones x 3 repeticiones.
+
+Todos los deltas, en las dos corridas, están por debajo del 5% y sin
+una dirección consistente entre métricas — comparables a la
+variabilidad normal entre repeticiones ya observada en la matriz
+principal (hasta ~9% de spread en algunas combinaciones). **No
+material OpenTelemetry overhead was observed under the tested local
+conditions** — nunca "zero overhead", que sería una afirmación más
+fuerte de lo que estos datos permiten.
+
+### Verificación
+
+Los cuatro reportes (`microbench.txt`, `loadtest.csv`, `loadtest.json`,
+`summary.md`) están en `reports/performance/`, más el comparativo de
+35s en su propio subdirectorio. `summary.md` documenta explícitamente
+el hallazgo de attack-heavy sin causa atribuida y la conclusión de
+OTel con la redacción exacta pedida. No se usó pprof. No se optimizó
+nada. No se cambió ningún detector/threshold/Policy/ScoreFloor/
+harness durante esta fase. Se detiene acá — no se avanza a la tarea
+1.11 hasta revisar juntos el resultado final de OTel.
