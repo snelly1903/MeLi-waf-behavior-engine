@@ -3989,3 +3989,35 @@ OTel con la redacción exacta pedida. No se usó pprof. No se optimizó
 nada. No se cambió ningún detector/threshold/Policy/ScoreFloor/
 harness durante esta fase. Se detiene acá — no se avanza a la tarea
 1.11 hasta revisar juntos el resultado final de OTel.
+
+## 2026-09-28 — Escalado conceptual a 1.000 millones de requests/hora (tarea 1.11)
+
+Documento conceptual, sin implementación — `docs/scaling-1b-rph.md`, con su versión
+Mermaid agregada al README. Se planificó primero en el chat (problema en lenguaje
+simple, arquitectura de dos caminos, componente por componente, flujo paso a paso,
+comparación con el proyecto actual) y se aprobó con tres ajustes antes de escribir el
+archivo final:
+
+1. **"Risk Cache" renombrado a "Risk State Store"**, con una aclaración explícita: no
+   es un caché de decisiones ALLOW fijas — es un valor de riesgo dinámico que
+   cualquier detector puede actualizar en cualquier momento; un ALLOW no es una
+   promesa de seguridad futura, es "sin evidencia hasta ahora".
+2. **Limitación de cold-start agregada explícitamente** (sección 4 del documento):
+   una entidad nueva no tiene historia conductual, así que sus primeras requests pasan
+   mientras se acumula evidencia — conectado directamente con el *detection delay* ya
+   medido empíricamente en tuning/holdout (mediana ~24-26 requests para Credential
+   Stuffing, ~3-10 para Slow Scan, según candidato/ratio). Se aclara que distribuir la
+   arquitectura no agrega ni elimina este cold-start — solo lo preserva, SIEMPRE que
+   la partición (por ASN/IP-sesión/cohorte) sea la correcta.
+3. **High Availability reescrita con fail-open/fail-closed explícito por
+   componente** (sección 5): tabla componente por componente, y una subsección
+   dedicada a la caída del Risk State Store con una propuesta de degradación
+   controlada (Blocklist se sigue consultando aparte; default CHALLENGE, no
+   ALLOW/BLOCK, durante la caída; alertas inmediatas; alta disponibilidad real del
+   propio store como primera línea de defensa) — el trade-off disponibilidad vs.
+   seguridad queda documentado explícitamente, nunca escondido detrás de un genérico
+   "default seguro".
+
+No se implementó ninguna infraestructura distribuida, ninguna dependencia nueva, y no
+se modificó ningún detector/threshold/Policy/ScoreFloor del proyecto actual — es
+puramente conceptual, como se pidió.

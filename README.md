@@ -84,7 +84,50 @@ _Pendiente._
 
 ## Escalado a 1.000 millones de requests/hora
 
-_Pendiente — propuesta conceptual, sin implementación._
+Propuesta conceptual, sin implementación (tarea 1.11) — documento completo en
+[`docs/scaling-1b-rph.md`](docs/scaling-1b-rph.md). Resumen: separar un **fast path**
+síncrono (Decision API sin estado + Risk State Store + Policy) de un **analytics
+path** asíncrono (Event Stream + los tres detectores conductuales, particionados por
+IP/sesión, ASN y cohorte respectivamente) — para que cada detector siga viendo todo
+el historial de una entidad aunque el tráfico se reparta entre cientos de máquinas.
+
+```mermaid
+flowchart LR
+    Client[Cliente] --> CDN[CDN / WAF perimetral]
+    CDN --> API[Decision API<br/>sin estado]
+    API -->|lee| Store[(Risk State Store)]
+    Store --> Policy[Policy]
+    Policy --> Decision{ALLOW / CHALLENGE / BLOCK}
+
+    API -.->|copia async del evento| Stream[[Event Stream]]
+    Stream --> SS[Slow Scan<br/>por IP/sesión]
+    Stream --> CS[Credential Stuffing<br/>por ASN]
+    Stream --> SA[Statistical Anomaly<br/>por cohorte]
+    SS -->|update| Store
+    CS -->|update| Store
+    SA -->|update| Store
+
+    subgraph FastPath["FAST PATH — síncrono"]
+        API
+        Store
+        Policy
+        Decision
+    end
+
+    subgraph AnalyticsPath["ANALYTICS PATH — asíncrono"]
+        Stream
+        SS
+        CS
+        SA
+    end
+```
+
+Ninguna lógica de detección cambia (Policy/ScoreFloor/umbrales calibrados en las
+tareas 1.9/holdout se mantienen exactamente iguales) — lo que cambia es dónde corre
+esa lógica y cómo se reparte el tráfico. El documento completo cubre, además, la
+limitación de *cold-start* (una entidad nueva no tiene historia conductual todavía) y
+el trade-off explícito de disponibilidad vs. seguridad ante la caída del Risk State
+Store (fail-open/fail-closed por componente).
 
 ## Extras implementados
 
