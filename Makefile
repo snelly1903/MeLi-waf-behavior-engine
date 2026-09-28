@@ -1,4 +1,4 @@
-.PHONY: test fmt vet data-0 data-10 data-30 data-all eval baseline
+.PHONY: test fmt vet data-0 data-10 data-30 data-all eval baseline tune-baseline
 
 # Runs every test in the module with the race detector enabled.
 test:
@@ -50,3 +50,16 @@ WINDOW ?= 60s
 BASELINE_OUT ?=
 baseline:
 	go run ./cmd/baseline --scenario $(SCENARIO) --mode $(MODE) --max-requests $(MAX_REQUESTS) --window $(WINDOW) --out "$(BASELINE_OUT)"
+
+# Corre el motor conductual REAL (internal/engine.BehavioralDecider,
+# con los mismos defaults que cmd/engine — ver internal/engine/defaults.go)
+# sobre los escenarios de tuning (seeds 101/102/103, ratios 0/10/30%
+# por defecto) y escribe el reporte baseline en reports/tuning/
+# (tarea 1.9, Punto de Control 1). Los escenarios se generan en
+# data/tuning/ (gitignored). Override TUNE_SEEDS/TUNE_RATIOS/TUNE_OUT
+# si hace falta.
+TUNE_SEEDS ?= 101,102,103
+TUNE_RATIOS ?= 0,10,30
+TUNE_OUT ?= reports/tuning/baseline
+tune-baseline:
+	go run ./cmd/tune --seeds $(TUNE_SEEDS) --ratios $(TUNE_RATIOS) --data-dir data/tuning --out $(TUNE_OUT)

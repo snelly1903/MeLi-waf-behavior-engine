@@ -2305,3 +2305,1214 @@ versión de lenguaje, solo la corrección de seguridad de la librería
 estándar). Verificado: `govulncheck ./...` pasó de 31+ hallazgos a
 `No vulnerabilities found`, y `gofmt -l .` / `go vet ./...` /
 `go test -race ./...` siguen en verde.
+
+## 2026-09-27 — Evaluation and Tuning: baseline offline (tarea 1.9, paso 1)
+
+**Objetivo de la tarea completa.** Medir y calibrar el motor
+conductual de forma reproducible, evitando overfitting: separar
+calidad del detector (Finding → Triggered, risk scoring) de calidad
+de la política (ALLOW/CHALLENGE/BLOCK), usando datasets de tuning y
+de holdout final generados con semillas distintas. Este primer paso
+implementa únicamente el baseline (configuración actual, sin ningún
+cambio de threshold) y la infraestructura mínima para producirlo — el
+resto del proceso (calibrar detectores, calibrar policy, holdout)
+queda pendiente de aprobación explícita después de este Punto de
+Control.
+
+### Qué ya existía y se reutilizó tal cual
+
+`internal/eval` ya tenía casi todo lo que pedía el PDF: matriz de
+confusión, precision/recall/FPR/FNR con `Ratio{Defined bool}` (N/A
+real, nunca un 0 disimulado), políticas `PolicyStrict`/`PolicyBroad`,
+recall por vector de ataque (`ByAttackVectorRecall`), atribución de
+vector. `internal/datagen` ya tenía semillas reproducibles
+(`NewRNG`), generación con proporción configurable (0/10/30%) y
+escritura de escenarios. `internal/baseline/io.go` ya tenía I/O
+genérico de eventos/decisiones (nunca específico del rate-limiter de
+la tarea 0.9) — se reutilizó directo. Nada de esto se duplicó.
+
+### Lo nuevo (mínimo, aditivo)
+
+- **F1**, agregado a `internal/eval.Metrics` — indefinido (N/A) si
+  Precision o Recall lo son, o si ambas dan exactamente 0 (2·0·0/0).
+- **`Policy.IsPositive`** (método exportado en `internal/eval`, antes
+  privado) — para que `internal/tuning` pueda decidir "detectado"
+  con la MISMA regla que ya usa `BuildConfusionMatrix`, sin
+  duplicarla.
+- **`internal/datagen.SimulatedASNResolver`** — resolver determinista
+  offline (IP → ASN simulado, por prefijo `/24`, usando los mismos
+  `IPPool` con los que se generó el tráfico) para credential
+  stuffing. Nunca usa RIPEstat contra IPs sintéticas — no tendría
+  sentido, y el propio `internal/asn.Resolver` ya documenta que RFC
+  5737 nunca resuelve contra un proveedor real (tarea 1.7).
+- **`internal/engine/defaults.go`** — `DefaultCredentialStuffingConfig`/`DefaultSlowScanConfig`/`DefaultAnomalyConfig`/`DefaultPolicy`,
+  movidos (no copiados) desde `cmd/engine/main.go`. Ajuste 2 del
+  plan aprobado: el "baseline" de esta evaluación tiene que ser
+  EXACTAMENTE la configuración que sirve `cmd/engine`, nunca una
+  copia a mano que pudiera desincronizarse — un refactor chico
+  (mover literales, no lógica) resolvió esto de raíz, sin necesitar
+  un test de "drift" como red de seguridad separada:
+  `internal/tuning.BaselineCandidate()` llama a las mismas funciones
+  que ahora llama `cmd/engine`, así que no hay dos copias que puedan
+  desincronizarse — solo un test que confirma que
+  `BaselineCandidate()` sigue llamándolas (`TestBaselineCandidate_MatchesEngineDefaults`).
+- **`internal/tuning`** (paquete nuevo): `Candidate`/`Build` (arma un
+  `BehavioralDecider` con estado fresco — profiles y baseline de
+  anomaly vacíos por diseño, ninguna corrida contamina a la
+  siguiente), `Replay` (corre el motor real sobre un escenario en
+  memoria, sin HTTP), `ComputeDetectionDelay`/`CampaignDelay`
+  (detection delay y "eventual campaign detection" — ver ajuste 1
+  más abajo), `SummarizeDelay` (agregación por vector),
+  `RunScenario` (une todo lo anterior), y `Row`/`WriteCSV`/`WriteJSON`/`RenderMarkdown`
+  (exportación completa, ver ajuste 3).
+- **`cmd/tune`**: por ahora, solo corre `BaselineCandidate` sobre los
+  escenarios de tuning y escribe el reporte. El sweep de candidatos
+  llega en el próximo paso.
+
+### Ajuste 1 del plan: campaign key por vector, nunca uniforme
+
+`ComputeDetectionDelay` agrupa eventos maliciosos en "campañas" con
+una regla DISTINTA por vector, nunca la misma:
+
+- `slow_scan` → una campaña por entidad que escanea (sesión si
+  existe, si no la IP) — cada escáner es independiente, igual que lo
+  ve `internal/slowscan.Detector`.
+- `credential_stuffing` → una campaña por grupo de red (el mismo
+  `SimulatedASNResolver` que usa el propio detector) — el detector
+  correlaciona por ASN, nunca por IP individual, así que medir delay
+  por IP habría sido conceptualmente incorrecto: todas las IPs
+  atacantes de la misma campaña distribuida comparten una sola
+  campaña. Verificado con un test dedicado
+  (`TestComputeDetectionDelay_CredentialStuffing_GroupsByASNNotByIP`):
+  dos IPs distintas del mismo grupo forman una sola campaña, y la
+  detección de CUALQUIERA de las dos cuenta como la detección de la
+  campaña completa.
+
+### Ajuste 3 del plan: auditabilidad completa del sweep
+
+Aunque este paso solo tiene un candidato ("baseline"), el formato de
+exportación (`Row`, en `internal/tuning/report.go`) ya está diseñado
+para la comparación completa: una fila por candidato×seed×ratio, con
+TP/FP/TN/FN, precision/recall/FPR/FNR/F1 strict Y broad, recall por
+vector, y detection delay (campañas, detectadas, tasa, requests/tiempo
+medio) — nunca preagregado, para poder reconstruir después, a partir
+de las filas crudas, por qué se habría elegido cada configuración.
+`reports/tuning/baseline.{md,csv,json}` ya sigue este formato.
+
+### Verificación
+
+`gofmt -l .` limpio, `go vet ./...` sin hallazgos, `go test ./...` y
+`go test -race ./...` verdes en todos los paquetes, incluido
+`internal/tuning` (nuevo).
+
+**Hallazgo real durante la implementación, no relacionado con esta
+tarea en sí:** el primer intento de un test de reproducibilidad
+bit-a-bit (`TestRunScenario_Reproducible_SameSeedSameResult`) falló —
+no en `Action`/`AttackVector` ni en ninguna métrica, solo en
+`ConfidenceScore`, con una diferencia de ~1e-16 (un ULP). Causa
+raíz: `internal/slowscan` acumula entropía iterando
+`profile.Metrics.PathCounts`, un `map[string]int]` — Go aleatoriza a
+propósito el orden de iteración de un map entre corridas del
+proceso, así que la SUMA en coma flotante de esos términos puede
+diferir en el último bit entre dos corridas con la misma semilla,
+aunque la lógica sea 100% determinista. Nunca cambia ninguna
+decisión real (los umbrales de Policy están en 0.5/0.8, lejísimos de
+un ULP) — se ajustó el test para comparar lo que realmente importa
+(Action/AttackVector/EntityID, y las métricas derivadas de esos
+campos, que sí son bit-a-bit idénticas) en vez de exigir un
+`reflect.DeepEqual` sobre `ConfidenceScore`. No se tocó
+`internal/slowscan` — está fuera del alcance de este paso.
+
+### Resultados del baseline (config actual de `cmd/engine`, sin ningún cambio)
+
+3 seeds (101/102/103) × 3 ratios (0/10/30%) = 9 corridas, ~1100-1750
+eventos cada una. Reporte completo en `reports/tuning/baseline.{md,csv,json}`.
+
+| Seed | Ratio | Strict TP/FP/FN/TN | Broad TP/FP/FN/TN | Recall CS | Recall SS | CS delay (campañas/detectadas/req.medio) | SS delay |
+|---|---|---|---|---|---|---|---|
+| 101 | 0% | 0/0/0/1183 | 0/**41**/0/1142 | N/A | N/A | — | — |
+| 101 | 10% | 23/0/115/1183 | 121/30/17/1153 | 0.842 | 0.890 | 1/1/4.0 | 2/2/1.0 |
+| 101 | 30% | 32/0/486/1183 | 228/23/290/1160 | 0.872 | **0.254** | 1/1/6.0 | 9/9/5.33 |
+| 102 | 0% | 0/0/0/1134 | 0/**76**/0/1058 | N/A | N/A | — | — |
+| 102 | 10% | 30/0/98/1134 | 114/65/14/1069 | 0.977 | 0.847 | 1/1/2.0 | 2/2/2.5 |
+| 102 | 30% | **0**/0/487/1134 | 292/33/195/1101 | 0.961 | **0.436** | 1/1/6.0 | 9/8/6.38 |
+| 103 | 0% | 0/0/0/1178 | 0/**47**/0/1131 | N/A | N/A | — | — |
+| 103 | 10% | 11/0/137/1178 | 127/33/21/1145 | 0.957 | 0.812 | 1/1/3.0 | 2/2/8.0 |
+| 103 | 30% | 1/0/571/1178 | 253/24/319/1154 | 0.948 | **0.225** | 1/1/6.0 | 9/6/21.33 |
+
+### Errores concretos observados
+
+**1) Falsos positivos en 0% malicious — solo bajo política amplia,
+siempre atribuibles a `statistical_anomaly`.** `strict_fp=0` en los
+tres seeds (BLOCK nunca dispara sobre tráfico 100% legítimo), pero
+`broad_fp` va de 41 a 76 (FPR 3.5%–6.7%) — ningún request de 0%
+malicious puede activar el gate conjuntivo de `credstuffing` ni de
+`slowscan` (exigen un patrón de ataque real), así que estos 41–76
+CHALLENGE por corrida son, por eliminación, `statistical_anomaly`
+reaccionando a variación natural y legítima del tráfico (algún
+cliente API, algún oficinista con un patrón de referer/rutas poco
+común). Es el costo real que hay que sopesar contra cualquier mejora
+de recall — exactamente el criterio de selección que pediste no
+perder de vista.
+
+**2) `strict_recall` (BLOCK) es casi inexistente y empeora al subir
+la ratio maliciosa.** 0.167→0.062 (seed 101), 0.234→**0.000** (seed
+102), 0.074→0.002 (seed 103) al pasar de 10% a 30%. `BlockThreshold=0.8`
+parece estar calibrado muy por encima de los `RiskScore` que estos
+dos detectores producen incluso ante un ataque claro (ya se había
+visto en la demo manual de la tarea 1.7 que `credential_stuffing`
+rara vez supera ~0.5) — BLOCK depende casi enteramente de los casos
+más extremos de `slow_scan`, y esos son escasos y ruidosos entre
+seeds (`strict_tp` en 30%: 32, 0, 1 — altísima varianza para la MISMA
+ratio, solo cambiando la semilla).
+
+**3) `recall_slow_scan` cae fuerte al subir la ratio (10%→30%),
+mientras que `recall_credential_stuffing` se mantiene estable o
+mejora.** slow_scan: 0.890→0.254 (101), 0.847→0.436 (102),
+0.812→0.225 (103). credential_stuffing: 0.842→0.872 (101),
+0.977→0.961 (102), 0.957→0.948 (103) — sin degradación. La causa,
+visible directamente en el detection delay: a 30% hay 9 campañas de
+scanner en vez de 2 (el generador reparte el mismo presupuesto de
+tráfico malicioso entre más escáneres), así que cada campaña
+individual es más chica — y como el gate de `slowscan` exige un
+`MinRequests=15` (entre otras condiciones) ANTES de disparar, una
+porción más grande de cada campaña más chica ocurre necesariamente
+antes de cruzar ese piso. La detección "eventual" de la campaña se
+mantiene alta (100% en seed 101, 88.9%/66.7% en 102/103) — el
+detector casi siempre atrapa al escáner tarde o temprano — pero el
+recall a NIVEL DE REQUEST, que es la métrica principal, cae
+correctamente y sin disimularlo: `ss_mean_requests_to_detection` sube
+de ~1–2.5 (10%) a 5.3–21.3 (30%), confirmando que la demora de
+detección creció, no que el detector empeoró su lógica. Esto es
+justo lo que pediste vigilar explícitamente ("no uses estas métricas
+para ocultar false negatives iniciales") — y el propio diseño ya lo
+expone en vez de esconderlo.
+
+**4) `credential_stuffing` funciona de forma sólida y estable en este
+baseline**: recall 84–98% en ambas ratios, exactamente 1 campaña por
+escenario (confirma que el ajuste 1 agrupa por ASN, no por IP, como
+se pidió), detectada siempre dentro de su ventana de 30 minutos
+(`cs_mean_seconds_to_detection` entre 225 y 792 segundos). No parece
+necesitar ningún cambio urgente — a diferencia de `slow_scan` y de
+`statistical_anomaly`.
+
+Ningún parámetro se tocó todavía. Se espera aprobación antes de
+empezar cualquier calibración.
+
+## 2026-09-27 — Pasada diagnóstica antes de calibrar (tarea 1.9, Punto de Control 2)
+
+**Objetivo.** Antes de tocar ningún threshold, entender con evidencia
+explícita (nunca por eliminación) qué parámetro concreto causa cada
+error observado en el baseline. Reporte completo, reproducible:
+`reports/tuning/diagnose.md` (`go run ./cmd/diagnose`).
+
+### Infraestructura nueva (diagnóstico, aditiva, sin cambiar comportamiento)
+
+- `anomaly.Detector.EvaluateDebug` — expone el score combinado y los
+  z-scores de cada scope ANTES de compararlos con `TriggerThreshold`,
+  algo que `Evaluate` descarta (`finding.Finding{}`) en el caso no
+  disparado. Se extrajo `scoreFeatures` como núcleo compartido — cero
+  cambio de comportamiento en `Evaluate`, confirmado con los tests ya
+  existentes y tres nuevos (`TestEvaluateDebug_*`).
+- `slowscan.Detector.EvaluateGateMetrics` — expone TotalRequests,
+  DistinctPaths, NotFoundRatio, RouteEntropy y NovelPathRatio de
+  cualquier scope, disparado o no. `evaluateMetrics` se refactorizó
+  para llamar al mismo `gateMetricsFor` interno — una sola fórmula,
+  no dos copias que pudieran desincronizarse. Sin cambio de
+  comportamiento (mismos tests existentes en verde + 3 nuevos).
+- `internal/tuning`: `RunDiagnostics` (corre tres detectores propios,
+  en paralelo a la corrida real, capturando el Finding de CADA UNO
+  por evento), `AnalyzeAnomalyFalsePositives`, `AnalyzeSlowScanCampaigns`,
+  `AnalyzeRiskScoreDistributions`, `Summarize`/`PercentileSummary`
+  (min/p50/p75/p90/p95/max, método nearest-rank). `cmd/diagnose` las
+  corre sobre los mismos 9 escenarios de tuning que `cmd/tune`.
+
+### 1. Falsos positivos de statistical_anomaly — confirmado explícitamente, no por eliminación
+
+Los 164 FP (broad) de las corridas de 0% tienen **prueba estructural
+explícita**: para cada uno se verificó que
+`CredentialStuffing.Triggered=false` y `SlowScan.Triggered=false`, y
+que existe una evaluación de anomaly con `Triggered=true` —
+`PrincipalDetectorConfirmed=true` en el 100% de los 164 casos (0
+excepciones).
+
+**El corte matemático que sugeriste se confirma casi exacto con datos
+reales**: el score combinado máximo entre los 3331 ALLOW es
+**0.3749**; el mínimo entre los 164 CHALLENGE es **0.3758** — el
+límite teórico (ScoreFloor=0.20, Challenge=0.50 → combined≈0.375) se
+verifica en la práctica, casi al cuarto decimal.
+
+**Consecuencia directa para elegir el parámetro relevante**:
+`TriggerThreshold` (actual 0.15) está muy por debajo de ese ~0.375 —
+cambiarlo dentro de {0.10, 0.15, 0.20} **no puede mover ni un solo
+evento** de estos 164 de CHALLENGE a ALLOW (todos tienen combined
+≥0.3758, muy por encima de cualquier valor del grid propuesto).
+`ZSaturation` sí es relevante, pero de forma desigual: se recalculó a
+mano el primer FP de la tabla (failed_auth_z=11.25,
+path_diversity_z=1.96, without_referer_z=2.65,
+account_diversity_z=11.25) — con ZSaturation=3 el combined baja de
+0.5527 a 0.4884 (sigue disparando), con ZSaturation=1 SUBE a 0.6448
+(empeora). Para los casos con z extremos (hasta 74 en
+failed_auth_z/account_diversity_z), el componente ya está saturado
+cerca de 1 para cualquier ZSaturation∈{1,2,3} — subir ZSaturation
+ayuda a los casos borderline (combined cerca de 0.375-0.45), pero no
+puede arreglar los más extremos (combined 0.55-0.65) por sí solo.
+
+**Hallazgo adicional, no pedido pero relevante**: en casi todas las
+filas, `failed_auth_ratio_z` y `account_diversity_ratio_z` son
+IDÉNTICOS. Son dos features distintas en el modelo, pero en esta
+población legítima concreta (aparenta ser tráfico tipo API client)
+están perfectamente correlacionadas — el modelo las cuenta dos veces
+como si fueran evidencia independiente, inflando el combined score
+más de lo que un observador esperaría de "5 señales independientes".
+No se propone tocar pesos (fuera del alcance acordado), pero explica
+por qué el combined score de estos FP es más alto de lo que la
+intuición sobre 5 features independientes sugeriría.
+
+Distribución completa (0% malicious, ambas acciones):
+
+| Action | N | Combined (p50/p75/p90/p95/max) | RiskScore (p50/p75/p90/p95/max) |
+|---|---|---|---|
+| ALLOW | 3331 | 0.0735/0.1789/0.2365/0.2777/**0.3749** | 0.0000/0.3424/0.3891/0.4220/0.4999 |
+| CHALLENGE | 164 | **0.3758**/0.4421/0.4828/0.6046/0.6349 | 0.5006/0.5537/0.5862/0.6837/0.7079 |
+
+### 2. Campañas de slow_scan — MinRequests NO es el problema a 30%; NovelPathRatio sí
+
+**A 10% (6 campañas, las 3 seeds)**: 100% detectadas, TODAS
+exactamente en el request #15, con `TotalRequests(14<15)` como única
+condición limitante justo antes — las otras 4 condiciones del gate ya
+estaban satisfechas mucho antes. Tamaño de campaña: min=29 p50=45
+max=56 — MinRequests nunca es un problema real acá, es solo el último
+en cruzar.
+
+**A 30% (27 campañas)**: usando el disparo PROPIO del gate de
+slowscan (`SlowScan.Triggered`, no la Decision final combinada — ver
+nota abajo), solo 13 de 27 campañas (48%) cruzan el gate alguna vez.
+De las 14 que nunca lo cruzan, **las 14 tienen `NovelPathRatio` como
+única condición limitante** (valores entre 0.00 y 0.48, todos por
+debajo del mínimo 0.50) — nunca `TotalRequests`. Tamaño de campaña a
+30%: min=20 p50=44 max=60 — prácticamente la MISMA distribución de
+tamaño que a 10% (mediana 44 vs 45): **la degradación NO es porque
+las campañas sean más chicas**, es específicamente `NovelPathRatio`.
+
+**Mecanismo, verificado contra el código real del generador**:
+`internal/datagen/slowscan.go` elige cada ruta con
+`Pick(rng, profile.SensitivePaths)` de un vocabulario COMPARTIDO de
+solo 30 rutas (`internal/datagen/paths.go`) — el mismo para las 2
+campañas de 10% y las 9 de 30%. Con 9 escáneres independientes en vez
+de 2, sorteando de las mismas 30 rutas, es mucho más probable que 3 o
+más IPs de escáneres DISTINTOS visiten la misma ruta dentro de la
+ventana — y `MaxVisitorsForNovelPath=2` hace que esa ruta deje de
+contarse como "novel" para NINGUNO de ellos, aunque sea comportamiento
+de escaneo genuino. No es "más fragmentación de ataque", es
+**contaminación cruzada del índice de popularidad de rutas** entre
+campañas simultáneas, agravada por que el pool de rutas nunca crece
+aunque haya más atacantes.
+
+**Nota importante sobre "detectada" (eventual campaign detection)**:
+esta sección usa `SlowScan.Triggered` (el gate propio de slowscan) —
+por eso da números más bajos (13/27 = 48%) que el
+`ss_eventual_detection_rate` del Punto de Control 1 (89%-100%), que
+usa la Decision FINAL combinada (cualquier detector, típicamente
+statistical_anomaly "rescatando" la campaña). Son preguntas
+distintas: ¿el gate de slowscan cruzó alguna vez? vs. ¿el motor
+completo terminó marcando la campaña alguna vez, sin importar por
+qué? La primera es la que hace falta para saber si calibrar
+slowscan tiene sentido.
+
+### 3. Distribución de RiskScore por detector — por qué BlockThreshold=0.80 casi nunca dispara
+
+| Detector | Grupo | N | p50 | p75 | p90 | p95 | max |
+|---|---|---|---|---|---|---|---|
+| credential_stuffing | legit | 10485 | 0 | 0 | 0 | 0 | 0 |
+| slow_scan | legit | 10485 | 0 | 0 | 0 | 0 | 0 |
+| statistical_anomaly | legit | 10485 | 0 | 0.3401 | 0.3943 | 0.4630 | 0.7079 |
+| credential_stuffing | malicious | 608 | 0 | 0.5699 | 0.6140 | 0.6365 | **0.6683** |
+| slow_scan | malicious | 1383 | 0 | 0.6777 | 0.7834 | **0.8103** | **0.8467** |
+| statistical_anomaly | malicious (cualquier ataque) | 1991 | 0.4818 | 0.5267 | 0.6063 | 0.6422 | 0.6958 |
+
+Ningún detector, en la práctica, se acerca a 0.80 salvo el 5%-10% más
+extremo de `slow_scan` (p90=0.78, p95=0.81) — `credential_stuffing`
+nunca supera 0.6683 en estos datos, `statistical_anomaly` nunca supera
+0.6958. `BlockThreshold=0.80` está calibrado por encima de lo que
+estas fórmulas de score pueden producir salvo en el caso más extremo
+de slow_scan — coherente con el `strict_recall` casi nulo del Punto de
+Control 1. Esto es contexto para la calibración de Policy, que
+todavía no se toca.
+
+### 4. Credential stuffing — sin cambios propuestos
+
+Confirmado: 0 RiskScore en el 100% del tráfico legítimo (cero riesgo
+de falso positivo), recall 84%-98% ya visto en el Punto de Control 1,
+sin ningún error concreto encontrado en esta pasada. No se propone
+ningún candidato para este detector.
+
+### 5. 30% vs 10%: qué cambia realmente
+
+Documentado explícitamente, con datos: al pasar de 10% a 30% la
+cantidad de campañas de slow_scan sube de 2 a 9 por escenario, pero el
+TAMAÑO de cada campaña (min/p50/max) es prácticamente el mismo. La
+comparación entre ratios introduce más campañas SIMULTÁNEAS
+compitiendo por el mismo vocabulario de rutas sensibles, degradando
+`NovelPathRatio` por contaminación cruzada — no una distribución de
+ataque "más fragmentada" en el sentido de campañas más chicas. El
+generador no se tocó.
+
+### Candidatos propuestos para el próximo paso — todavía SIN ejecutar
+
+**Slow Scan** (ninguno cambia `MinRequests`: se confirmó que no es el
+gate limitante a ninguna ratio):
+
+| Candidato | Cambio | Error que corrige |
+|---|---|---|
+| `slowscan-maxvisitors-3` | `MaxVisitorsForNovelPath`: 2→3 | Ataca el MECANISMO: tolera una IP más antes de que una ruta compartida deje de contar como "novel" — directamente compensa la contaminación cruzada de 9 campañas simultáneas. |
+| `slowscan-novelratio-0.35` | `MinNovelPathRatio`: 0.50→0.35 | Ataca el GATE directamente — como `slow_scan` tiene RiskScore=0 en el 100% del tráfico legítimo hoy, hay margen real para relajar este umbral sin (todavía) evidencia de que introduzca FP. |
+| `slowscan-maxvisitors-3-novelratio-0.35` | Los dos combinados | Ver si se refuerzan o si uno solo ya alcanza — evita commitear a dos cambios si uno basta. |
+
+**Statistical Anomaly** — grid pedido, con expectativa explícita antes
+de correrlo (para poder comparar predicción vs. resultado real):
+
+| Candidato | Cambio | Expectativa, según el análisis de esta pasada |
+|---|---|---|
+| `anomaly-z1` | ZSaturation 2→1 | Se espera que EMPEORE (más FP) — confirmado a mano arriba. Se incluye para completar el grid pedido y confirmarlo empíricamente, no porque se espere que gane. |
+| `anomaly-z3` | ZSaturation 2→3 | Se espera una mejora PARCIAL — reduce combined en los casos borderline (cerca de 0.375-0.45), no en los más extremos (0.55-0.65). |
+| `anomaly-trigger-010` / `anomaly-trigger-020` | TriggerThreshold 0.15→0.10/0.20 | Se espera CASI NINGÚN efecto sobre estos 164 FP específicos — todos tienen combined ≥0.3758, muy por encima de cualquier valor de este grid. Se incluye para confirmarlo (o refutarlo) con datos, y porque sí afecta qué cuenta como "Triggered" para las métricas de `waf.detector.findings_total` y para detectar si algún caso límite sí se ve afectado. |
+| `anomaly-z3-trigger-020` | Los dos combinados | La combinación más prometedora según el análisis — ZSaturation hace el trabajo real, TriggerThreshold es principalmente para consistencia. |
+
+Ningún candidato se ejecutó todavía. Se espera aprobación antes de
+correr cualquiera de estos contra los datos de tuning.
+
+## 2026-09-28 — Sweep de detectores sobre tuning (tarea 1.9)
+
+Ejecutado con `go run ./cmd/sweep` — solo tuning (seeds 101/102/103,
+ratios 0/10/30%), nunca holdout. `ScoreFloor`, `ChallengeThreshold`,
+`BlockThreshold` y `credential_stuffing` sin tocar. Reportes completos
+(por seed y agregados): `reports/tuning/sweep-slowscan.md` y
+`reports/tuning/sweep-anomaly.md`.
+
+### Infraestructura nueva
+
+`internal/tuning/sweep_slowscan.go` y `sweep_anomaly.go`: agregación
+entre seeds (media de cada `Ratio` definido, nunca tratando N/A como
+0), `AnomalyTriggerBreakdown` (Triggered@0% separado por Action
+final), `CompareAnomalyTransitions` (compara la MISMA corrida entre
+baseline y un candidato, evento por evento, y clasifica cada FP de
+baseline en "dejó de Triggered" / "sigue Triggered pero ahora ALLOW" /
+"sigue sin resolver"). `cmd/sweep` orquesta ambos sweeps sobre los
+mismos 9 escenarios (generados una sola vez, compartidos entre
+candidatos, para que la comparación sea exacta).
+
+### Resultado — Slow Scan
+
+| Candidato | FPR@0% | BroadRecall@30% | SSRecall@30% | EventualDet@30% (gate propio) |
+|---|---|---|---|---|
+| S0 baseline | 0.0472 | 0.4940 | 0.3050 | 0.4815 |
+| S1 maxvisitors-3 | 0.0472 (=) | 0.6456 | 0.5238 | 0.7407 |
+| S2 novelratio-035 | 0.0472 (=) | 0.5566 | 0.3954 | 0.5926 |
+| S3 ambos | **0.0472 (=)** | **0.6757** | **0.5669** | **0.8519** |
+
+**FPR@0% y todo @10% quedaron IDÉNTICOS en los 4 candidatos** — ni un
+solo cambio, en ningún seed. Es lo que predecía el Punto de Control 2
+(`slow_scan` tiene RiskScore=0 en el 100% del tráfico legítimo; a
+10% las 2 campañas por seed ya se detectan por `MinRequests`, nunca
+por `NovelPathRatio`) y quedó confirmado con datos reales, no solo
+teorizado. `Req.medio/mediana@30%` se mantiene ~15 en los cuatro —
+la mejora es enteramente de COBERTURA (más campañas cruzan el gate
+alguna vez), no de velocidad.
+
+### Resultado — Statistical Anomaly
+
+| Candidato | FP@0% (avg) | FPR@0% (avg) | BroadRecall@10%(avg) | BroadRecall@30%(avg) | Recall CS@10% (min–max entre seeds) |
+|---|---|---|---|---|---|
+| A0 baseline | 54.7 | 0.0472 | 0.8752 | 0.4940 | 0.842–0.977 |
+| A1 z3 | 26.0 | 0.0225 | 0.7321 | 0.3722 | **0.553**–0.954 |
+| A2 trigger020 | 40.3 | 0.0350 | 0.8205 | 0.4418 | 0.842–0.977 (≈ igual) |
+| A3 account-weight05 | 44.3 | 0.0384 | **0.9230** | **0.6717** | 0.737–0.954 |
+| A4 z3+weight05 | 19.0 | 0.0164 | 0.7386 | 0.3705 | **0.342**–0.930 |
+| A5 z3+trigger020 | 12.0 | 0.0104 | 0.7297 | 0.3722 | 0.526–0.954 |
+
+**Hallazgo central, en los tres seeds, los cinco candidatos, sin
+excepción**: "Dejó de Triggered" = **0** siempre — ningún candidato
+hace que una evaluación de anomaly deje de disparar del todo. El
+100% de la reducción de FP viene de "sigue Triggered, pero la Action
+final pasa a ALLOW" (el RiskScore baja de 0.50, no de 0.20) —
+confirma exactamente el mecanismo ya identificado en el Punto de
+Control 2 (el límite real es ScoreFloor+Challenge≈0.375 en espacio de
+combined, muy por encima de cualquier TriggerThreshold del grid).
+
+**Hallazgo no anticipado**: `ZSaturation=3` (A1, y A4/A5 que lo
+incluyen) reduce FP con fuerza, pero **daña recall de forma
+inestable entre seeds** — el caso más claro: `Recall
+credential_stuffing@10%` del seed 101 cae de 0.842 (baseline) a
+**0.553** en A1 y a **0.342** en A4. Esto pasa porque
+`statistical_anomaly`, aunque nunca sea "el" vector, hoy contribuye
+recall EXTRA sobre eventos de credential_stuffing/slow_scan (los
+marca como positivos incluso antes de que el gate propio de esos
+detectores cruce) — bajar la sensibilidad general de anomaly le
+quita esa cobertura adicional, y el efecto es desigual entre seeds
+(inestable), no un trade-off limpio y previsible.
+
+**Hallazgo no anticipado (positivo)**: `AccountDiversityWeight=0.5`
+(A3) mejora recall en vez de sacrificarlo (BroadRecall@30% sube de
+0.494 a 0.672) — la reducción del peso, al reducir también el
+denominador de la normalización, redistribuye sensibilidad hacia el
+resto de las features en vez de solo apagar la que correlaciona con
+`failed_auth` (el hallazgo del Punto de Control 2). FP baja menos
+(19% vs. el 52% de A1) pero sin ningún costo de recall — de hecho con
+una ganancia.
+
+### Selección — sin combinar, sin tocar Policy, sin holdout
+
+**Slow Scan: se propone S3** (`MaxVisitorsForNovelPath=3` +
+`MinNovelPathRatio=0.35`). Domina a S1 y S2 en todos los ejes medidos
+— mismo FPR@0% (0.0472, sin cambio), mismo comportamiento @10%, mejor
+recall/detección eventual @30% de los cuatro (0.676 / 0.567 / 0.852)
+— sin ningún trade-off identificado. S1 solo es la alternativa más
+simple (un solo parámetro) si se prefiere un cambio más chico, pero
+S3 no cuesta nada adicional sobre S1.
+
+**Statistical Anomaly: se propone A3** (`AccountDiversityWeight=0.5`
+únicamente). Es el único candidato que MEJORA recall en vez de
+dañarlo (broad@30% +36% relativo), con una reducción de FP real
+aunque modesta (19%), y con estabilidad entre seeds razonable (ningún
+seed se desvía de forma extrema). Se descartan A1/A4/A5 pese a su
+mayor reducción de FP (hasta 78% en A5) porque dañan recall de forma
+seria e IRREGULAR entre seeds — en particular, la caída de recall de
+credential_stuffing a 0.34–0.55 en algunos seeds es un costo
+demasiado alto e impredecible para una mejora de FP que, de todos
+modos, no llega a eliminar el problema (nunca "deja de Triggered").
+A2 es la alternativa conservadora si se prefiere tocar menos: FP baja
+26% con daño de recall mínimo, pero bastante menos ambicioso que A3.
+
+Ningún candidato se combinó. `Policy` no se tocó. No se usó holdout.
+Se espera aprobación antes de seguir.
+
+## 2026-09-28 — Sweep combinado C0–C3 (tarea 1.9)
+
+Ejecutado con `go run ./cmd/sweepcombined` — solo tuning, nunca
+holdout. `credential_stuffing`, `ScoreFloor`, `ChallengeThreshold` y
+`BlockThreshold` sin tocar. Reporte completo:
+`reports/tuning/sweep-combined.md`. S3 (`MaxVisitorsForNovelPath=3` +
+`MinNovelPathRatio=0.35`) queda como base común de los tres
+candidatos no-baseline — todavía sin congelar.
+
+### Infraestructura nueva
+
+`internal/tuning/attribution.go` (`ComputeMitigationAttribution`):
+para cada evento MITIGADO de un vector, clasifica si disparó su
+propio detector, si también disparó `statistical_anomaly`, si
+dependió únicamente de `anomaly`, o si fue una señal cruzada — sin
+ninguna corrida nueva, reutiliza los Finding crudos que ya expone
+`RunDiagnostics`. `internal/tuning/sweep_combined.go`: agrega
+`RunResult`/`DelaySummary`/atribución en una fila por
+candidato×seed, con promedios entre seeds.
+
+### Hallazgo estructural, no buscado pero central: credential_stuffing nunca mitiga solo
+
+En los 4 candidatos, en los 3 seeds, sin ninguna excepción:
+`DetectorOnly` de `credential_stuffing` es **0** siempre. A 10%, el
+100% de sus eventos mitigados dependen ÚNICAMENTE de
+`statistical_anomaly` (`AnomalyOnly`); a 30%, ~33% dependen solo de
+anomaly y ~67% tienen a los dos disparando juntos
+(`WithAnomalyAssist`) — pero el propio gate de `credential_stuffing`
+JAMÁS dispara sin que anomaly también lo haga. La causa más probable:
+`credential_stuffing.Window=30min` es mucho más corta que
+`StuffingWindow=3h` (la campaña se genera repartida en 3 horas) — en
+cualquier ventana de 30 minutos, las ~20-77 IPs atacantes rara vez se
+concentran lo suficiente como para que `MinDistinctIPs=20` cruce por
+sí solo. La conclusión de la tarea 0.9/Punto de Control 2 ("credential
+stuffing funciona sólido, no necesita cambios") medía la Decision
+FINAL, no quién la producía — con esta nueva evidencia, ese recall es
+en gran parte prestado de `statistical_anomaly`, no del propio
+detector correlacionado. No se toca nada de esto ahora (fuera de
+alcance explícito de este paso), pero queda documentado porque
+cambia cómo hay que leer cualquier costo de recall de
+`credential_stuffing` en los candidatos de abajo: ese costo es, casi
+siempre, un costo a la AYUDA que anomaly le presta a
+credential_stuffing, no un daño al propio detector correlacionado.
+
+Para `slow_scan`, el mismo patrón se sostiene en C0/C1/C2
+(`DetectorOnly=0` siempre) — pero en **C3** (`TriggerThreshold=0.20`)
+aparece `DetectorOnly=123` de 541 a 30% (23%): al exigirle más
+evidencia a anomaly antes de disparar, algunas detecciones de
+slow_scan pasan a depender solo de su propio gate por primera vez.
+
+### Resultados agregados (promedio de 3 seeds)
+
+| Candidato | FPR@0% | BroadRecall@30% | Precision@30% | F1@30% | Recall CS@30% | Recall SS@30% |
+|---|---|---|---|---|---|---|
+| C0 baseline (S0+A0) | 0.0472 | 0.4940 | 0.9067 | 0.6361 | 0.9267 | 0.3050 |
+| C1 slowscan-only (S3+A0) | 0.0472 (=) | 0.6757 | 0.9297 | 0.7757 | 0.9267 (=) | 0.5669 |
+| C2 slowscan+account-weight (S3+A3) | 0.0384 | **0.7503** | 0.9468 | **0.8292** | 0.8985 | **0.6862** |
+| C3 slowscan+trigger020 (S3+A2) | **0.0350** | 0.6303 | 0.9566 | 0.7545 | **0.9267 (=)** | 0.5013 |
+
+### C2 vs. C3 — el contraste pedido explícitamente
+
+- **Falsos positivos**: C3 levemente mejor (FPR 0.0350 vs 0.0384) —
+  diferencia chica, del orden de la variabilidad normal entre seeds.
+- **Recall general (broad@30%)**: C2 claramente mejor (0.750 vs
+  0.630, +12 puntos).
+- **Recall credential_stuffing@30%**: C3 no tiene NINGÚN costo
+  (0.9267, igual que baseline) — C2 cuesta ~3 puntos (0.8985). Dado
+  el hallazgo de arriba, este costo es específicamente la asistencia
+  de anomaly a credential_stuffing volviéndose un poco menos
+  frecuente, no el propio detector correlacionado empeorando.
+- **Recall slow_scan@30%**: C2 gana con claridad (0.686 vs 0.501,
+  +18.5 puntos) — es la métrica que motivó todo este sweep, y C2 la
+  resuelve mucho mejor.
+- **Estabilidad entre seeds**: ninguno de los dos es perfectamente
+  estable — `Recall SS@30%` por seed es 0.738/0.884/0.438 en C2
+  (rango 0.45) y 0.409/0.693/0.403 en C3 (rango 0.29, pero con
+  valores centrales más bajos). `Recall CS@30%` es más estable en
+  ambos (C2: 0.872/0.934/0.890; C3: 0.872/0.961/0.948).
+
+**Lectura, sin elegir automáticamente**: C2 es la opción más fuerte
+para el objetivo original de este sweep (recall de slow_scan) y para
+recall general, a cambio de un costo chico y mecánicamente explicado
+en credential_stuffing (vía la asistencia de anomaly, no el detector
+en sí) y una FPR apenas mayor. C3 es la opción "no tocar
+credential_stuffing bajo ninguna circunstancia", pero deja gran parte
+del problema original de slow_scan sin resolver.
+
+Nada se congeló. `ScoreFloor` y `Policy` sin tocar. No se usó
+holdout. Se espera aprobación antes de seguir.
+
+## 2026-09-28 — Diagnóstico de credential_stuffing: ventana real vs. ground truth (tarea 1.9)
+
+C2 (S3+A3) aprobado como líder provisional, sin congelar. Antes de
+tocar `ScoreFloor`/Policy, se investigó el hallazgo del sweep
+combinado (`credential_stuffing` nunca aparece como `DetectorOnly`).
+Ejecutado con `go run ./cmd/diagnosecs`, usando C2 tal cual (S3/A3 sin
+tocar) — reporte completo:
+`reports/tuning/diagnose-credstuffing.md`.
+
+### Infraestructura nueva
+
+`credstuffing.Detector.EvaluateGateMetrics` (+ `GateMetrics`): mismo
+patrón que `slowscan`/`anomaly` — expone `DistinctIPs`,
+`DistinctAccounts`, `TotalAttempts`, `FailedRatio` SIN IMPORTAR si el
+gate disparó. `evaluateGroup` se refactorizó para llamar al mismo
+`gateMetricsFor` interno — una sola fórmula, comportamiento
+verificado idéntico (todos los tests existentes en verde + 3
+nuevos). `internal/tuning/diagnose_credstuffing.go`
+(`AnalyzeCredentialStuffingCampaigns`): agrupa por seed+ratio+grupo de
+red, calcula el MÁXIMO de cada señal del gate observado en
+CUALQUIER momento de la campaña (nunca el total ground truth), y
+compara contra los thresholds actuales.
+
+### El diagnóstico, con datos reales
+
+| Seed | Ratio | Requests | IPs totales | Cuentas totales | Max ventana IPs (min 20) | Max ventana Cuentas (min 15) | Max ventana Attempts (min 25) | Gates limitantes | Detectada (gate propio) |
+|---|---|---|---|---|---|---|---|---|---|
+| 101 | 10% | 38 | 20 | 36 | 9 | 10 | 11 | IPs, Accounts, Attempts | **false** |
+| 102 | 10% | 43 | 19 | 43 | 12 | 15 | 15 | IPs, Attempts | **false** |
+| 103 | 10% | 47 | 20 | 46 | 13 | 13 | 14 | IPs, Accounts, Attempts | **false** |
+| 101 | 30% | 156 | 76 | 149 | 32 | 36 | 37 | (ninguno) | **true** (req. #25) |
+| 102 | 30% | 152 | 73 | 148 | 34 | 36 | 37 | (ninguno) | **true** (req. #25) |
+| 103 | 30% | 172 | 76 | 165 | 33 | 39 | 40 | (ninguno) | **true** (req. #42) |
+
+`FailedRatio` nunca es limitante en ninguna campaña (siempre 1.00 vs
+mínimo 0.60 — funciona correctamente, no se toca).
+
+**A 30% no hay ningún gate limitante — el detector SÍ dispara solo**,
+alrededor del request #25-42 de 152-172. La hipótesis de "la ventana
+es el problema" NO se sostiene acá: simplemente hay suficiente
+densidad de tráfico dentro de cualquier ventana de 30 minutos.
+
+**A 30%, el atributo "0% Credential only" no es un fallo del
+detector**: una vez que su gate cruza, CADA evento restante también
+tiene a `statistical_anomaly` disparando en simultáneo — coinciden,
+en vez de que credential_stuffing haga el trabajo solo. Esto explica
+el `DetectorOnly=0` del sweep anterior en un sentido MENOS alarmante
+de lo que parecía: el detector SÍ funciona a 30%, solo que nunca le
+toca "ganar" en soledad porque anomaly ya está activo para ese mismo
+tramo de la campaña.
+
+**A 10%, la hipótesis SÍ se confirma, pero de forma más precisa que
+"Window=30min + MinDistinctIPs=20"**: los TOTALES completos de la
+campaña (19-20 IPs a lo largo de las ~3 horas enteras) ya están
+apenas EN el umbral — ni siquiera una ventana que cubriera la
+campaña completa garantizaría cruzar `MinDistinctIPs=20` con margen.
+Además, **`MinDistinctAccounts` y `MinAttempts` también están
+limitando simultáneamente** en 2 de 3 seeds — no es un problema de un
+solo gate, es que el volumen total que el 10% de tráfico malicioso
+genera para esta campaña está muy cerca (IPs) o holgadamente por
+debajo (ventana de Accounts/Attempts) de los tres umbrales a la vez.
+
+Distribución del máximo de DistinctIPs por ventana, tal como se pidió
+por ser el gate más consistentemente limitante:
+
+- Todas las campañas: N=6, min=9, p50=13, p95=34, max=34.
+- **Solo 10%**: N=3, min=9, p50=12, max=13 — ninguna se acerca
+  remotamente a 20.
+- **Solo 30%**: N=3, min=32, p50=33, max=34 — todas superan 20
+  cómodamente.
+
+Una distribución claramente bimodal: no hay un punto intermedio
+"casi cruza" — o el gate cruza con margen amplio, o se queda muy
+lejos.
+
+### Candidatos propuestos para Credential Stuffing — todavía SIN ejecutar
+
+Se evita tocar `MinDistinctAccounts`, `MinAttempts` y
+`MinFailedRatio` de forma aislada: no son el limitante más
+consistente (Accounts/Attempts solo limitan a 10%, y son síntoma del
+mismo déficit de volumen que IPs, no un problema propio;
+FailedRatio funciona bien siempre). Solo se consideran
+`MinDistinctIPs` y `Window`, según lo autorizado:
+
+| Candidato | Cambio | Expectativa explícita, antes de correrlo |
+|---|---|---|
+| `CS1-window-60m` | `Window`: 30min→60min | Se espera una mejora PARCIAL, insuficiente sola: duplicar la ventana debería acercar el máximo observado a los totales de la campaña (19-20), pero eso sigue estando muy cerca del umbral actual (20) — probablemente no cruce con margen en los 3 seeds. |
+| `CS2-mindistinctips-15` | `MinDistinctIPs`: 20→15 | Se espera que TAMPOCO alcance solo: el máximo observado a 10% (9, 12, 13) sigue por debajo de 15 en los TRES seeds con la ventana actual — bajar el umbral sin tocar la ventana no alcanza con estos datos. |
+| `CS3-window-60m-mindistinctips-15` | Los dos combinados | El candidato que efectivamente se espera que funcione: la ventana más ancha debería acercar el máximo observado a los totales (19-20), y un umbral de 15 (no 20) da margen real para cruzar en los 3 seeds sin necesitar el total exacto de la campaña. |
+
+Advertencia explícita para cuando se ejecuten: bajar `MinDistinctIPs`
+tiene que revisarse contra `FPR@0%` en la siguiente corrida — nunca
+se asumió que estos datos por sí solos garanticen que no aparezcan
+falsos positivos nuevos, eso se mide, no se da por sentado.
+
+No se ejecutó ningún candidato. `S3`, `A3`, `ScoreFloor`,
+`ChallengeThreshold`, `BlockThreshold` sin tocar. No se usó holdout.
+Se espera aprobación antes de seguir.
+
+## 2026-09-28 — Sensibilidad de credential_stuffing a Window: verificación offline antes del sweep (tarea 1.9)
+
+Antes de aprobar el sweep de Credential Stuffing, se pidió una
+corrección al diagnóstico anterior: `MinAttempts=25` también es un
+gate consistentemente limitante a 10% (11, 15, 14 — los tres por
+debajo de 25 con `Window=30min`), algo que el análisis previo no
+había señalado como igual de central que `MinDistinctIPs`. Se pidió
+recalcular, offline y sin tocar ningún threshold ni el detector de
+producción, el máximo rolling de las cuatro señales del gate con
+`Window=30min` (producción), `60min` y `90min`, usando exactamente
+los mismos eventos de las tres campañas al 10%.
+
+### Infraestructura nueva
+
+`internal/tuning/window_sensitivity.go`: `WindowSensitivityRow`,
+`AnalyzeWindowSensitivity(scenario, resolver, baseCfg, windows)` —
+construye, por cada duración en `windows`, un `credstuffing.Detector`
+propio y limpio (misma `Config` que `baseCfg`, solo cambia `Window`)
+y lo corre sobre **todos** los eventos del escenario (igual que
+`RunDiagnostics`: el detector real también observa tráfico legítimo
+del mismo grupo de red, no solo el malicioso), registrando el máximo
+histórico de cada señal únicamente en los eventos etiquetados
+`credential_stuffing`. `RenderWindowSensitivity` arma el reporte.
+Cubierto por `window_sensitivity_test.go` (2 tests: que una ventana
+más ancha nunca baja el máximo, y que `Observe` sí procesa tráfico
+legítimo aunque el máximo solo se mida en eventos CS-etiquetados).
+`cmd/diagnosecswindow` corre esto sobre los seeds 101/102/103 al 10%
+con el candidato C2 (S3+A3, thresholds de credential_stuffing
+iguales al baseline) y escribe
+`reports/tuning/diagnose-cs-window.md`. Suite completa
+(`gofmt`/`go vet`/`go test`/`go test -race`) en verde después de
+agregar esto.
+
+### El resultado, con datos reales
+
+| Seed | Window | Max IPs (min 20) | Max Cuentas (min 15) | Max Attempts (min 25) | Max FailedRatio (min 0.60) |
+|---|---|---|---|---|---|
+| 101 | 30m | 9 | 10 | 11 | 1.00 |
+| 101 | 60m | 14 | 17 | 18 | 1.00 |
+| 101 | 90m | 16 | 23 | 24 | 1.00 |
+| 102 | 30m | 12 | 15 | 15 | 1.00 |
+| 102 | 60m | 16 | 23 | 23 | 1.00 |
+| 102 | 90m | 18 | 30 | 30 | 1.00 |
+| 103 | 30m | 13 | 13 | 14 | 1.00 |
+| 103 | 60m | 19 | 21 | 22 | 1.00 |
+| 103 | 90m | 19 | 27 | 28 | 1.00 |
+
+Respuestas a las cuatro preguntas planteadas:
+
+1. **¿60m por sí sola hace cruzar Accounts/Attempts?** Accounts sí,
+   en los tres seeds (17, 23, 21 ≥ 15). Attempts NO, en ninguno de
+   los tres (18, 23, 22 — los tres por debajo de 25).
+2. **¿Qué gates siguen fallando con 60m?** `MinDistinctIPs` (14, 16,
+   19 — los tres por debajo de 20) y `MinAttempts` (18, 23, 22 — los
+   tres por debajo de 25), en los tres seeds sin excepción.
+   `MinDistinctAccounts` y `MinFailedRatio` ya no limitan a 60m.
+3. **¿90m cruza todos los gates actuales?** NO. `MinDistinctIPs`
+   sigue sin cruzar en NINGÚN seed incluso a 90m (16, 18, 19 — los
+   tres por debajo de 20: ensanchar la ventana ayuda pero no alcanza
+   ni al triple de duración de producción). `MinAttempts` cruza en 2
+   de 3 seeds a 90m (30, 28 ≥ 25) pero sigue fallando en el seed 101
+   (24 < 25, por un solo intento).
+4. **¿Cambio mínimo que permite detectar las tres campañas al 10%
+   sin tocar más thresholds de los necesarios?** Ensanchar
+   únicamente la ventana (aun a 90m) NO alcanza — `MinDistinctIPs`
+   queda estructuralmente por debajo del umbral en los tres seeds
+   sin importar cuánto se ensanche dentro de lo razonable, y
+   `MinAttempts` sigue fallando en uno de tres seeds incluso a 90m.
+   Hace falta combinar `Window` con una reducción de **ambos**
+   `MinDistinctIPs` y `MinAttempts` — no alcanza con uno solo de los
+   dos, la corrección del enunciado sobre `MinAttempts` resultó
+   correcta. `MinDistinctAccounts` y `MinFailedRatio` no necesitan
+   tocarse: ya cruzan solos con `Window=60min` en los tres seeds (o,
+   en el caso de `MinFailedRatio`, ya cruzan siempre, sin importar la
+   ventana).
+
+### Candidatos revisados para Credential Stuffing — reemplazan a CS1/CS2/CS3, todavía SIN ejecutar
+
+Los candidatos `CS1`/`CS2`/`CS3` de la sección anterior quedan
+descartados sin ejecutar: `CS3-window-60m-mindistinctips-15`
+suponía que 60m alcanzaba para Accounts/Attempts, pero los datos
+muestran que Attempts sigue fallando a 60m en los tres seeds — ese
+candidato específico no habría funcionado. Los siguientes tres
+candidatos usan directamente los máximos observados a 90m (el mínimo
+entre los tres seeds, para que los tres crucen):
+
+| Candidato | Cambio | Expectativa explícita, antes de correrlo |
+|---|---|---|
+| `CSw1-window-90m` | `Window`: 30min→90min, sin tocar ningún threshold | Confirma que la ventana sola NO alcanza: `MinDistinctIPs` (16/18/19 vs 20) y, en el seed 101, `MinAttempts` (24 vs 25) siguen sin cruzar. Se incluye como control, no como candidato final. |
+| `CSw2-window-90m-mindistinctips-16` | `Window`→90min + `MinDistinctIPs`: 20→16 (el mínimo de los tres máximos observados a 90m: 16, 18, 19) | Cierra el gate de IPs en los tres seeds, pero `MinAttempts` sigue fallando en el seed 101 (24<25) — se espera insuficiente todavía. |
+| `CSw3-window-90m-mindistinctips-16-minattempts-24` | `Window`→90min + `MinDistinctIPs`: 20→16 + `MinAttempts`: 25→24 (el mínimo de los tres máximos observados a 90m: 24, 30, 28) | El candidato que se espera que efectivamente detecte las tres campañas al 10% — los cuatro gates cruzan con los máximos reales observados. `MinDistinctAccounts` y `MinFailedRatio` quedan sin tocar. |
+
+Advertencia explícita, para cuando se ejecuten: `MinDistinctIPs=16`
+y `MinAttempts=24` están fijados en el mínimo exacto observado entre
+solo 3 seeds de tuning — sin ningún margen. Esto es deliberadamente
+agresivo para poder medir el trade-off real contra `FPR@0%` en la
+próxima corrida, no una recomendación final; es muy posible que el
+valor que finalmente se elija termine con algo de margen por encima
+de estos mínimos, una vez visto el impacto en falsos positivos.
+
+No se ejecutó ningún candidato. `S3`, `A3`, `ScoreFloor`,
+`ChallengeThreshold`, `BlockThreshold` sin tocar. No se usó holdout.
+Se espera aprobación antes de seguir.
+
+## 2026-09-28 — Sweep de Credential Stuffing: CS0–CSw4 (tarea 1.9)
+
+Se aprobó ejecutar el sweep de credential_stuffing, con la precisión
+de que `MinDistinctIPs=16` y `MinAttempts=24` (usados en `CSw3`) son
+mínimos derivados de solo 3 seeds de tuning — un candidato
+experimental agresivo, no una configuración final. Se corrieron 5
+candidatos sobre tuning (seeds 101/102/103, ratios 0/10/30%), todos
+partiendo de C2 (S3+A3) para slow_scan/anomaly — sin tocar esos dos
+detectores, `ScoreFloor`, `Policy` ni usar holdout:
+
+| Candidato | Window | MinDistinctIPs | MinAttempts | MinDistinctAccounts | MinFailedRatio |
+|---|---|---|---|---|---|
+| `CS0-baseline` | 30m | 20 | 25 | 15 | 0.60 |
+| `CSw1-window90` | 90m | 20 | 25 | 15 | 0.60 |
+| `CSw2-window90-ips16` | 90m | 16 | 25 | 15 | 0.60 |
+| `CSw3-window90-ips16-attempts24` | 90m | 16 | 24 | 15 | 0.60 |
+| `CSw4-conservative` | 90m | 18 | 25 | 15 | 0.60 |
+
+### Infraestructura nueva
+
+`internal/tuning/sweep_credstuffing.go`: `CredentialStuffingSweepRow`
+(FPR@0%, precision/F1/recall broad @10/30, recall de
+credential_stuffing **detector-específico** —
+`credentialStuffingDetectorRecall`, request-level sobre
+`CredentialStuffing.Triggered` — mantenido separado del recall
+**decision-based** existente, detección eventual de campaña y
+requests/tiempo a esa detección vía el gate propio —
+`csDetectionStats`, nunca promedia campañas no detectadas — y
+atribución credential-only/anomaly-only/both/neither pooled sobre
+conteos crudos, nunca sobre porcentajes ya redondeados de campañas de
+distinto tamaño — `pooledAttributionPct`), `ComputeCredentialStuffingSweepRow`,
+`AggregateCredentialStuffingSweepRows`, `RenderCredentialStuffingSweep`.
+Se extendió `CredentialStuffingCampaignAnalysis` (en
+`diagnose_credstuffing.go`) con `TimeToFirstDetection` (N/A-seguro) y
+los conteos crudos `CredOnlyEvents`/`AnomOnlyEvents`/`BothEvents`/`NeitherEvents`
+detrás de cada `Pct*` — necesarios para agregar varias campañas sin
+perder precisión. Cubierto por 6 tests nuevos en
+`sweep_credstuffing_test.go`. `cmd/sweepcs` corre los 5 candidatos y
+escribe `reports/tuning/sweep-credstuffing.md`. Suite completa
+(`gofmt`/`go vet`/`go test`/`go test -race`) en verde antes y después
+de correr el sweep real.
+
+### Resultado — métricas generales (broad, overall, promedio de 3 seeds)
+
+| Candidato | FPR@0% | Precision@30% | F1@30% | BroadRecall@30% | StrictRecall@30% (BLOCK) |
+|---|---|---|---|---|---|
+| CS0-baseline | 0.0384 | 0.9468 | 0.8292 | 0.7503 | 0.0805 |
+| CSw1-window90 | 0.0384 | 0.9476 | 0.8389 | 0.7647 | 0.2264 |
+| CSw2-window90-ips16 | 0.0384 | 0.9476 | 0.8389 | 0.7647 | 0.2589 |
+| CSw3-window90-ips16-attempts24 | 0.0384 | 0.9476 | 0.8389 | 0.7647 | 0.2615 |
+| CSw4-conservative | 0.0384 | 0.9476 | 0.8389 | 0.7647 | 0.2498 |
+
+**Hallazgo importante: `FPR@0%` es IDÉNTICO en los 5 candidatos**
+(0.0186/0.0626/0.0340 por seed, sin variar). En el escenario 0% de
+este generador no hay tráfico legítimo que se parezca lo suficiente a
+credential stuffing (mismo ASN, mismo endpoint de auth, volumen alto)
+como para que bajar estos umbrales dispare ningún FP nuevo. Esto NO
+debe leerse como "es seguro bajar los umbrales" en términos
+absolutos — es una limitación conocida del dataset sintético actual,
+no una garantía: el FPR@0% de este sweep solo demuestra que
+`MinDistinctIPs=16`/`MinAttempts=24` no rompen nada CONTRA ESTE
+generador, no que sean seguros contra tráfico legítimo real con
+patrones de login de alto volumen (por ejemplo, un servicio interno
+con reintentos automáticos).
+
+`BroadRecall@30%` y `Precision@30%`/`F1@30%` mejoran de forma
+prácticamente IDÉNTICA en los 4 candidatos con `Window=90m` frente al
+baseline (0.7503→0.7647) — el salto lo produce ensanchar la ventana,
+no los ajustes de `MinDistinctIPs`/`MinAttempts` sobre ella: una vez
+que la ventana es suficiente, `statistical_anomaly` ya cubre casi
+todo lo que falta a nivel Decision, igual que documentó el diagnóstico
+anterior. Donde SÍ hay diferencia entre los 4 candidatos con Window=90m
+es en `StrictRecall@30%` (BLOCK puro): `CSw3` es el mejor (0.2615),
+seguido de `CSw2` (0.2589) y `CSw4` (0.2498) — bajar los umbrales
+ayuda a que el RiskScore de credential_stuffing cruce
+`BlockThreshold=0.80` más seguido, aun cuando no cambie mucho el
+recall broad general.
+
+### Resultado — recall detector-específico vs. decision-based, y detección eventual @10%
+
+| Candidato | RecallDetector@10% | RecallDetector@30% | EventualDet@10% | EventualDet@30% |
+|---|---|---|---|---|
+| CS0-baseline | 0.0000 | 0.6164 | 0/3 | 3/3 |
+| CSw1-window90 | 0.0000 | 0.8515 | 0/3 | 3/3 |
+| CSw2-window90-ips16 | 0.2304 | 0.8515 | 2/3 | 3/3 |
+| CSw3-window90-ips16-attempts24 | 0.2453 | 0.8578 | 2/3 | 3/3 |
+| CSw4-conservative | 0.0948 | 0.8515 | 2/3 | 3/3 |
+
+A 30%, las tres campañas ya se detectaban con el baseline
+(`EventualDet@30%=3/3` en los 5 candidatos) — lo que gana `Window=90m`
+ahí es que el gate queda disparado durante una fracción MUCHO mayor
+de la campaña (`RecallDetector@30%` sube de 0.62 a ~0.85), no que
+detecte campañas que antes se le escapaban del todo.
+
+**Ningún candidato llega a 3/3 a 10%.** `CSw1` (solo ventana) se
+queda en 0/3, igual que el baseline — confirma lo anticipado: la
+ventana sola no alcanza. `CSw2`/`CSw3`/`CSw4` llegan a 2/3 (seeds 102
+y 103), pero **el seed 101 sigue sin detectarse en NINGÚN candidato**,
+incluido `CSw3`, pese a que sus umbrales (`MinDistinctIPs=16`,
+`MinAttempts=24`) coinciden EXACTAMENTE con los máximos observados
+para el seed 101 a `Window=90m` (16 y 24 respectivamente, ver
+diagnóstico anterior).
+
+**Por qué — un matiz importante que el diagnóstico anterior no
+capturaba:** el máximo histórico de cada señal (`MaxWindowDistinctIPs`,
+`MaxWindowTotalAttempts`, etc.) se mide de forma INDEPENDIENTE a lo
+largo de la campaña — el máximo de IPs y el máximo de Attempts pueden
+ocurrir en evaluaciones DISTINTAS, no necesariamente en el mismo
+instante. El gate de credential_stuffing exige que las CUATRO
+condiciones se cumplan SIMULTÁNEAMENTE en la misma evaluación. Para
+el seed 101, el momento en que `DistinctIPs` llega a su máximo (16) no
+es el mismo momento en que `TotalAttempts` llega al suyo (24) — así
+que ninguna combinación de umbrales iguales a "el máximo de cada uno"
+garantiza que el gate cruce. Esto no invalida el enfoque (los
+candidatos SÍ mejoraron la detección en 2 de 3 seeds), pero corrige la
+expectativa: "usar el mínimo de los máximos observados" es una cota
+optimista, no una garantía, porque asume implícitamente que las
+señales co-ocurren.
+
+### Resultado — atribución por evento credential_stuffing (pooled entre seeds)
+
+| Candidato | Ratio | Credential only | Anomaly only | Both | Neither |
+|---|---|---|---|---|---|
+| CS0-baseline | 10% | 0.0% | 95.3% | 0.0% | 4.7% |
+| CSw1-window90 | 10% | 0.0% | 95.3% | 0.0% | 4.7% |
+| CSw2-window90-ips16 | 10% | 0.0% | 71.1% | 24.2% | 4.7% |
+| CSw3-window90-ips16-attempts24 | 10% | 0.0% | 69.5% | 25.8% | 4.7% |
+| CSw4-conservative | 10% | 0.0% | 85.2% | 10.2% | 4.7% |
+| CS0-baseline | 30% | 0.0% | 34.8% | 62.1% | 3.1% |
+| CSw1-window90 | 30% | 0.0% | 11.7% | 85.2% | 3.1% |
+| CSw2/CSw3/CSw4 | 30% | 0.0% | ~11.0-11.7% | ~85.2-85.8% | 3.1% |
+
+`Credential only` sigue en 0.0% en los 5 candidatos, en los dos
+ratios: credential_stuffing nunca termina de "ganar solo" — pero la
+categoría `Both` sube muchísimo con `Window=90m` (30%: 62%→85%; 10%:
+0%→24-26% en CSw2/CSw3), confirmando que el gate SÍ empieza a
+disparar de forma mucho más consistente, solo que casi siempre en
+paralelo con `statistical_anomaly`, nunca en soledad.
+
+### Comparación explícita: cobertura vs. FPR vs. detection delay
+
+- **FPR@0%**: idéntico en los 5 (con la salvedad de dataset ya
+  señalada) — este sweep, tal como está, no distingue a los
+  candidatos por este eje.
+- **Cobertura (recall + detección eventual)**: `CSw3` es
+  consistentemente el mejor o empatado con el mejor en cada métrica
+  de cobertura medida (`RecallDetector@10/30`, `StrictRecall@30`),
+  pero por márgenes pequeños sobre `CSw2`/`CSw4` — y ninguno resuelve
+  el seed 101 a 10%.
+  `CSw4` (el "conservador", sin tocar `MinAttempts`) logra
+  prácticamente la misma detección eventual (2/3 a 10%) que
+  `CSw2`/`CSw3`, con umbrales menos agresivos en `MinDistinctIPs`
+  (18 en vez de 16).
+- **Detection delay**: `CSw3` detecta ligeramente más rápido que
+  `CSw2`/`CSw4` en los seeds que sí detecta a 10% (request 23-25 vs.
+  24-26), una diferencia marginal, no dramática.
+- **Riesgo/agresividad**: `CSw3` es el más agresivo (dos umbrales
+  bajados al mínimo observado, sin margen); `CSw4` es el más
+  conservador de los que sí mejoran algo (una sola reducción,
+  moderada); `CSw2` queda en el medio.
+
+No se seleccionó ningún candidato automáticamente. `S3`, `A3`,
+`ScoreFloor`, `ChallengeThreshold`, `BlockThreshold` sin tocar. No se
+usó holdout. Se espera tu comparación y aprobación antes de congelar
+cualquier configuración de credential_stuffing.
+
+## 2026-09-28 — Detector layer congelada en D1; sweep de Policy (tarea 1.9)
+
+Se aprobó CSw2 (Window=90m, MinDistinctIPs=16, resto sin cambios) y
+se congeló la detector layer completa para el resto del tuning:
+credential_stuffing CSw2, slow_scan S3, statistical_anomaly A3. A
+partir de acá, S3/A3/CSw2 no se vuelven a tocar durante la
+calibración de Policy — solo se calibra `ChallengeThreshold`/
+`BlockThreshold`, dejando `ScoreFloor` sin cambios, "porque Policy
+está downstream de los detectores y se quiere aislar su efecto antes
+de alterar la escala de RiskScore".
+
+### Optimización de arquitectura: reaplicar Policy sin re-correr detectores
+
+Como `principal.RiskScore`/`AttackVector` (lo que termina en
+`Decision.ConfidenceScore`/`AttackVector`) NO depende de
+`ChallengeThreshold`/`BlockThreshold` — según
+`engine.BehavioralDecider.Decide`, la Policy solo decide la Action a
+partir de un RiskScore ya calculado — se agregó
+`engine.Policy.ActionFor` (wrapper exportado de la regla privada
+`actionFor`, mismo criterio que `eval.Policy.IsPositive`) y
+`internal/tuning.ReapplyPolicy`/`RunResultWithPolicy`: reaplican
+Policy sobre decisiones YA calculadas por D1, sin volver a construir
+ni correr ningún detector. Verificado con un test de equivalencia
+explícito (`TestRunResultWithPolicy_SamePolicy_MatchesFullRun`):
+reaplicar la MISMA Policy que produjo las decisiones originales da
+`Eval`/`Delay` bit-a-bit idénticos a una corrida completa —
+garantiza que la optimización no cambia ningún resultado. Válido
+para cualquier `ChallengeThreshold > 0` (los 9 candidatos del sweep
+lo son). Se agregó también `internal/tuning.ActionDistribution`
+(legit/malicious x ALLOW/CHALLENGE/BLOCK, `FalseChallengeRate`,
+`FalseBlockRate`) y el recall STRICT por vector (`strictByAttackVector`,
+ya que `eval.Evaluate` solo expone `ByAttackVector` en broad).
+Cubierto por 9 tests nuevos. `cmd/sweeppolicy` corrió el sweep real
+en <1s (confirmando que no re-corrió ningún detector 9 veces) y
+escribió `reports/tuning/sweep-policy.md`. Suite completa
+(`gofmt`/`go vet`/`go test`/`go test -race`) en verde antes y
+después.
+
+### El sweep: 9 combinaciones, Challenge ∈ {0.50,0.55,0.60}, Block ∈ {0.70,0.75,0.80}
+
+Las 9 combinaciones sobreviven el filtro Challenge<Block (el máximo
+Challenge, 0.60, ya es menor que el mínimo Block, 0.70).
+
+**Hallazgo estructural central: `FalseBlockRate` es 0.0000 en los 9
+candidatos, en los tres ratios, sin excepción.** Con la detector
+layer D1 y `ScoreFloor` actuales, el RiskScore de tráfico LEGÍTIMO
+nunca cruza ningún `BlockThreshold` del grid — consistente con la
+distribución de RiskScore ya documentada (statistical_anomaly legit
+p95≈0.46, muy por debajo de 0.70). Esto simplifica la lectura del
+sweep: en este dataset, elegir `BlockThreshold` no tiene NINGÚN
+costo observado sobre usuarios legítimos — solo decide qué tan
+agresivamente se trata al tráfico malicioso ya detectado (BLOCK vs
+CHALLENGE), nunca si se bloquea a alguien real.
+
+**Segundo hallazgo estructural: las métricas Broad (Precision/Recall/
+FPR/FNR/F1/FalseChallengeRate) son IDÉNTICAS entre los 3 valores de
+`BlockThreshold`, para un mismo `ChallengeThreshold`.** Es matemático:
+Broad cuenta CHALLENGE y BLOCK como la misma "predicción positiva",
+así que mover la frontera entre CHALLENGE y BLOCK nunca cambia si un
+evento es positivo en términos Broad — solo cambia QUÉ acción
+específica recibe. Solo `BlockThreshold` afecta: `StrictRecall`
+(BLOCK puro), la atribución de `AttackVectorRecall` strict, y el
+reparto `MaliciousChallenge` vs `MaliciousBlock` en la distribución
+de acciones.
+
+| ChallengeThreshold | FPR@0% | Precision@10% | Recall@10% | F1@10% | Precision@30% | Recall@30% | F1@30% |
+|---|---|---|---|---|---|---|---|
+| 0.50 | 0.0381 | 0.7697 | 0.9203 | 0.8383 | 0.9460 | 0.7559 | 0.8403 |
+| 0.55 | 0.0195 | 0.8380 | 0.7246 | 0.7772 | 0.9617 | 0.6208 | 0.7545 |
+| 0.60 | 0.0086 | 0.8889 | 0.5604 | 0.6874 | 0.9751 | 0.5707 | 0.7200 |
+
+Subir `ChallengeThreshold` reduce el FPR de forma monótona (bueno)
+pero también reduce Recall/F1 de forma pronunciada (0.50→0.60 casi
+divide a la mitad el recall a 10% y 30%).
+
+**Tercer hallazgo, no buscado: `CS Strict recall = 0.0000` en los 9
+candidatos**, pese a que el RiskScore de credential_stuffing sobre
+tráfico malicioso (D1, ver sección anterior) tiene p50=0.77 y
+p90=0.84 — muy por encima de cualquier `BlockThreshold` del grid.
+La explicación: cuando credential_stuffing dispara junto con
+`statistical_anomaly` (el caso casi universal, ver
+"WithAnomalyAssist" de la sección anterior), el RiskScore de
+`statistical_anomaly` para ese mismo evento resulta ser mayor (o
+empata sin favorecer a credential_stuffing en la práctica), así que
+`statistical_anomaly` gana como Finding principal y
+`Decision.AttackVector` queda atribuido a `statistical_anomaly`, no a
+`credential_stuffing` — la Policy nunca puede "ver" a
+credential_stuffing como vector ganador en este dataset, sin importar
+dónde se pongan los umbrales. Esto no es un problema de Policy: es
+una consecuencia de cómo `selectPrincipal` desempata por score, y
+queda documentado como una limitación conocida para una futura
+revisión (fuera del alcance actual, que es solo calibrar
+`ChallengeThreshold`/`BlockThreshold`).
+
+**Estabilidad entre seeds**: el Range (max-min entre los 3 seeds) de
+BroadRecall a 30% baja de 0.316 (Challenge=0.50) a 0.266 (0.55) a
+0.153 (0.60) — subir Challenge no solo baja el recall, también lo
+hace más estable entre seeds, a costa de perder cobertura.
+
+### Tres opciones propuestas, con trade-offs claramente distintos — ninguna seleccionada
+
+| Opción | Config | Perfil |
+|---|---|---|
+| **A — Cobertura primero** | Challenge=0.50, Block=0.70 (o 0.75/0.80, Broad idéntico) | Mejor Recall/F1 (0.92/0.76, F1≈0.84), pero mayor FPR (0.033-0.038) y la mayor inestabilidad entre seeds (Range 0.32 @30%). FalseChallengeRate 2.0-3.8%. |
+| **B — Balanceada** | Challenge=0.55, Block=0.70-0.80 | FPR bastante más bajo (0.011-0.020), Precision alta (0.84-0.96), pero Recall/F1 caen sensiblemente (0.72/0.62, F1≈0.75-0.78). Estabilidad intermedia (Range 0.27 @30%). |
+| **C — Precisión/mínima fricción** | Challenge=0.60, Block=0.70-0.80 | El FPR y FalseChallengeRate más bajos del grid (0.007-0.009), mejor Precision (0.89-0.98), pero Recall se derrumba más (0.56/0.57, F1≈0.69-0.72). La más estable entre seeds (Range 0.15 @30%). |
+
+Dentro de cada opción, `BlockThreshold` (0.70/0.75/0.80) no cambia
+ninguna métrica Broad ni `FalseBlockRate` (siempre 0) — solo decide
+qué fracción del tráfico malicioso ya mitigado recibe BLOCK directo
+en vez de CHALLENGE (`StrictRecall` sube de ~0.26 a ~0.47-0.49 al
+bajar Block de 0.80 a 0.70, dentro de cualquier opción).
+
+No se seleccionó ningún candidato por F1 máximo ni por BLOCK recall
+máximo — la elección queda pendiente de aprobación. `ScoreFloor` sin
+tocar. No se usó holdout. Reporte completo con las 9 combinaciones x
+3 seeds x 3 ratios en `reports/tuning/sweep-policy.md`. Se detiene
+acá, después del sweep, según lo pedido.
+
+## 2026-09-28 — Policy aprobada; corrección de attribution; configuración congelada pre-holdout (tarea 1.9)
+
+### Policy final aprobada
+
+`ChallengeThreshold=0.50`, `BlockThreshold=0.75`. Justificación dada
+explícitamente: subir Challenge a 0.55/0.60 reduce FPR pero sacrifica
+demasiado Broad recall; Block=0.80 es demasiado conservador respecto
+a los RiskScores maliciosos observados; Block=0.70 es más agresivo y
+el dataset legítimo de tuning no estresa suficientemente todos los
+patrones benignos como para confiar en el margen; 0.75 es el punto
+intermedio. `FalseBlockRate` fue 0 en las 9 combinaciones del grid,
+pero **eso es una propiedad de estos datasets de tuning, no una
+garantía general** — no se debe asumir que se mantendrá igual contra
+tráfico real o incluso contra holdout.
+
+### Corrección de una limitación semántica de attribution (sin tocar detección, RiskScore ni Policy Action)
+
+Se detectó que `statistical_anomaly`, al tener a veces el mayor
+RiskScore, podía convertirse en principal y dejar
+`attack_vector=unknown` en la Decision aunque `credential_stuffing` o
+`slow_scan` también hubieran disparado — una attribution engañosa:
+"no sabemos qué es esto" cuando sí había una hipótesis específica
+activa.
+
+**Regla de attribution nueva** (`internal/engine/behavioral.go`): se
+separan dos preguntas que antes resolvía el mismo Finding:
+
+1. **Action/ConfidenceScore** ("qué tan riesgoso es"): sigue siendo
+   el mayor RiskScore entre TODOS los Triggered, sin importar qué
+   detector lo produjo — `selectPrincipal`, sin cambios de lógica
+   (solo refactorizado para compartir el desempate con
+   `selectAttribution` vía el helper `bestIndexByScore`).
+2. **AttackVector/EntityID/ContributingSignals/Explanation
+   principal** ("de qué ataque se trata"): si CUALQUIER detector
+   ESPECÍFICO (`credential_stuffing`/`slow_scan`) disparó, se usa el
+   de mayor RiskScore ENTRE ESOS — `statistical_anomaly` nunca es
+   candidato en ese caso, sin importar cuánto mayor sea su propio
+   score. Solo cuando NINGÚN específico disparó se usa
+   `statistical_anomaly` (que ya reporta `unknown` como su propio
+   AttackVector, no una regla especial de esta función) —
+   `selectAttribution`.
+
+El desempate determinista entre detectores específicos (credential_stuffing
+gana un empate exacto contra slow_scan) se mantiene sin cambios,
+ahora factorizado en `bestIndexByScore` y reutilizado por las dos
+funciones. `explanationFor` pasó a recibir `decisionScore` por
+separado del Finding atribuido, y el texto dice "decision score" en
+vez de "risk score" para no insinuar que ese número es el RiskScore
+propio de la evidencia descrita — y ya no afirma "but scored lower"
+sobre los secondaries (podía ser falso: un secondary puede tener
+score mayor y perder igual por no ser específico).
+
+**Tests nuevos** (`internal/engine/behavioral_test.go`): 5 tests
+unitarios puros sobre `selectAttribution`/`bestIndexByScore` con
+`triggeredFinding` sintéticos (específico gana con score menor;
+ambos específicos, gana el mayor score; empate exacto respeta la
+prioridad; solo anomaly da `unknown`; vacío da `nil`), más un test de
+integración de extremo a extremo con detectores reales
+(`TestDecide_AttributionPrefersSpecific_ButConfidenceScoreStaysMax`):
+credential_stuffing dispara a su ScoreFloor (0.2, mismo escenario ya
+verificado en un test anterior) mientras `statistical_anomaly`, con
+el baseline global ya calentado, dispara con un score claramente
+mayor para la misma IP — confirma que `AttackVector`/`EntityID` quedan
+en `credential_stuffing` mientras `ConfidenceScore` sigue siendo el
+score MÁS ALTO (mayor al 0.2 de referencia), nunca el propio de
+credential_stuffing. Los 20 tests preexistentes de
+`internal/engine` pasan sin ningún cambio — incluido
+`TestDecide_AnomalyFindingCanBePrincipal_WhenHigherScore` (sigue
+dando `unknown`, porque ahí NINGÚN detector específico dispara nunca,
+por construcción) y `TestDecide_OtherDetectorStaysPrincipal_OverAnomaly`
+(sigue dando `slow_scan`, ahora por una razón estructuralmente más
+fuerte: es el único específico disparado, ya no depende de que su
+score sea mayor).
+
+### Verificación empírica: re-corrida de tuning, resultado idéntico
+
+Se re-corrió `cmd/sweeppolicy` (detector layer D1 + los 9 candidatos
+de Policy, tuning completo) con el código YA corregido, y se comparó
+el reporte resultante contra una copia guardada de ANTES del cambio
+de attribution: **`diff` entre ambos reportes fue completamente
+vacío** — cero diferencias en absolutamente ningún número, incluidos
+`TP/FP/TN/FN`, `Precision`, `Recall`, `FPR`, `FNR`, `F1` (broad y
+strict), la distribución de Action, y hasta el recall por vector
+(`CS Broad/Strict`, `SlowScan Broad/Strict`). Esto confirma la
+equivalencia pedida: la corrección de attribution no cambió ninguna
+métrica de acción.
+
+**Corrección a una afirmación anterior**: en el resumen del sweep de
+Policy se dijo "CS Strict recall = 0.0000 en los 9 candidatos" sin
+matizar — la re-lectura del reporte muestra que eso solo es exacto a
+**10%** (muestra chica, genuinamente 0 ahí); a **30%** `CS Strict
+recall` ya era sustancial (0.57-0.74) ANTES de este cambio también.
+La explicación correcta: la RiskScore mediana de credential_stuffing
+sobre tráfico malicioso (~0.77) ya solía ser más alta que la de
+statistical_anomaly (~0.50) en los eventos donde ambos coinciden, así
+que credential_stuffing YA ganaba el desempate por score en la
+mayoría de esos casos, incluso con la regla anterior — por eso la
+corrección de attribution no cambió nada medible en este dataset
+específico: no es que el cambio no funcione, es que en este dataset
+concreto casi nunca se daba la condición (anomaly con score
+mayor) que el cambio corrige. El test de integración nuevo prueba
+explícitamente que si esa condición SÍ se da, la corrección actúa
+como se espera.
+
+### Configuración final congelada, pre-holdout
+
+**Detector config final:**
+
+| Detector | Parámetro | Valor |
+|---|---|---|
+| credential_stuffing (CSw2) | Window | 90 min |
+| | MinDistinctIPs | 16 |
+| | MinDistinctAccounts | 15 (sin cambios) |
+| | MinAttempts | 25 (sin cambios) |
+| | MinFailedRatio | 0.60 (sin cambios) |
+| slow_scan (S3) | MaxVisitorsForNovelPath | 3 |
+| | MinNovelPathRatio | 0.35 |
+| statistical_anomaly (A3) | AccountDiversityWeight | 0.5 |
+| | resto | default (`engine.DefaultAnomalyConfig()`) |
+
+**Policy final:** `ChallengeThreshold=0.50`, `BlockThreshold=0.75`.
+
+**ScoreFloor:** sin cambios en los tres detectores (el de cada
+`Default*Config()` — nunca se tocó en ningún paso de la tarea 1.9).
+
+**Regla de attribution** (código, no threshold): un detector
+específico (`credential_stuffing`/`slow_scan`) Triggered siempre gana
+la attribution de `AttackVector`/`EntityID`/`ContributingSignals`
+sobre `statistical_anomaly`, sin importar el RiskScore relativo;
+`Action`/`ConfidenceScore` siguen viniendo del mayor RiskScore entre
+todos los Triggered, sin cambios.
+
+**Limitaciones conocidas, documentadas explícitamente:**
+
+- El dataset de 0% no genera tráfico legítimo de alto volumen desde
+  un mismo ASN/patrón de login — `FalseBlockRate=0` y la
+  insensibilidad de `FPR@0%` a los umbrales de credential_stuffing
+  observadas en el tuning NO deben leerse como garantía contra
+  tráfico legítimo real de ese tipo.
+- `MinDistinctIPs=16`/`Window=90m` de CSw2 se derivaron de los
+  máximos observados en solo 3 seeds de tuning — sin margen de
+  sobra, candidato deliberadamente ajustado a ese dataset concreto.
+- La regla de attribution nueva no fue estresada contra ningún caso
+  donde el score de statistical_anomaly sea mayor en el dataset de
+  tuning real (según el punto anterior, esa condición casi no se dio
+  ahí) — su corrección está probada por el test de integración
+  sintético, no por un cambio medible en las métricas de tuning.
+
+No se ejecutó holdout todavía. El siguiente paso es crear el
+checkpoint/commit pre-holdout y recién después correr holdout (seeds
+201/202/203) con esta configuración congelada.

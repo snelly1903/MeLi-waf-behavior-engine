@@ -48,3 +48,15 @@ func (p Policy) actionFor(score float64) decision.Action {
 		return decision.ActionAllow
 	}
 }
+
+// ActionFor expone actionFor para paquetes fuera de internal/engine
+// que necesitan reaplicar la misma regla score→acción sin duplicarla
+// — por ejemplo internal/tuning (tarea 1.9), para el sweep de Policy:
+// como principal.RiskScore (ConfidenceScore en la Decision final) no
+// depende de ChallengeThreshold/BlockThreshold, reaplicar distintas
+// Policy sobre el MISMO ConfidenceScore ya calculado permite comparar
+// candidatos de Policy sin volver a correr ningún detector. Mismo
+// criterio que eval.Policy.IsPositive.
+func (p Policy) ActionFor(score float64) decision.Action {
+	return p.actionFor(score)
+}

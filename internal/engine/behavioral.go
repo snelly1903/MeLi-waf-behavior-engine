@@ -20,6 +20,13 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/slowscan"
 )
 
+// anomalyPriority es la prioridad de desempate de statistical_anomaly
+// — la más alta (el desempate más débil) de las tres, y la referencia
+// para distinguir "detector específico" (credential_stuffing/
+// slow_scan, priority < anomalyPriority) de "genérico" en
+// selectAttribution (tarea 1.9, corrección de attribution).
+const anomalyPriority = 2
+
 // Errores centinela de construcción, comprobables individualmente con
 // errors.Is.
 var (
@@ -135,7 +142,7 @@ func NewBehavioralDecider(cs *credstuffing.Detector, ss *slowscan.Detector, an *
 		detectors: []namedDetector{
 			{name: "credential_stuffing", detector: cs, priority: 0},
 			{name: "slow_scan", detector: ss, priority: 1},
-			{name: "statistical_anomaly", detector: an, priority: 2},
+			{name: "statistical_anomaly", detector: an, priority: anomalyPriority},
 		},
 		policy:   policy,
 		recorder: recorder,
@@ -147,8 +154,28 @@ func NewBehavioralDecider(cs *credstuffing.Detector, ss *slowscan.Detector, an *
 // Flujo: Observe en todos los detectores primero (el orden entre
 // ellos no importa, no comparten estado); después Evaluate en todos —
 // mismo contrato de dos pasos que cada detector ya exige por
-// separado. Con los Finding disparados, selecciona el principal (ver
-// selectPrincipal) y aplica la Policy.
+// separado. Con los Finding disparados, separa DOS preguntas
+// independientes (tarea 1.9, corrección de attribution — ver
+// docs/decisiones.md):
+//
+//   - Qué tan riesgoso es este evento (Action/ConfidenceScore): el
+//     mayor RiskScore entre TODOS los Triggered, sin importar qué
+//     detector lo produjo — ver selectPrincipal. Esto NUNCA cambió.
+//   - De qué ataque se trata (AttackVector/EntityID/
+//     ContributingSignals/el Explanation principal): SIEMPRE un
+//     detector ESPECÍFICO (credential_stuffing/slow_scan) si alguno
+//     disparó, sin importar si statistical_anomaly tiene un RiskScore
+//     mayor — ver selectAttribution. statistical_anomaly/unknown
+//     queda reservado al caso donde NINGÚN detector específico
+//     disparó.
+//
+// Antes de esta tarea, ambas preguntas las respondía el mismo
+// Finding (el de mayor RiskScore) — así que un statistical_anomaly
+// con score más alto podía dejar attack_vector=unknown aunque
+// credential_stuffing o slow_scan también hubieran disparado, lo cual
+// es una attribution engañosa: "no sabemos qué es esto" cuando en
+// realidad SÍ había una hipótesis específica activa. Separar las dos
+// preguntas corrige eso sin tocar el score ni la Action.
 func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.Decision {
 	for _, nd := range d.detectors {
 		nd.detector.Observe(e)
@@ -163,9 +190,9 @@ func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.De
 		}
 	}
 
-	principal, secondaries := selectPrincipal(triggered)
+	scoreSource, _ := selectPrincipal(triggered)
 
-	if principal == nil {
+	if scoreSource == nil {
 		// Ningún detector disparó: el único caso que cae al default
 		// "nada que reportar" — AttackVector=unknown, score 0. El
 		// EntityID sigue la misma convención que AllowAllDecider
@@ -181,25 +208,29 @@ func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.De
 		}
 	}
 
-	action := d.policy.actionFor(principal.RiskScore)
+	action := d.policy.actionFor(scoreSource.RiskScore)
+
+	// attribution nunca es nil acá: triggered tiene al menos un
+	// elemento (scoreSource != nil lo garantiza), y selectAttribution
+	// solo devuelve nil cuando triggered está vacío.
+	attribution, secondaries := selectAttribution(triggered)
 
 	// La Decision SIEMPRE refleja la evidencia real observada
-	// (AttackVector, ConfidenceScore, EntityID, señales) cuando algún
-	// detector disparó — sin importar si Action terminó en ALLOW
-	// porque el score no alcanzó ChallengeThreshold. Action refleja
-	// qué se hizo con la evidencia; estos campos reflejan qué se
-	// observó. Son preguntas distintas — ver docs/decisiones.md,
-	// tarea 1.5.
-	explanation := explanationFor(*principal, secondaries, action, d.policy)
+	// (AttackVector, EntityID, señales) cuando algún detector
+	// disparó — sin importar si Action terminó en ALLOW porque el
+	// score no alcanzó ChallengeThreshold. Action refleja qué se hizo
+	// con el riesgo; estos campos reflejan DE QUÉ ataque se trata. Son
+	// preguntas distintas — ver docs/decisiones.md, tareas 1.5 y 1.9.
+	explanation := explanationFor(*attribution, secondaries, action, scoreSource.RiskScore, d.policy)
 
 	return decision.Decision{
 		RequestID:           e.RequestID,
 		Timestamp:           e.Timestamp,
-		EntityID:            principal.EntityID,
+		EntityID:            attribution.EntityID,
 		Action:              action,
-		ConfidenceScore:     principal.RiskScore,
-		AttackVector:        principal.AttackVector,
-		ContributingSignals: principal.ContributingSignals,
+		ConfidenceScore:     scoreSource.RiskScore,
+		AttackVector:        attribution.AttackVector,
+		ContributingSignals: attribution.ContributingSignals,
 		Explanation:         explanation,
 	}
 }
@@ -211,33 +242,40 @@ type triggeredFinding struct {
 	priority int
 }
 
-// selectPrincipal elige, entre los Finding que dispararon, cuál se
-// convierte en la evidencia principal de la Decision.
-// FinalRiskScore = el mayor RiskScore entre los Triggered — nunca se
-// suman ni se promedian scores de detectores distintos, cada uno mide
-// algo diferente con su propia escala heurística.
-//
-// En empate exacto gana el de menor número de prioridad (ver
-// NewBehavioralDecider) — regla fija y documentada, no dinámica.
-//
-// secondaries son los demás Finding que también dispararon (nunca
-// nil, puede ser vacío) — se usan únicamente para mencionarlos en la
-// explicación (ver explanationFor), nunca para mezclar sus señales en
-// la Decision.
-func selectPrincipal(triggered []triggeredFinding) (principal *finding.Finding, secondaries []finding.Finding) {
-	if len(triggered) == 0 {
-		return nil, nil
-	}
-
+// bestIndexByScore devuelve el índice, dentro de pool, del
+// triggeredFinding con mayor RiskScore — en empate exacto, el de
+// menor priority (el más específico gana, ver NewBehavioralDecider).
+// Asume len(pool) > 0; usada por selectPrincipal y selectAttribution
+// para no duplicar la regla de desempate en dos lugares.
+func bestIndexByScore(pool []triggeredFinding) int {
 	best := 0
-	for i := 1; i < len(triggered); i++ {
-		c, p := triggered[i], triggered[best]
+	for i := 1; i < len(pool); i++ {
+		c, p := pool[i], pool[best]
 		if c.finding.RiskScore > p.finding.RiskScore ||
 			(c.finding.RiskScore == p.finding.RiskScore && c.priority < p.priority) {
 			best = i
 		}
 	}
+	return best
+}
 
+// selectPrincipal elige, entre los Finding que dispararon, cuál
+// decide Action/ConfidenceScore (tarea 1.9: "qué tan riesgoso es
+// esto", nunca "de qué ataque se trata" — ver selectAttribution para
+// eso). El mayor RiskScore entre TODOS los Triggered — nunca se
+// suman ni se promedian scores de detectores distintos, cada uno mide
+// algo diferente con su propia escala heurística.
+//
+// secondaries son los demás Finding que también dispararon (nunca
+// nil, puede ser vacío) — ya no se usan para construir el
+// Explanation (ver explanationFor, que ahora recibe los secondaries
+// de selectAttribution), se conservan acá solo porque siguen siendo
+// parte del contrato de esta función.
+func selectPrincipal(triggered []triggeredFinding) (principal *finding.Finding, secondaries []finding.Finding) {
+	if len(triggered) == 0 {
+		return nil, nil
+	}
+	best := bestIndexByScore(triggered)
 	for i, t := range triggered {
 		if i != best {
 			secondaries = append(secondaries, t.finding)
@@ -247,23 +285,90 @@ func selectPrincipal(triggered []triggeredFinding) (principal *finding.Finding, 
 	return &f, secondaries
 }
 
+// selectAttribution elige, entre los Finding que dispararon, cuál
+// decide AttackVector/EntityID/ContributingSignals/el Explanation
+// principal (tarea 1.9: "de qué ataque se trata", nunca "qué tan
+// riesgoso es" — ver selectPrincipal para eso). Prioridad estricta:
+// si CUALQUIER detector ESPECÍFICO (credential_stuffing/slow_scan,
+// priority < anomalyPriority) disparó, gana el de mayor RiskScore
+// ENTRE ESOS — statistical_anomaly nunca es candidato en ese caso,
+// sin importar cuánto mayor sea su propio RiskScore. Solo cuando
+// NINGÚN detector específico disparó se usa el/los que sí dispararon
+// (en la práctica, como mucho statistical_anomaly) — ahí
+// AttackVector queda en "unknown" porque ese es el AttackVector
+// propio de statistical_anomaly (ver internal/anomaly), no una regla
+// especial de acá.
+//
+// El desempate DENTRO de cada grupo (entre los específicos, o entre
+// los genéricos si no hay específicos) es el mismo bestIndexByScore
+// de siempre — nunca se introduce una regla de desempate nueva.
+//
+// secondaries son TODOS los demás Finding que dispararon (incluido
+// statistical_anomaly si perdió por esta regla, no solo por score) —
+// se mencionan en el Explanation, nunca se mezclan en la Decision.
+func selectAttribution(triggered []triggeredFinding) (attribution *finding.Finding, secondaries []finding.Finding) {
+	if len(triggered) == 0 {
+		return nil, nil
+	}
+
+	var specificIdx []int
+	for i, t := range triggered {
+		if t.priority < anomalyPriority {
+			specificIdx = append(specificIdx, i)
+		}
+	}
+
+	var chosen int
+	if len(specificIdx) > 0 {
+		pool := make([]triggeredFinding, len(specificIdx))
+		for j, idx := range specificIdx {
+			pool[j] = triggered[idx]
+		}
+		chosen = specificIdx[bestIndexByScore(pool)]
+	} else {
+		chosen = bestIndexByScore(triggered)
+	}
+
+	for i, t := range triggered {
+		if i != chosen {
+			secondaries = append(secondaries, t.finding)
+		}
+	}
+	f := triggered[chosen].finding
+	return &f, secondaries
+}
+
 // explanationFor arma el texto determinista de Decision.Explanation:
-// la explicación del finding principal, el score y la acción
-// resultante, y — por cada detector secundario que también disparó —
-// una mención corta de eso, SIN concatenar sus señales (ver
-// docs/decisiones.md, tarea 1.5, sobre por qué mezclar
-// ContributingSignals de detectores distintos sería engañoso).
-func explanationFor(principal finding.Finding, secondaries []finding.Finding, action decision.Action, policy Policy) string {
+// la explicación de la evidencia ATRIBUIDA (attribution, ver
+// selectAttribution — nunca necesariamente la de mayor RiskScore),
+// junto con decisionScore (el score que REALMENTE decidió Action —
+// ver selectPrincipal, tarea 1.9) y la acción resultante, y — por
+// cada detector secundario que también disparó — una mención corta
+// de eso, SIN concatenar sus señales (ver docs/decisiones.md, tarea
+// 1.5, sobre por qué mezclar ContributingSignals de detectores
+// distintos sería engañoso).
+//
+// decisionScore puede diferir del RiskScore propio de attribution
+// (por ejemplo, cuando statistical_anomaly tiene mayor score pero un
+// detector específico gana la attribution) — el texto dice
+// deliberadamente "decision score", no "risk score", para no insinuar
+// que ese número es el RiskScore propio de la evidencia descrita.
+func explanationFor(attribution finding.Finding, secondaries []finding.Finding, action decision.Action, decisionScore float64, policy Policy) string {
 	var explanation string
 	if action == decision.ActionAllow {
-		explanation = fmt.Sprintf("%s: %s (risk score %.2f, below challenge threshold %.2f; action=ALLOW)",
-			principal.AttackVector, principal.Explanation, principal.RiskScore, policy.ChallengeThreshold)
+		explanation = fmt.Sprintf("%s: %s (decision score %.2f, below challenge threshold %.2f; action=ALLOW)",
+			attribution.AttackVector, attribution.Explanation, decisionScore, policy.ChallengeThreshold)
 	} else {
-		explanation = fmt.Sprintf("%s: %s (risk score %.2f; action=%s)",
-			principal.AttackVector, principal.Explanation, principal.RiskScore, action)
+		explanation = fmt.Sprintf("%s: %s (decision score %.2f; action=%s)",
+			attribution.AttackVector, attribution.Explanation, decisionScore, action)
 	}
+	// Nunca se afirma "scored lower" acá: desde esta tarea, un
+	// secondary puede tener un RiskScore mayor que decisionScore
+	// (por ejemplo, statistical_anomaly perdiendo la attribution
+	// frente a un detector específico con score menor) — el texto se
+	// limita al score, sin caracterizar la comparación.
 	for _, s := range secondaries {
-		explanation = fmt.Sprintf("%s; %s signals were also present (risk score %.2f) but scored lower",
+		explanation = fmt.Sprintf("%s; %s signals were also present (risk score %.2f)",
 			explanation, s.AttackVector, s.RiskScore)
 	}
 	return explanation

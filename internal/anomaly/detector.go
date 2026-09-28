@@ -361,11 +361,17 @@ func extractFeatures(m profile.Metrics) [featureCount]float64 {
 	return f
 }
 
-// evaluateFeatures calcula el z-score unilateral de cada feature de x
-// contra bl, los normaliza y combina, y arma el Finding si el score
-// combinado cruza cfg.TriggerThreshold.
-func (d *Detector) evaluateFeatures(x [featureCount]float64, bl baselineSnapshot, sc scope) finding.Finding {
-	var zs, components [featureCount]float64
+// scoreFeatures calcula el z-score unilateral de cada feature de x
+// contra bl y el score combinado — ANTES de compararlo con
+// cfg.TriggerThreshold y antes de aplicar cfg.ScoreFloor. Es el
+// núcleo matemático que comparten evaluateFeatures (producción, tarea
+// 1.6) y EvaluateDebug (diagnóstico offline, tarea 1.9): se extrajo
+// para que la evaluación diagnóstica pueda ver el score combinado
+// también en el caso NO disparado (evaluateFeatures lo descarta
+// devolviendo finding.Finding{}), sin duplicar esta fórmula en otro
+// lugar.
+func (d *Detector) scoreFeatures(x [featureCount]float64, bl baselineSnapshot) (combined float64, zs [featureCount]float64) {
+	var components [featureCount]float64
 	for i := range x {
 		var stddev float64
 		if bl.n > 1 {
@@ -389,7 +395,13 @@ func (d *Detector) evaluateFeatures(x [featureCount]float64, bl baselineSnapshot
 		weightedSum += components[i] * weights[i]
 		weightSum += weights[i]
 	}
-	combined := weightedSum / weightSum
+	return weightedSum / weightSum, zs
+}
+
+// evaluateFeatures calcula el score combinado de x contra bl y arma el
+// Finding si cruza cfg.TriggerThreshold.
+func (d *Detector) evaluateFeatures(x [featureCount]float64, bl baselineSnapshot, sc scope) finding.Finding {
+	combined, zs := d.scoreFeatures(x, bl)
 
 	if combined < d.cfg.TriggerThreshold {
 		return finding.Finding{}
@@ -397,6 +409,7 @@ func (d *Detector) evaluateFeatures(x [featureCount]float64, bl baselineSnapshot
 
 	riskScore := d.cfg.ScoreFloor + (1-d.cfg.ScoreFloor)*combined
 
+	weights := d.cfg.Weights.asArray()
 	signals := make([]decision.ContributingSignal, featureCount)
 	for i := range zs {
 		signals[i] = decision.ContributingSignal{Name: featureNames[i], Value: zs[i], Weight: weights[i]}
@@ -427,6 +440,109 @@ func (d *Detector) evaluateFeatures(x [featureCount]float64, bl baselineSnapshot
 		),
 		EntityID: sc.label + ":" + sc.key,
 	}
+}
+
+// DebugEvaluation es la evaluación diagnóstica de UN scope (IP o
+// sesión) — tarea 1.9: expone el score combinado y los z-scores
+// ANTES de que TriggerThreshold decida si importan, algo que Evaluate
+// nunca expone en el caso no disparado (evaluateFeatures devuelve
+// finding.Finding{}, perdiendo el número). Necesario para poder medir
+// qué tan cerca estuvo de disparar el tráfico que NUNCA disparó, no
+// solo contar cuántas veces disparó. Ningún código de producción
+// llama a esto — engine.BehavioralDecider solo conoce Evaluate.
+type DebugEvaluation struct {
+	// Scope es "ip:<dirección>" o "session:<id>".
+	Scope string
+
+	// CombinedScore es el score combinado antes de ScoreFloor y antes
+	// de compararlo con TriggerThreshold — el mismo valor que
+	// Explanation ya imprime como texto cuando Triggered es true, acá
+	// disponible como número, y también cuando Triggered es false.
+	CombinedScore float64
+
+	// Triggered es CombinedScore >= TriggerThreshold (nunca durante el
+	// warm-up, igual que Evaluate).
+	Triggered bool
+
+	// RiskScore es ScoreFloor + (1-ScoreFloor)*CombinedScore si
+	// Triggered, o 0 si no — igual convención que finding.Finding: sin
+	// Triggered, no hay ningún riesgo que reportar.
+	RiskScore float64
+
+	// ZScores tiene una entrada por feature, con la misma clave que
+	// decision.ContributingSignal.Name en un Finding real (por ejemplo
+	// "not_found_ratio_z") — nunca un índice numérico, para que un
+	// reporte de diagnóstico pueda mostrar el nombre sin conocer
+	// featureIndex (privado a este paquete).
+	ZScores map[string]float64
+}
+
+// EvaluateDebug es el equivalente diagnóstico de Evaluate (tarea 1.9):
+// en vez de devolver como máximo un Finding ganador, devuelve la
+// evaluación de TODOS los scopes evaluados (IP, y sesión si
+// corresponde), sin descartar el score de los que no dispararon.
+//
+// Actualiza el baseline exactamente con la misma regla que Evaluate
+// (agrega durante el warm-up, o cualquier muestra que no haya
+// disparado después de él) — así que un caller tiene que llamar a
+// EvaluateDebug EN LUGAR DE Evaluate para un evento dado, nunca a los
+// dos: cada uno actualiza el baseline una vez por evento, y llamar a
+// ambos lo actualizaría dos veces.
+func (d *Detector) EvaluateDebug(e event.Event) []DebugEvaluation {
+	bl := d.baseline.snapshot()
+	warm := bl.n < d.cfg.MinSamples
+
+	ipFeatures := extractFeatures(d.profiles.SnapshotIP(e.ClientIP))
+	ipCombined, ipZs := d.scoreFeatures(ipFeatures, bl)
+	ipTriggered := !warm && ipCombined >= d.cfg.TriggerThreshold
+	var ipRisk float64
+	if ipTriggered {
+		ipRisk = d.cfg.ScoreFloor + (1-d.cfg.ScoreFloor)*ipCombined
+	}
+	evals := []DebugEvaluation{{
+		Scope:         "ip:" + e.ClientIP.String(),
+		CombinedScore: ipCombined,
+		Triggered:     ipTriggered,
+		RiskScore:     ipRisk,
+		ZScores:       zScoreMap(ipZs),
+	}}
+
+	haveSession := e.SessionID != ""
+	var sessionFeatures [featureCount]float64
+	if haveSession {
+		sessionFeatures = extractFeatures(d.profiles.SnapshotSession(e.SessionID))
+		sessionCombined, sessionZs := d.scoreFeatures(sessionFeatures, bl)
+		sessionTriggered := !warm && sessionCombined >= d.cfg.TriggerThreshold
+		var sessionRisk float64
+		if sessionTriggered {
+			sessionRisk = d.cfg.ScoreFloor + (1-d.cfg.ScoreFloor)*sessionCombined
+		}
+		evals = append(evals, DebugEvaluation{
+			Scope:         "session:" + e.SessionID,
+			CombinedScore: sessionCombined,
+			Triggered:     sessionTriggered,
+			RiskScore:     sessionRisk,
+			ZScores:       zScoreMap(sessionZs),
+		})
+	}
+
+	// Misma regla de actualización que Evaluate — ver ahí el porqué.
+	if warm || !evals[0].Triggered {
+		d.baseline.update(ipFeatures)
+	}
+	if haveSession && (warm || !evals[1].Triggered) {
+		d.baseline.update(sessionFeatures)
+	}
+
+	return evals
+}
+
+func zScoreMap(zs [featureCount]float64) map[string]float64 {
+	m := make(map[string]float64, featureCount)
+	for i, name := range featureNames {
+		m[name] = zs[i]
+	}
+	return m
 }
 
 // Sweep reenvía al profile.Store privado — el baseline estadístico en

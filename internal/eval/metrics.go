@@ -50,16 +50,39 @@ type Metrics struct {
 	FPR       Ratio
 	FNR       Ratio
 	Accuracy  Ratio
+	// F1 es la media armónica de Precision y Recall (2PR/(P+R)) — la
+	// métrica que resume ambas en un solo número cuando hace falta
+	// comparar configuraciones (tarea 1.9). Indefinida (N/A, nunca 0)
+	// si Precision o Recall lo son, o si ambas son exactamente 0 (2*0*0/0,
+	// otra división por cero).
+	F1 Ratio
 }
 
-// Metrics calcula las cinco métricas derivadas de m.
+// f1 calcula la media armónica de precision y recall, propagando
+// "indefinido" (nunca disimulado como 0) desde cualquiera de sus dos
+// entradas o desde su propia división por cero.
+func f1(precision, recall Ratio) Ratio {
+	if !precision.Defined || !recall.Defined {
+		return Ratio{Defined: false}
+	}
+	denom := precision.Value + recall.Value
+	if denom == 0 {
+		return Ratio{Defined: false}
+	}
+	return Ratio{Value: 2 * precision.Value * recall.Value / denom, Defined: true}
+}
+
+// Metrics calcula las métricas derivadas de m.
 func (m ConfusionMatrix) Metrics() Metrics {
+	precision := ratio(m.TP, m.TP+m.FP)
+	recall := ratio(m.TP, m.TP+m.FN)
 	return Metrics{
-		Precision: ratio(m.TP, m.TP+m.FP),
-		Recall:    ratio(m.TP, m.TP+m.FN),
+		Precision: precision,
+		Recall:    recall,
 		FPR:       ratio(m.FP, m.FP+m.TN),
 		FNR:       ratio(m.FN, m.FN+m.TP),
 		Accuracy:  ratio(m.TP+m.TN, m.Total()),
+		F1:        f1(precision, recall),
 	}
 }
 
@@ -75,6 +98,14 @@ const (
 	// no una molestia grave como un BLOCK — ver docs/decisiones.md.
 	PolicyBroad
 )
+
+// IsPositive expone isPositive para paquetes fuera de internal/eval
+// que necesitan la misma regla "qué cuenta como predicción positiva"
+// — por ejemplo internal/tuning (tarea 1.9), para decidir cuándo una
+// campaña quedó detectada, sin duplicar esta lógica en otro lugar.
+func (p Policy) IsPositive(a decision.Action) bool {
+	return p.isPositive(a)
+}
 
 func (p Policy) isPositive(a decision.Action) bool {
 	switch p {

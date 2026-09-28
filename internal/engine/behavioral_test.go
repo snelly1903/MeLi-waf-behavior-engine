@@ -15,6 +15,7 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/credstuffing"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/decision"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
+	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/finding"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/slowscan"
 )
 
@@ -204,6 +205,20 @@ func TestPolicy_ActionFor_Boundaries(t *testing.T) {
 	for _, tc := range tests {
 		if got := p.actionFor(tc.score); got != tc.want {
 			t.Errorf("actionFor(%v) = %v, want %v", tc.score, got, tc.want)
+		}
+	}
+}
+
+// TestPolicy_ActionFor_MatchesInternalRule confirma que el wrapper
+// exportado ActionFor (usado por internal/tuning para el sweep de
+// Policy sin volver a correr detectores, tarea 1.9) nunca diverge de
+// la regla privada actionFor — mismo criterio que
+// TestPolicy_IsPositive_MatchesInternalRule en internal/eval.
+func TestPolicy_ActionFor_MatchesInternalRule(t *testing.T) {
+	p := Policy{ChallengeThreshold: 0.5, BlockThreshold: 0.8}
+	for _, score := range []float64{0.0, 0.49, 0.5, 0.65, 0.8, 0.95} {
+		if got, want := p.ActionFor(score), p.actionFor(score); got != want {
+			t.Errorf("ActionFor(%v) = %v, want %v (igual que actionFor)", score, got, want)
 		}
 	}
 }
@@ -747,6 +762,199 @@ func TestDecide_OtherDetectorStaysPrincipal_OverAnomaly(t *testing.T) {
 	}
 	if err := decision.Validate(last); err != nil {
 		t.Errorf("decision.Validate(%+v) = %v, want nil", last, err)
+	}
+}
+
+// --- Attribution vs. decision score (tarea 1.9) ----------------------------
+
+// specificFinding/anomalyFinding son helpers mínimos para construir
+// triggeredFinding sintéticos en los tests de selectAttribution/
+// bestIndexByScore de abajo — nunca corren ningún detector real, solo
+// prueban la lógica de selección en aislamiento.
+func specificFinding(vector decision.AttackVector, riskScore float64, priority int) triggeredFinding {
+	return triggeredFinding{finding: finding.Finding{Triggered: true, AttackVector: vector, RiskScore: riskScore}, priority: priority}
+}
+
+func anomalyFinding(riskScore float64) triggeredFinding {
+	return specificFinding(decision.AttackVectorUnknown, riskScore, anomalyPriority)
+}
+
+// TestSelectAttribution_PrefersSpecific_EvenWithLowerScore es el caso
+// central del cambio: credential_stuffing dispara con un score BAJO
+// (0.3) y statistical_anomaly con uno claramente MAYOR (0.9) — la
+// attribution tiene que quedar en credential_stuffing igual, algo que
+// selectPrincipal (usado para Action/ConfidenceScore) NUNCA haría.
+func TestSelectAttribution_PrefersSpecific_EvenWithLowerScore(t *testing.T) {
+	triggered := []triggeredFinding{
+		specificFinding(decision.AttackVectorCredentialStuffing, 0.3, 0),
+		anomalyFinding(0.9),
+	}
+
+	attribution, secondaries := selectAttribution(triggered)
+	if attribution == nil || attribution.AttackVector != decision.AttackVectorCredentialStuffing {
+		t.Fatalf("selectAttribution = %+v, want credential_stuffing (específico gana aunque anomaly tenga mayor score)", attribution)
+	}
+	if attribution.RiskScore != 0.3 {
+		t.Errorf("attribution.RiskScore = %v, want 0.3 (el score PROPIO del específico, no el de anomaly)", attribution.RiskScore)
+	}
+	if len(secondaries) != 1 || secondaries[0].AttackVector != decision.AttackVectorUnknown {
+		t.Errorf("secondaries = %+v, want [statistical_anomaly]", secondaries)
+	}
+
+	// selectPrincipal, en cambio, tiene que seguir eligiendo el mayor
+	// score sin importar qué detector lo produjo — nunca cambia.
+	principal, _ := selectPrincipal(triggered)
+	if principal == nil || principal.RiskScore != 0.9 {
+		t.Fatalf("selectPrincipal = %+v, want RiskScore 0.9 (el mayor score entre TODOS, sin preferencia por específico)", principal)
+	}
+}
+
+// TestSelectAttribution_BothSpecific_HighestScoreWins confirma que,
+// cuando SOLO hay detectores específicos disparados (sin anomaly), la
+// attribution sigue siendo por mayor score entre ellos — igual que
+// selectPrincipal, porque ahí no hay ninguna preferencia especial que
+// aplicar.
+func TestSelectAttribution_BothSpecific_HighestScoreWins(t *testing.T) {
+	triggered := []triggeredFinding{
+		specificFinding(decision.AttackVectorCredentialStuffing, 0.3, 0),
+		specificFinding(decision.AttackVectorSlowScan, 0.7, 1),
+	}
+	attribution, _ := selectAttribution(triggered)
+	if attribution == nil || attribution.AttackVector != decision.AttackVectorSlowScan {
+		t.Errorf("selectAttribution = %+v, want slow_scan (mayor score entre los dos específicos)", attribution)
+	}
+}
+
+// TestSelectAttribution_ExactTie_SpecificPriorityBreaksTie confirma
+// que el desempate determinista existente (credential_stuffing gana
+// un empate exacto contra slow_scan) se mantiene sin cambios dentro
+// del grupo de específicos.
+func TestSelectAttribution_ExactTie_SpecificPriorityBreaksTie(t *testing.T) {
+	triggered := []triggeredFinding{
+		specificFinding(decision.AttackVectorSlowScan, 0.5, 1),
+		specificFinding(decision.AttackVectorCredentialStuffing, 0.5, 0),
+	}
+	attribution, _ := selectAttribution(triggered)
+	if attribution == nil || attribution.AttackVector != decision.AttackVectorCredentialStuffing {
+		t.Errorf("selectAttribution = %+v, want credential_stuffing (empate exacto, prioridad menor gana)", attribution)
+	}
+}
+
+// TestSelectAttribution_AnomalyOnly_ReturnsUnknown cubre el otro
+// extremo explícitamente pedido: sin ningún específico disparado, la
+// attribution cae en statistical_anomaly — cuyo propio AttackVector
+// ya es "unknown" (ver internal/anomaly), no una regla especial de
+// selectAttribution.
+func TestSelectAttribution_AnomalyOnly_ReturnsUnknown(t *testing.T) {
+	triggered := []triggeredFinding{anomalyFinding(0.6)}
+	attribution, secondaries := selectAttribution(triggered)
+	if attribution == nil || attribution.AttackVector != decision.AttackVectorUnknown {
+		t.Errorf("selectAttribution = %+v, want unknown (solo anomaly disparó)", attribution)
+	}
+	if len(secondaries) != 0 {
+		t.Errorf("secondaries = %+v, want vacío", secondaries)
+	}
+}
+
+func TestSelectAttribution_Empty_ReturnsNil(t *testing.T) {
+	attribution, secondaries := selectAttribution(nil)
+	if attribution != nil || secondaries != nil {
+		t.Errorf("selectAttribution(nil) = (%+v, %+v), want (nil, nil)", attribution, secondaries)
+	}
+}
+
+// TestDecide_AttributionPrefersSpecific_ButConfidenceScoreStaysMax es
+// el test de integración de extremo a extremo pedido explícitamente
+// ("antes vs después"): con detectores REALES (no sintéticos),
+// credential_stuffing dispara con su score de siempre (0.2, exacto en
+// su ScoreFloor — mismo escenario ya usado y verificado en
+// TestDecide_FindingBelowChallengeThreshold_StaysAllowButPreservesEvidence)
+// mientras statistical_anomaly, con un baseline ya calentado, dispara
+// con un score CLARAMENTE mayor para la MISMA IP que cierra la
+// campaña. Se compara contra una corrida IDÉNTICA de
+// credential_stuffing con anomaly inerte (mismo comportamiento que
+// ANTES de esta tarea) para probar, sin calcular ningún z-score a
+// mano, que:
+//   - Action/ConfidenceScore siguen viniendo del score MÁS ALTO
+//     (el de anomaly, mayor al 0.2 de referencia) — sin cambios.
+//   - AttackVector/EntityID quedan atribuidos a credential_stuffing —
+//     el cambio de esta tarea.
+func TestDecide_AttributionPrefersSpecific_ButConfidenceScoreStaysMax(t *testing.T) {
+	buildCredentialStuffingSequence := func(d *BehavioralDecider, resolver fakeResolver, group string) decision.Decision {
+		ips := []netip.Addr{ipFor(0), ipFor(1), ipFor(2), ipFor(3), ipFor(4)}
+		for _, ip := range ips {
+			resolver[ip] = group
+		}
+		accounts := []string{"acct-A", "acct-B", "acct-C", "acct-D", "acct-D", "acct-A"}
+		statuses := []int{401, 200, 401, 200, 403, 200}
+		attemptIPs := []netip.Addr{ips[0], ips[0], ips[1], ips[2], ips[3], ips[4]}
+		var last decision.Decision
+		for i := range accounts {
+			last = d.Decide(context.Background(), loginEvent(attemptIPs[i], time.Duration(i)*time.Second, accounts[i], statuses[i]))
+		}
+		return last
+	}
+
+	// Corrida de referencia: solo credential_stuffing (anomaly
+	// inerte, newTestDecider) — el comportamiento de siempre.
+	csOnlyResolver := fakeResolver{}
+	csOnly := newTestDecider(t, csOnlyResolver, ssConfig(), testPolicy())
+	csOnlyFinal := buildCredentialStuffingSequence(csOnly, csOnlyResolver, "asn:cs-only")
+	if csOnlyFinal.AttackVector != decision.AttackVectorCredentialStuffing || csOnlyFinal.ConfidenceScore != 0.2 {
+		t.Fatalf("setup inválido (csOnly): AttackVector=%v ConfidenceScore=%v, want credential_stuffing/0.2", csOnlyFinal.AttackVector, csOnlyFinal.ConfidenceScore)
+	}
+
+	// Corrida mixta: MISMA secuencia de credential_stuffing, pero con
+	// statistical_anomaly activo y un baseline ya calentado que hace
+	// que ipFor(4) — la IP que cierra la campaña — resulte claramente
+	// anómala (90% not-found, vs. ~10% del baseline).
+	ss := ssConfig()
+	ss.MinRequests = 1000 // slow_scan inerte: solo compiten credential_stuffing y anomaly
+
+	an := anomaly.Config{
+		Window:           time.Hour,
+		MinSamples:       5,
+		ZSaturation:      2.0,
+		TriggerThreshold: 0.1,
+		Weights:          anomaly.FeatureWeights{NotFound: 1, FailedAuth: 1, PathDiversity: 1, Referer: 1, AccountDiversity: 1},
+		ScoreFloor:       0.2,
+	}
+	resolver := fakeResolver{}
+	d := newTestDeciderFull(t, resolver, ss, an, testPolicy())
+
+	for i := 10; i < 15; i++ {
+		ip := ipFor(i)
+		for j := 0; j < 20; j++ {
+			status := 200
+			if j%10 == 0 {
+				status = 404
+			}
+			d.Decide(context.Background(), scanEvent(ip, time.Duration(i*30+j)*time.Second, "/normal", status, true, ""))
+		}
+	}
+
+	anomalousIP := ipFor(4)
+	for j := 0; j < 20; j++ {
+		status := 200
+		if j < 18 {
+			status = 404
+		}
+		d.Decide(context.Background(), scanEvent(anomalousIP, time.Duration(1000+j)*time.Second, "/normal", status, true, ""))
+	}
+
+	final := buildCredentialStuffingSequence(d, resolver, "asn:mixed")
+
+	if final.AttackVector != decision.AttackVectorCredentialStuffing {
+		t.Fatalf("AttackVector = %v, want credential_stuffing (attribution debe preferir el específico aunque anomaly tenga mayor score): %+v", final.AttackVector, final)
+	}
+	if !strings.HasPrefix(final.EntityID, "network:") {
+		t.Errorf("EntityID = %q, want empezar con \"network:\" (viene del finding específico, no del de anomaly)", final.EntityID)
+	}
+	if final.ConfidenceScore <= csOnlyFinal.ConfidenceScore {
+		t.Errorf("ConfidenceScore = %v, want > %v (Action/ConfidenceScore siguen usando el score MÁS ALTO entre todos, no el propio de credential_stuffing)", final.ConfidenceScore, csOnlyFinal.ConfidenceScore)
+	}
+	if err := decision.Validate(final); err != nil {
+		t.Errorf("decision.Validate(%+v) = %v, want nil", final, err)
 	}
 }
 

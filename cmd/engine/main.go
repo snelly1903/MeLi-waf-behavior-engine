@@ -43,50 +43,18 @@ const (
 	asnProviderRIPEStat = "ripestat"
 )
 
-// Configuración de los tres detectores — NINGÚN valor acá está
-// calibrado todavía contra un dataset real (esa calibración es una
-// tarea posterior, mismo criterio que ya se aplicó a
-// internal/baseline en la tarea 0.9). Son puntos de partida
-// razonables para que el servicio corra de punta a punta.
+// Configuración de los tres detectores — los valores concretos viven
+// en internal/engine.Default*Config (tarea 1.9): un único lugar de
+// verdad, para que la evaluación offline de internal/tuning nunca
+// pueda desincronizarse de lo que este binario sirve de verdad. Acá
+// solo falta completar credentialStuffingConfig.Resolver, que se hace
+// en buildServer con credstuffing.UnavailableNetworkResolver o
+// internal/asn.Resolver según --asn-provider — es la única pieza que
+// cambia entre producción y evaluación offline.
 var (
-	credentialStuffingConfig = credstuffing.Config{
-		Window:              30 * time.Minute,
-		MinDistinctIPs:      20,
-		MinDistinctAccounts: 15,
-		MinAttempts:         25,
-		MinFailedRatio:      0.6,
-		Weights:             credstuffing.ScoreWeights{IPs: 0.25, Accounts: 0.25, Attempts: 0.25, Ratio: 0.25},
-		ScoreFloor:          0.2,
-		// Resolver se completa en buildServer con
-		// credstuffing.UnavailableNetworkResolver — ver ahí el porqué.
-	}
-
-	slowScanConfig = slowscan.Config{
-		Window:                  time.Hour,
-		MinRequests:             15,
-		MinDistinctPaths:        10,
-		MinNotFoundRatio:        0.5,
-		MinRouteEntropy:         0.6,
-		MinNovelPathRatio:       0.5,
-		MaxVisitorsForNovelPath: 2,
-		Weights:                 slowscan.ScoreWeights{Requests: 1, Paths: 1, NotFound: 1, Entropy: 1, Novelty: 1, Referer: 1},
-		ScoreFloor:              0.2,
-	}
-
-	// anomalyConfig: TriggerThreshold queda deliberadamente bajo
-	// (0.15) porque, con las cinco features pesadas por igual, una
-	// desviación clara en una sola de ellas nunca puede empujar el
-	// score combinado mucho más allá de ~0.2 (el resto de las
-	// features, cerca de su media, aportan ~0 al promedio) — ver
-	// docs/decisiones.md, tarea 1.6.
-	anomalyConfig = anomaly.Config{
-		Window:           time.Hour,
-		MinSamples:       50,
-		ZSaturation:      2.0,
-		TriggerThreshold: 0.15,
-		Weights:          anomaly.FeatureWeights{NotFound: 1, FailedAuth: 1, PathDiversity: 1, Referer: 1, AccountDiversity: 1},
-		ScoreFloor:       0.2,
-	}
+	credentialStuffingConfig = engine.DefaultCredentialStuffingConfig()
+	slowScanConfig           = engine.DefaultSlowScanConfig()
+	anomalyConfig            = engine.DefaultAnomalyConfig()
 )
 
 // buildCredentialStuffingResolver arma el credstuffing.NetworkResolver
@@ -185,8 +153,9 @@ func buildServer(challengeThreshold, blockThreshold float64, asnProvider string,
 
 func main() {
 	addr := flag.String("addr", ":8080", "dirección donde escuchar (host:puerto)")
-	challengeThreshold := flag.Float64("challenge-threshold", 0.5, "score mínimo (RiskScore) para CHALLENGE — sin calibrar todavía")
-	blockThreshold := flag.Float64("block-threshold", 0.8, "score mínimo (RiskScore) para BLOCK — sin calibrar todavía")
+	defaultPolicy := engine.DefaultPolicy()
+	challengeThreshold := flag.Float64("challenge-threshold", defaultPolicy.ChallengeThreshold, "score mínimo (RiskScore) para CHALLENGE — sin calibrar todavía")
+	blockThreshold := flag.Float64("block-threshold", defaultPolicy.BlockThreshold, "score mínimo (RiskScore) para BLOCK — sin calibrar todavía")
 	asnProvider := flag.String("asn-provider", asnProviderNone, `proveedor de ASN para credential stuffing: "none" (default seguro, sin tráfico de salida) o "ripestat"`)
 	asnTimeout := flag.Duration("asn-timeout", 2*time.Second, "timeout total de cada consulta de ASN (incluye espera de cupo de concurrencia)")
 	asnCacheTTL := flag.Duration("asn-cache-ttl", time.Hour, "TTL del caché positivo de resoluciones de ASN")

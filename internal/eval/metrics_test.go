@@ -26,6 +26,7 @@ func checkRatio(t *testing.T, name string, got Ratio, wantDefined bool, wantValu
 //	FPR       = 1 / (1+4) = 0.2
 //	FNR       = 2 / (2+3) = 0.4
 //	Accuracy  = (3+4) / 10 = 0.7
+//	F1        = 2*0.75*0.6 / (0.75+0.6) = 0.6666...
 func TestConfusionMatrix_Metrics_HandComputed(t *testing.T) {
 	m := ConfusionMatrix{TP: 3, FP: 1, FN: 2, TN: 4}
 	got := m.Metrics()
@@ -35,6 +36,16 @@ func TestConfusionMatrix_Metrics_HandComputed(t *testing.T) {
 	checkRatio(t, "FPR", got.FPR, true, 0.2)
 	checkRatio(t, "FNR", got.FNR, true, 0.4)
 	checkRatio(t, "Accuracy", got.Accuracy, true, 0.7)
+	// Se calcula con variables float64 (no constantes) a propósito:
+	// una expresión constante como "2*0.75*0.6/(0.75+0.6)" la evalúa
+	// el compilador con precisión arbitraria y redondea al final,
+	// dando un bit distinto al de la misma fórmula calculada en
+	// tiempo de ejecución (que sí hace cada paso en float64) — la
+	// diferencia es de 1 ULP, no un error real, pero rompía la
+	// comparación exacta de checkRatio.
+	var precisionValue, recallValue float64 = 0.75, 0.6
+	wantF1 := 2 * precisionValue * recallValue / (precisionValue + recallValue)
+	checkRatio(t, "F1", got.F1, true, wantF1)
 }
 
 // TestConfusionMatrix_Metrics_AllZero comprueba que, sin ningún dato
@@ -47,6 +58,34 @@ func TestConfusionMatrix_Metrics_AllZero(t *testing.T) {
 	checkRatio(t, "FPR", got.FPR, false, 0)
 	checkRatio(t, "FNR", got.FNR, false, 0)
 	checkRatio(t, "Accuracy", got.Accuracy, false, 0)
+	checkRatio(t, "F1", got.F1, false, 0)
+}
+
+// TestConfusionMatrix_Metrics_F1_UndefinedWhenEitherInputIsUndefined
+// cubre los dos casos en que F1 tiene que ser N/A porque Precision o
+// Recall ya lo eran — nunca calculando 2*0*algo/algo como si el 0
+// fuera un valor real.
+func TestConfusionMatrix_Metrics_F1_UndefinedWhenEitherInputIsUndefined(t *testing.T) {
+	// TP=0, FP=2, FN=0, TN=5: Precision definida (=0), Recall N/A
+	// (0+0). F1 tiene que seguir a Recall y quedar N/A.
+	got := ConfusionMatrix{TP: 0, FP: 2, FN: 0, TN: 5}.Metrics()
+	checkRatio(t, "F1", got.F1, false, 0)
+
+	// TP=0, FP=0, FN=3, TN=5: espejo — Recall definida (=0), Precision
+	// N/A (0+0).
+	got = ConfusionMatrix{TP: 0, FP: 0, FN: 3, TN: 5}.Metrics()
+	checkRatio(t, "F1", got.F1, false, 0)
+}
+
+// TestConfusionMatrix_Metrics_F1_UndefinedWhenBothZero cubre el tercer
+// caso posible: Precision Y Recall están AMBAS definidas, pero ambas
+// dan exactamente 0 (TP=0 con FP>0 y FN>0 a la vez) — F1 sería 0/0,
+// así que también tiene que quedar N/A, no "0".
+func TestConfusionMatrix_Metrics_F1_UndefinedWhenBothZero(t *testing.T) {
+	got := ConfusionMatrix{TP: 0, FP: 2, FN: 3, TN: 5}.Metrics()
+	checkRatio(t, "Precision", got.Precision, true, 0)
+	checkRatio(t, "Recall", got.Recall, true, 0)
+	checkRatio(t, "F1", got.F1, false, 0)
 }
 
 // TestConfusionMatrix_Metrics_PrecisionDefinedWithoutPositives es el
@@ -110,5 +149,30 @@ func TestBuildConfusionMatrix_StrictVsBroadPolicy(t *testing.T) {
 	wantBroad := ConfusionMatrix{TP: 2, FP: 1, FN: 0, TN: 1}
 	if broad != wantBroad {
 		t.Errorf("broad matrix = %+v, want %+v", broad, wantBroad)
+	}
+}
+
+// TestPolicy_IsPositive_MatchesInternalRule confirma que el método
+// exportado IsPositive (agregado en la tarea 1.9 para que
+// internal/tuning pueda reusar la misma regla sin duplicarla) da
+// exactamente los mismos resultados que ya prueba
+// TestBuildConfusionMatrix_StrictVsBroadPolicy indirectamente.
+func TestPolicy_IsPositive_MatchesInternalRule(t *testing.T) {
+	tests := []struct {
+		action     decision.Action
+		wantStrict bool
+		wantBroad  bool
+	}{
+		{decision.ActionAllow, false, false},
+		{decision.ActionChallenge, false, true},
+		{decision.ActionBlock, true, true},
+	}
+	for _, tc := range tests {
+		if got := PolicyStrict.IsPositive(tc.action); got != tc.wantStrict {
+			t.Errorf("PolicyStrict.IsPositive(%v) = %v, want %v", tc.action, got, tc.wantStrict)
+		}
+		if got := PolicyBroad.IsPositive(tc.action); got != tc.wantBroad {
+			t.Errorf("PolicyBroad.IsPositive(%v) = %v, want %v", tc.action, got, tc.wantBroad)
+		}
 	}
 }

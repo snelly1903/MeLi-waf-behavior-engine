@@ -314,32 +314,22 @@ func (d *Detector) Evaluate(e event.Event) finding.Finding {
 // las señales, a partir de un profile.Metrics ya calculado (por IP o
 // por sesión — evaluateMetrics no distingue, solo usa los números).
 func (d *Detector) evaluateMetrics(m profile.Metrics, sc scope) finding.Finding {
-	total := m.Total
-	distinctPaths := len(m.PathCounts)
-
-	var notFoundRatio, withoutRefererRatio float64
-	if total > 0 {
-		notFoundRatio = float64(m.Status404) / float64(total)
-		withoutRefererRatio = float64(m.WithoutReferer) / float64(total)
-	}
-	routeEntropy := normalizedEntropy(m.PathCounts, total, distinctPaths)
-	novelPathRatio := d.novelPathRatio(m.PathCounts, distinctPaths)
-
-	triggered := total >= d.cfg.MinRequests &&
-		distinctPaths >= d.cfg.MinDistinctPaths &&
-		notFoundRatio >= d.cfg.MinNotFoundRatio &&
-		routeEntropy >= d.cfg.MinRouteEntropy &&
-		novelPathRatio >= d.cfg.MinNovelPathRatio
-
-	if !triggered {
+	gate := d.gateMetricsFor(m, sc.label+":"+sc.key)
+	if !gate.Triggered {
 		return finding.Finding{}
 	}
 
-	cRequests := excessComponent(float64(total), float64(d.cfg.MinRequests))
-	cPaths := excessComponent(float64(distinctPaths), float64(d.cfg.MinDistinctPaths))
-	cNotFound := ratioComponent(notFoundRatio, d.cfg.MinNotFoundRatio)
-	cEntropy := ratioComponent(routeEntropy, d.cfg.MinRouteEntropy)
-	cNovelty := ratioComponent(novelPathRatio, d.cfg.MinNovelPathRatio)
+	total := m.Total
+	var withoutRefererRatio float64
+	if total > 0 {
+		withoutRefererRatio = float64(m.WithoutReferer) / float64(total)
+	}
+
+	cRequests := excessComponent(float64(gate.TotalRequests), float64(d.cfg.MinRequests))
+	cPaths := excessComponent(float64(gate.DistinctPaths), float64(d.cfg.MinDistinctPaths))
+	cNotFound := ratioComponent(gate.NotFoundRatio, d.cfg.MinNotFoundRatio)
+	cEntropy := ratioComponent(gate.RouteEntropy, d.cfg.MinRouteEntropy)
+	cNovelty := ratioComponent(gate.NovelPathRatio, d.cfg.MinNovelPathRatio)
 	cReferer := withoutRefererRatio // sin umbral: aporta al score tal cual, nunca al gate
 
 	w := d.cfg.Weights
@@ -359,10 +349,10 @@ func (d *Detector) evaluateMetrics(m profile.Metrics, sc scope) finding.Finding 
 		RiskScore:    riskScore,
 		ContributingSignals: []decision.ContributingSignal{
 			{Name: "total_requests", Value: float64(total), Weight: w.Requests},
-			{Name: "distinct_paths", Value: float64(distinctPaths), Weight: w.Paths},
-			{Name: "not_found_ratio", Value: notFoundRatio, Weight: w.NotFound},
-			{Name: "route_entropy_normalized", Value: routeEntropy, Weight: w.Entropy},
-			{Name: "novel_path_ratio", Value: novelPathRatio, Weight: w.Novelty},
+			{Name: "distinct_paths", Value: float64(gate.DistinctPaths), Weight: w.Paths},
+			{Name: "not_found_ratio", Value: gate.NotFoundRatio, Weight: w.NotFound},
+			{Name: "route_entropy_normalized", Value: gate.RouteEntropy, Weight: w.Entropy},
+			{Name: "novel_path_ratio", Value: gate.NovelPathRatio, Weight: w.Novelty},
 			{Name: "without_referer_ratio", Value: withoutRefererRatio, Weight: w.Referer},
 		},
 		// El scope (IP o sesión) ya queda identificado en EntityID —
@@ -370,9 +360,80 @@ func (d *Detector) evaluateMetrics(m profile.Metrics, sc scope) finding.Finding 
 		// 1.5).
 		Explanation: fmt.Sprintf(
 			"%d requests across %d distinct paths, %.0f%% not-found, entropy=%.2f, %.0f%% novel paths within the window",
-			total, distinctPaths, notFoundRatio*100, routeEntropy, novelPathRatio*100,
+			total, gate.DistinctPaths, gate.NotFoundRatio*100, gate.RouteEntropy, gate.NovelPathRatio*100,
 		),
 		EntityID: sc.label + ":" + sc.key,
+	}
+}
+
+// GateMetrics es la evaluación diagnóstica de las cinco condiciones
+// del gate para UN scope (IP o sesión) — tarea 1.9: expone los
+// números crudos (TotalRequests, DistinctPaths, NotFoundRatio,
+// RouteEntropy, NovelPathRatio) SIN IMPORTAR si dispararon o no.
+// evaluateMetrics los descarta en el caso no disparado (devuelve
+// finding.Finding{}) — GateMetrics es la forma de ver, para una
+// campaña que nunca disparó o que disparó tarde, cuál de las cinco
+// condiciones seguía sin cumplirse. Ningún código de producción usa
+// esto — engine.BehavioralDecider solo conoce Evaluate.
+type GateMetrics struct {
+	// Scope es "ip:<dirección>" o "session:<id>".
+	Scope string
+
+	TotalRequests  int
+	DistinctPaths  int
+	NotFoundRatio  float64
+	RouteEntropy   float64
+	NovelPathRatio float64
+
+	// Triggered es el mismo booleano de gate que ya calcula
+	// evaluateMetrics — se repite acá para no obligar a quien lee este
+	// reporte a comparar los cinco números contra los Min* de Config
+	// a mano.
+	Triggered bool
+}
+
+// EvaluateGateMetrics es el equivalente diagnóstico de evaluateMetrics
+// para AMBOS scopes (IP, y sesión si e.SessionID no está vacío) —
+// nunca muta ningún estado (a diferencia de Observe, el único lugar
+// donde este detector escribe): es una lectura pura sobre
+// profiles/paths, tal como quedaron tras el último Observe. Se puede
+// llamar tantas veces como se quiera, incluso junto con Evaluate para
+// el mismo evento, sin ningún efecto secundario ni riesgo de
+// duplicar ninguna actualización (a diferencia de
+// anomaly.Detector.EvaluateDebug, que sí actualiza un baseline).
+func (d *Detector) EvaluateGateMetrics(e event.Event) []GateMetrics {
+	result := []GateMetrics{d.gateMetricsFor(d.profiles.SnapshotIP(e.ClientIP), "ip:"+e.ClientIP.String())}
+	if e.SessionID != "" {
+		result = append(result, d.gateMetricsFor(d.profiles.SnapshotSession(e.SessionID), "session:"+e.SessionID))
+	}
+	return result
+}
+
+func (d *Detector) gateMetricsFor(m profile.Metrics, scopeLabel string) GateMetrics {
+	total := m.Total
+	distinctPaths := len(m.PathCounts)
+
+	var notFoundRatio float64
+	if total > 0 {
+		notFoundRatio = float64(m.Status404) / float64(total)
+	}
+	routeEntropy := normalizedEntropy(m.PathCounts, total, distinctPaths)
+	novelPathRatio := d.novelPathRatio(m.PathCounts, distinctPaths)
+
+	triggered := total >= d.cfg.MinRequests &&
+		distinctPaths >= d.cfg.MinDistinctPaths &&
+		notFoundRatio >= d.cfg.MinNotFoundRatio &&
+		routeEntropy >= d.cfg.MinRouteEntropy &&
+		novelPathRatio >= d.cfg.MinNovelPathRatio
+
+	return GateMetrics{
+		Scope:          scopeLabel,
+		TotalRequests:  total,
+		DistinctPaths:  distinctPaths,
+		NotFoundRatio:  notFoundRatio,
+		RouteEntropy:   routeEntropy,
+		NovelPathRatio: novelPathRatio,
+		Triggered:      triggered,
 	}
 }
 

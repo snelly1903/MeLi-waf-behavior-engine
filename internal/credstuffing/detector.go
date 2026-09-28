@@ -292,9 +292,52 @@ func (d *Detector) Evaluate(e event.Event) finding.Finding {
 	return d.evaluateGroup(group, obs)
 }
 
-// evaluateGroup aplica el gate y, si dispara, calcula RiskScore y las
-// señales — sin tocar ningún estado compartido (obs ya es una copia).
-func (d *Detector) evaluateGroup(group string, obs []observation) finding.Finding {
+// GateMetrics es la evaluación diagnóstica de las cuatro condiciones
+// del gate para el grupo de red de una IP (tarea 1.9) — expone los
+// números crudos (DistinctIPs, DistinctAccounts, TotalAttempts,
+// FailedRatio) SIN IMPORTAR si dispararon o no. evaluateGroup los
+// descarta en el caso no disparado (devuelve finding.Finding{}).
+// Ningún código de producción usa esto — engine.BehavioralDecider
+// solo conoce Evaluate.
+type GateMetrics struct {
+	// Group es "network:<group>" — mismo formato que
+	// finding.Finding.EntityID.
+	Group string
+
+	DistinctIPs      int
+	DistinctAccounts int
+	TotalAttempts    int
+	FailedRatio      float64
+
+	Triggered bool
+}
+
+// EvaluateGateMetrics es el equivalente diagnóstico de Evaluate:
+// nunca muta ningún estado (a diferencia de Observe, el único lugar
+// donde este detector escribe) — es una lectura pura sobre el grupo
+// de red de e.ClientIP tal como quedó tras el último Observe. found
+// es false en los mismos dos casos en que Evaluate devuelve un
+// finding.Finding{} vacío: e no es una ruta de autenticación, o
+// e.ClientIP no se pudo resolver a ningún grupo.
+func (d *Detector) EvaluateGateMetrics(e event.Event) (metrics GateMetrics, found bool) {
+	if !d.matcher.IsAuthPath(e.Path) {
+		return GateMetrics{}, false
+	}
+	group, ok := d.cfg.Resolver.Resolve(e.ClientIP)
+	if !ok {
+		return GateMetrics{}, false
+	}
+
+	d.mu.Lock()
+	state := d.groups[group]
+	obs := make([]observation, len(state.queue))
+	copy(obs, state.queue)
+	d.mu.Unlock()
+
+	return d.gateMetricsFor(group, obs), true
+}
+
+func (d *Detector) gateMetricsFor(group string, obs []observation) GateMetrics {
 	distinctIPs := make(map[netip.Addr]struct{})
 	distinctAccounts := make(map[string]struct{})
 	var failed int
@@ -320,14 +363,28 @@ func (d *Detector) evaluateGroup(group string, obs []observation) finding.Findin
 		total >= d.cfg.MinAttempts &&
 		failedRatio >= d.cfg.MinFailedRatio
 
-	if !triggered {
+	return GateMetrics{
+		Group:            "network:" + group,
+		DistinctIPs:      len(distinctIPs),
+		DistinctAccounts: len(distinctAccounts),
+		TotalAttempts:    total,
+		FailedRatio:      failedRatio,
+		Triggered:        triggered,
+	}
+}
+
+// evaluateGroup aplica el gate y, si dispara, calcula RiskScore y las
+// señales — sin tocar ningún estado compartido (obs ya es una copia).
+func (d *Detector) evaluateGroup(group string, obs []observation) finding.Finding {
+	gate := d.gateMetricsFor(group, obs)
+	if !gate.Triggered {
 		return finding.Finding{}
 	}
 
-	cIPs := excessComponent(float64(len(distinctIPs)), float64(d.cfg.MinDistinctIPs))
-	cAccounts := excessComponent(float64(len(distinctAccounts)), float64(d.cfg.MinDistinctAccounts))
-	cAttempts := excessComponent(float64(total), float64(d.cfg.MinAttempts))
-	cRatio := ratioComponent(failedRatio, d.cfg.MinFailedRatio)
+	cIPs := excessComponent(float64(gate.DistinctIPs), float64(d.cfg.MinDistinctIPs))
+	cAccounts := excessComponent(float64(gate.DistinctAccounts), float64(d.cfg.MinDistinctAccounts))
+	cAttempts := excessComponent(float64(gate.TotalAttempts), float64(d.cfg.MinAttempts))
+	cRatio := ratioComponent(gate.FailedRatio, d.cfg.MinFailedRatio)
 
 	w := d.cfg.Weights
 	weightSum := w.IPs + w.Accounts + w.Attempts + w.Ratio
@@ -349,16 +406,16 @@ func (d *Detector) evaluateGroup(group string, obs []observation) finding.Findin
 		AttackVector: decision.AttackVectorCredentialStuffing,
 		RiskScore:    riskScore,
 		ContributingSignals: []decision.ContributingSignal{
-			{Name: "distinct_ips_in_window", Value: float64(len(distinctIPs)), Weight: w.IPs},
-			{Name: "distinct_accounts_in_window", Value: float64(len(distinctAccounts)), Weight: w.Accounts},
-			{Name: "auth_attempts_in_window", Value: float64(total), Weight: w.Attempts},
-			{Name: "failed_auth_ratio", Value: failedRatio, Weight: w.Ratio},
+			{Name: "distinct_ips_in_window", Value: float64(gate.DistinctIPs), Weight: w.IPs},
+			{Name: "distinct_accounts_in_window", Value: float64(gate.DistinctAccounts), Weight: w.Accounts},
+			{Name: "auth_attempts_in_window", Value: float64(gate.TotalAttempts), Weight: w.Attempts},
+			{Name: "failed_auth_ratio", Value: gate.FailedRatio, Weight: w.Ratio},
 		},
 		// El grupo de red ya queda identificado en EntityID — acá no se
 		// repite, Explanation se enfoca en el porqué (tarea 1.5).
 		Explanation: fmt.Sprintf(
 			"%d distinct IPs, %d distinct accounts, %d auth attempts, %.0f%% failed (401/403) within the window",
-			len(distinctIPs), len(distinctAccounts), total, failedRatio*100,
+			gate.DistinctIPs, gate.DistinctAccounts, gate.TotalAttempts, gate.FailedRatio*100,
 		),
 		EntityID: "network:" + group,
 	}
