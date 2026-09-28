@@ -3516,3 +3516,146 @@ todos los Triggered, sin cambios.
 No se ejecutó holdout todavía. El siguiente paso es crear el
 checkpoint/commit pre-holdout y recién después correr holdout (seeds
 201/202/203) con esta configuración congelada.
+
+## 2026-09-28 — Holdout final: Baseline vs. Final Tuned Config (tarea 1.9)
+
+Checkpoint pre-holdout ya creado (commit `6abed47`). Con la
+configuración completamente congelada, se corrió holdout por
+**primera y única vez**: seeds 201/202/203, ratios 0/10/30%,
+comparando BASELINE ORIGINAL (sin ningún cambio) contra FINAL TUNED
+CONFIG (credential_stuffing CSw2, slow_scan S3, statistical_anomaly
+A3, Policy Challenge=0.50/Block=0.75, ScoreFloor sin tocar) — y,
+para medir generalización, la MISMA comparación recalculada también
+sobre tuning (seeds 101/102/103) con exactamente esta configuración
+final (no reutilizando números de reportes previos con otra Policy).
+
+### Infraestructura nueva
+
+Se refactorizó `RenderDetectorLayerComparison` (sin cambiar su
+salida más que un título cosmético, verificado con `diff` contra el
+reporte anterior) para extraer `renderDetectorLayerCandidateSection`
+y `renderDetectorLayerSideBySide`, reutilizables con cualquier par de
+reportes, no solo D0/D1. `internal/tuning/holdout_report.go`:
+`DetectorLayerStability`/`ComputeDetectorLayerStability` (Range entre
+seeds de BroadRecall/StrictRecall/FPR/CS y SlowScan RecallDetector),
+`HoldoutDatasetReport`, `RenderHoldoutReport`. `cmd/holdout` corre
+Baseline y Final sobre tuning Y holdout (4 corridas completas) y
+escribe `reports/holdout/baseline-vs-final.md`. 2 tests nuevos.
+Suite completa en verde antes y después.
+
+### Resultado — Baseline vs. Final, dentro de holdout (pooled 3 seeds)
+
+| Ratio | Métrica | Baseline | Final |
+|---|---|---|---|
+| 0% | FPR (broad) | 0.0529 | 0.0617 |
+| 10% | Precision / Recall / F1 (broad) | 0.7116 / 0.8479 / 0.7738 | 0.7182 / 0.9549 / 0.8198 |
+| 10% | Recall (strict/BLOCK) | 0.0535 | 0.2648 |
+| 30% | Precision / Recall / F1 (broad) | 0.9468 / 0.4842 / 0.6407 | 0.9621 / 0.8837 / 0.9213 |
+| 30% | Recall (strict/BLOCK) | 0.0070 | 0.3578 |
+| 10%/30% | CS RecallDetector | 0.0000 / 0.6060 | 0.1148 / 0.8517 |
+| 10%/30% | SlowScan RecallDetector | 0.6298 / 0.1494 | 0.6298 / 0.5577 |
+
+Final sigue superando a Baseline en holdout en prácticamente todas
+las métricas de cobertura — el patrón observado en tuning se
+reproduce.
+
+### Hallazgo central, no visto en tuning: 3 falsos BLOCK reales en holdout (FalseBlockRate ya no es 0)
+
+En tuning, `FalseBlockRate` fue exactamente 0.0000 en los 9
+candidatos del sweep de Policy — se documentó explícitamente como
+"propiedad de estos datasets de tuning, no garantía general" (ver
+sección anterior). **En holdout, esa garantía se rompe**: el
+candidato Final tuvo **3 eventos legítimos bloqueados de verdad** a
+0% (seed 203), `FalseBlockRate=0.0008` (3 de 3628) — chico, pero
+real y distinto de cero por primera vez en toda la tarea 1.9.
+
+**Causa identificada explícitamente, no por eliminación**: la
+distribución de RiskScore de `statistical_anomaly` sobre tráfico
+LEGÍTIMO tiene un máximo de **0.7722** en holdout (Final), por
+encima de `BlockThreshold=0.75` — mientras que en tuning ese máximo
+nunca superó 0.6998-0.7079. `credential_stuffing` y `slow_scan`
+siguen en 0.0000 de máximo sobre tráfico legítimo en holdout
+también (confirmado en la tabla de RiskScore) — los falsos BLOCK
+NO vienen de los detectores específicos ni de CSw2, vienen
+enteramente de `statistical_anomaly`, cuyo baseline GLOBAL
+ocasionalmente ve una sesión legítima lo bastante inusual (dentro de
+~10884 eventos legítimos de holdout) como para cruzar el umbral —
+un efecto estadístico esperable a esa escala con un baseline global,
+no un error de configuración. Coincide exactamente con la
+limitación ya documentada "el baseline anomaly es global".
+
+También se invirtió el signo de la comparación Baseline-vs-Final en
+`FPR@0%`: en tuning, Final tenía FPR menor que Baseline (0.0381 vs.
+0.0469); en holdout, Final tiene FPR **mayor** (0.0617 vs. 0.0529).
+Ambos FPR siguen siendo bajos en términos absolutos, pero es una
+señal real de que la mejora de FPR@0% observada en tuning no
+generalizó en la misma dirección.
+
+### Generalización: tuning vs. holdout, candidato Final
+
+| Ratio | Métrica | Tuning | Holdout | Lectura |
+|---|---|---|---|---|
+| 0% | FPR (broad) | 0.0381 | 0.0617 | Peor en holdout (signo invertido vs. Baseline) |
+| 10% | Recall (broad) | 0.9203 | 0.9549 | Generaliza bien (incluso mejor) |
+| 10% | Recall (strict) | 0.4179 | 0.2648 | Peor en holdout |
+| 10% | CS RecallDetector | 0.2304 | 0.1148 | Cae a la mitad — CSw2 calibrado con solo 3 seeds |
+| 10% | SlowScan RecallDetector | 0.7045 | 0.6298 | Generaliza razonablemente |
+| 30% | Recall (broad) | 0.7559 | 0.8837 | Generaliza bien (mejor) |
+| 30% | Recall (strict) | 0.3855 | 0.3578 | Generaliza razonablemente |
+| 30% | CS RecallDetector | 0.8515 | 0.8517 | Generaliza casi perfecto |
+| 30% | SlowScan RecallDetector | 0.4758 | 0.5577 | Generaliza bien (mejor) |
+| 30% | F1 (broad) | 0.8403 | 0.9213 | Generaliza bien (mejor) |
+
+**Lectura general**: la mayoría de las métricas de cobertura (Broad
+Recall, F1, SlowScan RecallDetector, CS RecallDetector@30%)
+generalizan bien o incluso mejoran en holdout — sin señal de
+overfitting ahí. La señal de generalización más débil está
+concentrada en dos lugares concretos, ambos coherentes con
+limitaciones ya documentadas antes de correr holdout: **CS
+RecallDetector@10%** (cae a la mitad — CSw2 se calibró con el margen
+justo de solo 3 tuning seeds, sin margen de sobra) y **FPR@0%/los 3
+falsos BLOCK** (statistical_anomaly, baseline global, efecto de
+escala). Ninguna de las dos es una sorpresa cualitativa — son
+exactamente los dos riesgos que se habían anticipado y documentado
+como limitaciones antes de ver estos resultados.
+
+### Estabilidad entre seeds
+
+En holdout, Final es MÁS estable que en tuning para BroadRecall
+(Range 0.030-0.079 vs. 0.113-0.316 en tuning) y para FPRBroad
+(0.035-0.074 vs. 0.039-0.044) — pero MENOS estable para StrictRecall
+a 10% (Range 0.349 en holdout vs. 0.050 en tuning): los 3 seeds de
+holdout difieren bastante entre sí en cuánto tráfico llega a BLOCK
+puro a 10%, aunque coincidan mucho más en Broad Recall. Detalle
+completo por seed en `reports/holdout/baseline-vs-final.md`.
+
+### Limitaciones documentadas, confirmadas con evidencia de holdout
+
+- **Dataset 0% sin tráfico legítimo de login de alto volumen/mismo
+  ASN**: sigue sin resolverse — `credential_stuffing` nunca disparó
+  sobre tráfico legítimo en holdout tampoco (máximo de RiskScore
+  legit = 0.0000, igual que en tuning). Esta limitación NO fue la
+  causa de los 3 falsos BLOCK — fue `statistical_anomaly`.
+- **CSw2 calibrado con solo 3 tuning seeds**: confirmado con datos
+  reales — `CS RecallDetector@10%` cae de 0.23 a 0.11 en holdout,
+  la señal de generalización más débil de todo el reporte.
+- **Detectores/features stateful**: cada corrida (tuning y holdout)
+  parte de estado limpio por diseño (`Candidate.Build`), así que la
+  comparación es justa — pero en producción real el estado persiste
+  indefinidamente, algo que ningún holdout de este tipo puede medir.
+- **El baseline de `statistical_anomaly` es global**: confirmado como
+  causa directa de los 3 falsos BLOCK en holdout — un baseline
+  compartido entre todas las entidades puede, a cierta escala, ver a
+  una entidad legítima como estadísticamente extrema por azar. No es
+  un bug: es la limitación conocida de diseño manifestándose con
+  datos reales por primera vez.
+
+### No se propuso ningún threshold nuevo
+
+Tal como se pidió explícitamente, no se modificó ningún parámetro en
+función de estos resultados, aunque el holdout mostrara puntos
+peores que tuning (FPR@0%, StrictRecall@10%, CS RecallDetector@10%).
+Detector config, Policy y ScoreFloor permanecen exactamente como se
+congelaron en el checkpoint pre-holdout. Reporte completo, por seed
+y agregado, en `reports/holdout/baseline-vs-final.md`. Se detiene
+acá — no se avanza todavía a performance/load.
