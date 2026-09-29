@@ -1,10 +1,10 @@
 // Command sweep corre los sweeps de candidatos aprobados para
-// slow_scan y statistical_anomaly (tarea 1.9) sobre los escenarios de
-// TUNING (seeds 101/102/103, ratios 0/10/30%) — nunca holdout. No
-// modifica ScoreFloor, ChallengeThreshold, BlockThreshold ni
+// slow_scan y statistical_anomaly sobre los escenarios de TUNING
+// (seeds 101/102/103, ratios 0/10/30%) — nunca holdout. No modifica
+// ScoreFloor, ChallengeThreshold, BlockThreshold ni
 // credential_stuffing: cada candidato parte de
 // tuning.BaselineCandidate() y solo cambia los campos explícitos que
-// ese candidato declara. Ver docs/decisiones.md, tarea 1.9.
+// ese candidato declara. Ver docs/decisiones.md.
 package main
 
 import (

@@ -15,8 +15,8 @@ import (
 // (y cuánto tiempo) hicieron falta hasta la primera decisión positiva
 // — nunca para ocultar un falso negativo inicial: TotalRequests y
 // Detected siempre quedan visibles, incluso cuando Detected es false
-// (ver docs/decisiones.md, tarea 1.9, "No uses estas métricas para
-// ocultar false negatives iniciales").
+// (ver docs/decisiones.md, "No uses estas métricas para ocultar false
+// negatives iniciales").
 type CampaignDelay struct {
 	Vector      groundtruth.Label
 	CampaignKey string
@@ -45,8 +45,7 @@ type CampaignDelay struct {
 
 // campaignKey decide la clave de agrupación de un evento malicioso
 // según su vector — nunca la misma regla para los dos ataques,
-// porque no se corresponden con la misma entidad real (tarea 1.9,
-// ajuste 1):
+// porque no se corresponden con la misma entidad real:
 //
 //   - slow_scan: la entidad que escanea, igual que
 //     internal/slowscan.Detector la ve (sesión si existe, si no la
@@ -98,9 +97,8 @@ type campaignState struct {
 // campañas según campaignKey, y calcula cuántos requests (y cuánto
 // tiempo) hizo falta ver hasta la primera decisión positiva de cada
 // una. policy decide qué acción cuenta como positiva — mismo criterio
-// que BuildConfusionMatrix (Policy.IsPositive, tarea 1.9), para que
-// "detectado" signifique exactamente lo mismo en ambos lados del
-// reporte.
+// que BuildConfusionMatrix (Policy.IsPositive), para que "detectado"
+// signifique exactamente lo mismo en ambos lados del reporte.
 //
 // El tráfico legítimo (groundtruth.LabelLegit) nunca forma una
 // campaña — solo tiene sentido medir delay de detección para tráfico

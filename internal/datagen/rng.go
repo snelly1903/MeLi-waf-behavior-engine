@@ -1,7 +1,7 @@
 // Package datagen implementa el generador de tráfico de prueba: fabrica
-// eventos HTTP (legítimos en esta tarea, de ataque en la tarea 0.5) de
-// forma determinista, reproducible a partir de una semilla, y siempre
-// junto con su etiqueta de ground truth.
+// eventos HTTP (legítimos y de ataque) de forma determinista,
+// reproducible a partir de una semilla, y siempre junto con su
+// etiqueta de ground truth.
 package datagen
 
 import (
@@ -12,10 +12,9 @@ import (
 
 // RNG envuelve una fuente de aleatoriedad con semilla y agrega métodos
 // de conveniencia reutilizados por todos los generadores de tráfico
-// (los perfiles legítimos de esta tarea, y los atacantes de la tarea
-// 0.5). La misma semilla produce siempre la misma secuencia de
-// valores — es la base de la reproducibilidad de todo el dataset
-// generado.
+// (los perfiles legítimos y los atacantes). La misma semilla produce
+// siempre la misma secuencia de valores — es la base de la
+// reproducibilidad de todo el dataset generado.
 type RNG struct {
 	r *rand.Rand
 }

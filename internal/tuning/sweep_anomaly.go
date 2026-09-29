@@ -10,11 +10,10 @@ import (
 
 // AnomalyTriggerBreakdown cuenta, entre tráfico legítimo (0%
 // malicious), cuántos eventos tuvieron una evaluación de anomaly con
-// Triggered=true, separado por la Action FINAL que resultó — la
-// distinción explícita pedida en la tarea 1.9: un evento puede seguir
-// disparando internamente (Triggered=true, hay evidencia) pero
-// terminar en ALLOW si su RiskScore quedó por debajo de
-// ChallengeThreshold.
+// Triggered=true, separado por la Action FINAL que resultó: un evento
+// puede seguir disparando internamente (Triggered=true, hay
+// evidencia) pero terminar en ALLOW si su RiskScore quedó por debajo
+// de ChallengeThreshold.
 type AnomalyTriggerBreakdown struct {
 	TriggeredCount          int
 	TriggeredAllowCount     int

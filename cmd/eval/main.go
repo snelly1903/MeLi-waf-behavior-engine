@@ -2,7 +2,7 @@
 // ficticias — todavía no existe el motor WAF real) contra el ground
 // truth de un escenario generado por cmd/datagen, y arma un reporte
 // Markdown legible con las métricas del challenge (ver
-// docs/decisiones.md, tarea 0.8).
+// docs/decisiones.md).
 package main
 
 import (

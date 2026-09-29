@@ -108,9 +108,9 @@ func testPolicy() Policy {
 // inertAnomalyConfig tiene un MinSamples tan alto que el detector
 // estadístico nunca termina de calentar (nunca dispara) dentro de
 // estos tests — usado por defecto en newTestDecider para que los
-// escenarios de credential_stuffing/slow_scan ya probados en la tarea
-// 1.5 sigan funcionando exactamente igual con un tercer detector
-// agregado. Los tests que sí ejercitan el detector estadístico usan
+// escenarios de credential_stuffing/slow_scan ya probados sigan
+// funcionando exactamente igual con un tercer detector agregado. Los
+// tests que sí ejercitan el detector estadístico usan
 // newTestDeciderFull con su propia anomaly.Config activa.
 func inertAnomalyConfig() anomaly.Config {
 	return anomaly.Config{
@@ -149,16 +149,22 @@ func newTestDeciderFull(t *testing.T, resolver credstuffing.NetworkResolver, ss 
 	return d
 }
 
-// fakeFindingsRecorder captura cada llamada a RecordFinding — usado
-// para verificar que Decide reporta cada detector que dispara,
-// incluso el que pierde el desempate y queda como secundario (tarea
-// 1.8), sin necesitar OpenTelemetry en este test.
+// fakeFindingsRecorder captura cada llamada a RecordFinding y
+// RecordAnomalyScore — usado para verificar que Decide reporta cada
+// detector que dispara (incluso el que pierde el desempate y queda
+// como secundario) y el score de statistical_anomaly en cada
+// evaluación, sin necesitar OpenTelemetry en este test.
 type fakeFindingsRecorder struct {
-	calls []string
+	calls         []string
+	anomalyScores []float64
 }
 
 func (r *fakeFindingsRecorder) RecordFinding(detector string) {
 	r.calls = append(r.calls, detector)
+}
+
+func (r *fakeFindingsRecorder) RecordAnomalyScore(score float64) {
+	r.anomalyScores = append(r.anomalyScores, score)
 }
 
 func sensitivePath(i int) string { return fmt.Sprintf("/sensitive-%d", i) }
@@ -211,8 +217,8 @@ func TestPolicy_ActionFor_Boundaries(t *testing.T) {
 
 // TestPolicy_ActionFor_MatchesInternalRule confirma que el wrapper
 // exportado ActionFor (usado por internal/tuning para el sweep de
-// Policy sin volver a correr detectores, tarea 1.9) nunca diverge de
-// la regla privada actionFor — mismo criterio que
+// Policy sin volver a correr detectores) nunca diverge de la regla
+// privada actionFor — mismo criterio que
 // TestPolicy_IsPositive_MatchesInternalRule en internal/eval.
 func TestPolicy_ActionFor_MatchesInternalRule(t *testing.T) {
 	p := Policy{ChallengeThreshold: 0.5, BlockThreshold: 0.8}
@@ -526,8 +532,8 @@ func TestDecide_BothTrigger_HigherScoreWins(t *testing.T) {
 // detectores disparan, pero solo slow_scan queda como principal) para
 // confirmar que RecordFinding se llama por CADA detector que
 // disparó, no solo por el que ganó el desempate — la métrica
-// waf.detector.findings de la tarea 1.8 existe justamente para ver
-// esto, que la Decision final por sí sola no muestra.
+// waf.detector.findings existe justamente para ver esto, que la
+// Decision final por sí sola no muestra.
 func TestDecide_RecordsFindingForEveryTriggeredDetector_NotJustPrincipal(t *testing.T) {
 	resolver := fakeResolver{}
 	recorder := &fakeFindingsRecorder{}
@@ -578,6 +584,128 @@ func TestDecide_RecordsFindingForEveryTriggeredDetector_NotJustPrincipal(t *test
 	want := []string{"credential_stuffing", "slow_scan"}
 	if !reflect.DeepEqual(recorder.calls, want) {
 		t.Errorf("RecordFinding calls = %v, want %v (los dos detectores dispararon, aunque solo slow_scan quedó como principal)", recorder.calls, want)
+	}
+}
+
+// TestDecide_RecordsAnomalyScoreOnEveryEvaluation_EvenWhenNotTriggered
+// confirma que RecordAnomalyScore se llama en CADA Decide, no solo
+// cuando statistical_anomaly dispara — a diferencia de RecordFinding.
+// Con anomaly inerte (nunca dispara), cada score registrado debe ser
+// 0 (el valor cero de un Finding no disparado), pero la llamada en sí
+// tiene que existir igual: es lo que permite observar la distribución
+// completa del score, no solo la cola que llegó a disparar.
+func TestDecide_RecordsAnomalyScoreOnEveryEvaluation_EvenWhenNotTriggered(t *testing.T) {
+	recorder := &fakeFindingsRecorder{}
+	cs, err := credstuffing.NewDetector(csConfig(fakeResolver{}))
+	if err != nil {
+		t.Fatalf("credstuffing.NewDetector: %v", err)
+	}
+	ss, err := slowscan.NewDetector(ssConfig())
+	if err != nil {
+		t.Fatalf("slowscan.NewDetector: %v", err)
+	}
+	an, err := anomaly.NewDetector(inertAnomalyConfig())
+	if err != nil {
+		t.Fatalf("anomaly.NewDetector: %v", err)
+	}
+	d, err := NewBehavioralDecider(cs, ss, an, testPolicy(), recorder)
+	if err != nil {
+		t.Fatalf("NewBehavioralDecider: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		d.Decide(context.Background(), scanEvent(ipFor(i), time.Duration(i)*time.Second, "/normal", 200, true, ""))
+	}
+
+	if len(recorder.anomalyScores) != 3 {
+		t.Fatalf("anomalyScores recorded = %d calls, want 3 (una por Decide, dispare o no)", len(recorder.anomalyScores))
+	}
+	for i, score := range recorder.anomalyScores {
+		if score != 0 {
+			t.Errorf("anomalyScores[%d] = %v, want 0 (anomaly inerte, nunca dispara en este test)", i, score)
+		}
+	}
+}
+
+// TestDecide_RecordsAnomalyScore_MatchesTriggeredFindingRiskScore
+// reusa el patrón de warm-up + IP anómala ya probado en
+// TestDecide_AttributionPrefersSpecific_ButConfidenceScoreStaysMax
+// (con slow_scan y credential_stuffing inertes para este escenario)
+// para confirmar que, cuando statistical_anomaly SÍ dispara, el score
+// registrado coincide exactamente con el RiskScore/ConfidenceScore de
+// la Decision resultante — nunca un valor recalculado aparte.
+func TestDecide_RecordsAnomalyScore_MatchesTriggeredFindingRiskScore(t *testing.T) {
+	recorder := &fakeFindingsRecorder{}
+	ssInert := ssConfig()
+	ssInert.MinRequests = 1000 // slow_scan nunca dispara en este test
+
+	an := anomaly.Config{
+		Window:           time.Hour,
+		MinSamples:       5,
+		ZSaturation:      2.0,
+		TriggerThreshold: 0.1,
+		Weights:          anomaly.FeatureWeights{NotFound: 1, FailedAuth: 1, PathDiversity: 1, Referer: 1, AccountDiversity: 1},
+		ScoreFloor:       0.2,
+	}
+	cs, err := credstuffing.NewDetector(csConfig(fakeResolver{}))
+	if err != nil {
+		t.Fatalf("credstuffing.NewDetector: %v", err)
+	}
+	ss, err := slowscan.NewDetector(ssInert)
+	if err != nil {
+		t.Fatalf("slowscan.NewDetector: %v", err)
+	}
+	anDetector, err := anomaly.NewDetector(an)
+	if err != nil {
+		t.Fatalf("anomaly.NewDetector: %v", err)
+	}
+	d, err := NewBehavioralDecider(cs, ss, anDetector, testPolicy(), recorder)
+	if err != nil {
+		t.Fatalf("NewBehavioralDecider: %v", err)
+	}
+
+	// Calienta el baseline con tráfico normal de varias IPs.
+	for i := 10; i < 15; i++ {
+		ip := ipFor(i)
+		for j := 0; j < 20; j++ {
+			status := 200
+			if j%10 == 0 {
+				status = 404
+			}
+			d.Decide(context.Background(), scanEvent(ip, time.Duration(i*30+j)*time.Second, "/normal", status, true, ""))
+		}
+	}
+
+	// IP anómala: mayoría 404 contra un baseline ya calentado en ~10%.
+	anomalousIP := ipFor(4)
+	var last decision.Decision
+	for j := 0; j < 20; j++ {
+		status := 200
+		if j < 18 {
+			status = 404
+		}
+		last = d.Decide(context.Background(), scanEvent(anomalousIP, time.Duration(1000+j)*time.Second, "/normal", status, true, ""))
+	}
+
+	// statistical_anomaly es el único que dispara acá (credential_stuffing
+	// y slow_scan quedan inertes) — attack_vector se mantiene "unknown"
+	// por diseño (anomaly nunca es un vector específico, ver
+	// selectAttribution), pero ConfidenceScore sí refleja su RiskScore.
+	if last.AttackVector != decision.AttackVectorUnknown {
+		t.Fatalf("setup inválido: AttackVector = %v, want unknown (solo statistical_anomaly dispara, nunca es un vector específico)", last.AttackVector)
+	}
+	if last.ConfidenceScore <= 0 {
+		t.Fatalf("setup inválido: ConfidenceScore = %v, want > 0 (statistical_anomaly debería haber disparado)", last.ConfidenceScore)
+	}
+	if len(recorder.anomalyScores) == 0 {
+		t.Fatal("anomalyScores no se registró ninguna vez")
+	}
+	gotLast := recorder.anomalyScores[len(recorder.anomalyScores)-1]
+	if gotLast != last.ConfidenceScore {
+		t.Errorf("anomalyScores[último] = %v, want %v (debe coincidir con el RiskScore del Finding disparado, sin recalcularse aparte)", gotLast, last.ConfidenceScore)
+	}
+	if gotLast <= 0 {
+		t.Errorf("anomalyScores[último] = %v, want > 0 (statistical_anomaly disparó en esta request)", gotLast)
 	}
 }
 
@@ -765,7 +893,7 @@ func TestDecide_OtherDetectorStaysPrincipal_OverAnomaly(t *testing.T) {
 	}
 }
 
-// --- Attribution vs. decision score (tarea 1.9) ----------------------------
+// --- Attribution vs. decision score -----------------------------------
 
 // specificFinding/anomalyFinding son helpers mínimos para construir
 // triggeredFinding sintéticos en los tests de selectAttribution/
@@ -872,13 +1000,13 @@ func TestSelectAttribution_Empty_ReturnsNil(t *testing.T) {
 // mientras statistical_anomaly, con un baseline ya calentado, dispara
 // con un score CLARAMENTE mayor para la MISMA IP que cierra la
 // campaña. Se compara contra una corrida IDÉNTICA de
-// credential_stuffing con anomaly inerte (mismo comportamiento que
-// ANTES de esta tarea) para probar, sin calcular ningún z-score a
-// mano, que:
+// credential_stuffing con anomaly inerte (el comportamiento previo a
+// separar Action/ConfidenceScore de AttackVector/EntityID) para
+// probar, sin calcular ningún z-score a mano, que:
 //   - Action/ConfidenceScore siguen viniendo del score MÁS ALTO
 //     (el de anomaly, mayor al 0.2 de referencia) — sin cambios.
 //   - AttackVector/EntityID quedan atribuidos a credential_stuffing —
-//     el cambio de esta tarea.
+//     el cambio central de esta separación.
 func TestDecide_AttributionPrefersSpecific_ButConfidenceScoreStaysMax(t *testing.T) {
 	buildCredentialStuffingSequence := func(d *BehavioralDecider, resolver fakeResolver, group string) decision.Decision {
 		ips := []netip.Addr{ipFor(0), ipFor(1), ipFor(2), ipFor(3), ipFor(4)}

@@ -11,14 +11,14 @@ import (
 
 // labelRecord es la forma de cada línea de labels.jsonl: el ground
 // truth de un evento, identificado por su request_id — nunca el evento
-// en sí. Ver docs/decisiones.md, tarea 0.6.
+// en sí. Ver docs/decisiones.md.
 type labelRecord struct {
 	RequestID string `json:"request_id"`
 	Label     string `json:"label"`
 }
 
 // WriteScenario escribe un Scenario ya generado en dir, en tres
-// archivos separados (ver docs/decisiones.md, tarea 0.6):
+// archivos separados (ver docs/decisiones.md):
 //
 //   - events.jsonl:  una línea por evento, exactamente lo que recibiría
 //     el motor (LabeledEvent.Payload(), sin ninguna etiqueta).

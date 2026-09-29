@@ -7,14 +7,14 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/engine"
 )
 
-// TestBaselineCandidate_MatchesEngineDefaults es el guardrail pedido
-// en la tarea 1.9 (ajuste 2 del plan): BaselineCandidate tiene que
-// reflejar EXACTAMENTE lo mismo que engine.Default*Config()/DefaultPolicy()
-// — los mismos que usa cmd/engine — nunca una copia a mano que
-// pudiera desincronizarse. Como BaselineCandidate ya llama
-// directamente a esas funciones, este test es sobre todo una alarma
-// temprana: si algún día alguien reemplaza esas llamadas por
-// literales hardcodeados, este test lo detecta de inmediato.
+// TestBaselineCandidate_MatchesEngineDefaults es el guardrail que
+// confirma que BaselineCandidate refleja EXACTAMENTE lo mismo que
+// engine.Default*Config()/DefaultPolicy() — los mismos que usa
+// cmd/engine — nunca una copia a mano que pudiera desincronizarse.
+// Como BaselineCandidate ya llama directamente a esas funciones, este
+// test es sobre todo una alarma temprana: si algún día alguien
+// reemplaza esas llamadas por literales hardcodeados, este test lo
+// detecta de inmediato.
 func TestBaselineCandidate_MatchesEngineDefaults(t *testing.T) {
 	c := BaselineCandidate()
 

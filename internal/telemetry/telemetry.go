@@ -1,5 +1,5 @@
-// Package telemetry conecta el motor con OpenTelemetry (tarea 1.8):
-// arma un *sdkmetric.MeterProvider real, exportando por OTLP/gRPC
+// Package telemetry conecta el motor con OpenTelemetry: arma un
+// *sdkmetric.MeterProvider real, exportando por OTLP/gRPC
 // hacia un Collector, o -- si no hay Collector configurado, o no se
 // lo puede alcanzar al arrancar -- un MeterProvider no-op. Ninguno de
 // los dos casos impide que el motor sirva tráfico ("fail-open"): un
@@ -13,8 +13,8 @@
 // (engine.FindingsRecorder, asn.MetricsRecorder,
 // httpapi.DecisionRecorder); este paquete las implementa desde
 // afuera, por tipado estructural de Go -- mismo criterio que
-// internal/asn.Resolver satisface credstuffing.NetworkResolver
-// (tarea 1.3). Ninguno de esos tres paquetes importa OpenTelemetry.
+// internal/asn.Resolver satisface credstuffing.NetworkResolver.
+// Ninguno de esos tres paquetes importa OpenTelemetry.
 package telemetry
 
 import (
@@ -47,9 +47,9 @@ const serviceName = "waf-behavior-engine"
 // al Collector -- el default del SDK (60s) es razonable para
 // producción, pero deja una demo local viendo un dashboard "en vivo"
 // esperando hasta un minuto para el primer punto; verificado
-// directamente en la demo manual de esta tarea. 15s es un balance
-// simple: sigue siendo una fracción chica de la sobrecarga total del
-// proceso, y hace que Grafana se vea responder casi de inmediato.
+// directamente en la demo manual. 15s es un balance simple: sigue
+// siendo una fracción chica de la sobrecarga total del proceso, y
+// hace que Grafana se vea responder casi de inmediato.
 const exportInterval = 15 * time.Second
 
 // Config configura Init.
@@ -65,9 +65,9 @@ type Config struct {
 	// Insecure, si es true, desactiva TLS en la conexión gRPC hacia
 	// Endpoint. Pensado ÚNICAMENTE para un Collector local en la
 	// misma máquina o red de confianza -- como el de
-	// docker-compose.yml de esta tarea --, nunca para un endpoint
-	// remoto de producción, que debería usar TLS de verdad (ver
-	// docs/decisiones.md, tarea 1.8).
+	// docker-compose.yml --, nunca para un endpoint remoto de
+	// producción, que debería usar TLS de verdad (ver
+	// docs/decisiones.md).
 	Insecure bool
 
 	// ConnectTimeout acota cuánto espera Init a que la conexión gRPC
@@ -86,7 +86,7 @@ type Recorders struct {
 	// cmd/engine lo pasa explícitamente a
 	// otelhttp.WithMeterProvider(...) para la métrica HTTP estándar,
 	// en vez de depender del proveedor global (ver
-	// docs/decisiones.md, tarea 1.8).
+	// docs/decisiones.md).
 	Provider metric.MeterProvider
 
 	Engine engine.FindingsRecorder

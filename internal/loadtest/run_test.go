@@ -50,15 +50,14 @@ func recordingServer(t *testing.T, seen *sync.Map, counter *int64) *httptest.Ser
 	return httptest.NewServer(mux)
 }
 
-// TestRun_SharedCursor_DistributesEventsAcrossAllWorkers confirma el
-// ajuste 2 pedido explícitamente: request n -> events[n%len(events)]
-// por un cursor ATÓMICO COMPARTIDO entre todos los workers — nunca
-// cada worker recorriendo el escenario desde el evento 0 por su
-// cuenta (lo que duplicaría el mismo evento N veces en simultáneo al
-// subir la concurrencia). Con 5 eventos distintos y concurrencia 4,
-// cada uno de los 5 debería recibirse una cantidad de veces
-// aproximadamente pareja (nunca "4 workers, 4 copias simultáneas del
-// evento 0").
+// TestRun_SharedCursor_DistributesEventsAcrossAllWorkers confirma
+// que request n -> events[n%len(events)] se reparte por un cursor
+// ATÓMICO COMPARTIDO entre todos los workers — nunca cada worker
+// recorriendo el escenario desde el evento 0 por su cuenta (lo que
+// duplicaría el mismo evento N veces en simultáneo al subir la
+// concurrencia). Con 5 eventos distintos y concurrencia 4, cada uno
+// de los 5 debería recibirse una cantidad de veces aproximadamente
+// pareja (nunca "4 workers, 4 copias simultáneas del evento 0").
 func TestRun_SharedCursor_DistributesEventsAcrossAllWorkers(t *testing.T) {
 	var seen sync.Map
 	var totalReceived int64
@@ -168,13 +167,12 @@ func TestRun_RecordsLatencyAndErrors_OnNon200(t *testing.T) {
 	}
 }
 
-// TestNewClient_TransportTunedForHighConcurrency confirma la
-// verificación pedida explícitamente (tarea 1.10): el *http.Client
-// que arma el harness NUNCA usa http.DefaultTransport tal cual (cuyo
-// MaxIdleConnsPerHost=2 de fábrica fuerza a reabrir conexión en casi
-// cada request bajo concurrencia alta) — MaxIdleConns/
-// MaxIdleConnsPerHost tienen que ser generosos respecto a la
-// concurrencia pedida, y keep-alive tiene que seguir habilitado
+// TestNewClient_TransportTunedForHighConcurrency confirma que el
+// *http.Client que arma el harness NUNCA usa http.DefaultTransport
+// tal cual (cuyo MaxIdleConnsPerHost=2 de fábrica fuerza a reabrir
+// conexión en casi cada request bajo concurrencia alta) —
+// MaxIdleConns/MaxIdleConnsPerHost tienen que ser generosos respecto
+// a la concurrencia pedida, y keep-alive tiene que seguir habilitado
 // (DisableKeepAlives=false, el default de http.Transport).
 func TestNewClient_TransportTunedForHighConcurrency(t *testing.T) {
 	client := NewClient(100)
@@ -201,14 +199,14 @@ func TestNewClient_LowConcurrency_StillUsesGenerousDefault(t *testing.T) {
 	}
 }
 
-// TestRun_WarmupResponseArrivingDuringMeasurement_NeverRecorded es la
-// verificación estructural pedida explícitamente (tarea 1.10): un
-// request que ARRANCÓ durante warmup pero cuya respuesta llega bien
-// entrada la fase de medición NUNCA se cuenta — no por una condición
-// de tiempo que pudiera fallar en un caso límite, sino porque
-// fireWorkers(record=false) de la fase de warmup nunca escribe en
-// ningún resultado, estructuralmente. Se fuerza el escenario con un
-// servidor que tarda más que todo el warmup en responder.
+// TestRun_WarmupResponseArrivingDuringMeasurement_NeverRecorded
+// confirma que un request que ARRANCÓ durante warmup pero cuya
+// respuesta llega bien entrada la fase de medición NUNCA se cuenta —
+// no por una condición de tiempo que pudiera fallar en un caso
+// límite, sino porque fireWorkers(record=false) de la fase de warmup
+// nunca escribe en ningún resultado, estructuralmente. Se fuerza el
+// escenario con un servidor que tarda más que todo el warmup en
+// responder.
 func TestRun_WarmupResponseArrivingDuringMeasurement_NeverRecorded(t *testing.T) {
 	const slowResponseDelay = 200 * time.Millisecond
 	var requestCount int64
@@ -251,9 +249,9 @@ func TestRun_WarmupResponseArrivingDuringMeasurement_NeverRecorded(t *testing.T)
 // TestRun_FreshStateBetweenRepetitions_NoSharedCursor confirma que
 // dos llamadas independientes a Run (simulando dos repeticiones)
 // arrancan cada una su PROPIO cursor desde 0 -- nunca comparten
-// estado entre repeticiones (tarea 1.10, ajuste 4: decider/servidor
-// frescos por repetición implica también que el cursor de reparto de
-// eventos empieza de nuevo).
+// estado entre repeticiones: decider/servidor frescos por repetición
+// implica también que el cursor de reparto de eventos empieza de
+// nuevo.
 func TestRun_FreshStateBetweenRepetitions_NoSharedCursor(t *testing.T) {
 	var seen1, seen2 sync.Map
 	var total1, total2 int64

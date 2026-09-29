@@ -6,10 +6,10 @@ import (
 )
 
 // TestMonotonicEventStream_StrictlyIncreasing_AcrossManyLaps confirma
-// el requisito central (tarea 1.10, ajuste 1): recorriendo el mismo
-// escenario chico varias veces más de una vuelta completa, el
-// Timestamp devuelto por at() nunca deja de crecer, ni siquiera en
-// el borde entre una vuelta y la siguiente.
+// el requisito central: recorriendo el mismo escenario chico varias
+// veces más de una vuelta completa, el Timestamp devuelto por at()
+// nunca deja de crecer, ni siquiera en el borde entre una vuelta y la
+// siguiente.
 func TestMonotonicEventStream_StrictlyIncreasing_AcrossManyLaps(t *testing.T) {
 	scenario := benchScenario(0.10)
 	stream := newMonotonicEventStream(scenario)

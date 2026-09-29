@@ -14,7 +14,7 @@ import (
 // datagen.WriteScenario). Es literalmente el mismo trabajo que hace
 // internal/httpapi.Server en cada POST /v1/events, pero sin HTTP en
 // el medio: decider.Decide ya hace Observe+Evaluate internamente por
-// evento (ver engine.BehavioralDecider.Decide, tarea 1.5).
+// evento (ver engine.BehavioralDecider.Decide).
 //
 // Devuelve exactamente len(events) decisiones, en el mismo orden —
 // decisions[i] es la respuesta a events[i]. Esto es lo que permite

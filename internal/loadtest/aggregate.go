@@ -3,11 +3,10 @@ package loadtest
 import "time"
 
 // RepetitionSummary es el resultado crudo de UNA repetición,
-// resumido para reportarlo (tarea 1.10, corrección: "conserva
-// también los resultados crudos por repetición", nunca solo el
-// agregado) — Requests/Errors/Throughput/percentiles calculados
-// SOLO sobre las muestras de ESA repetición, nunca mezclados con las
-// otras.
+// resumido para reportarlo: se conservan también los resultados
+// crudos por repetición, nunca solo el agregado. Requests/Errors/
+// Throughput/percentiles se calculan SOLO sobre las muestras de ESA
+// repetición, nunca mezclados con las otras.
 type RepetitionSummary struct {
 	Requests      int
 	Errors        int
@@ -25,19 +24,18 @@ func summarizeRepetition(r RunResult) RepetitionSummary {
 }
 
 // AggregatedResult resume 3 repeticiones independientes de la MISMA
-// combinación (perfil x concurrencia x modo OTel) — tarea 1.10,
-// ajuste 4: cada repetición corrió con decider/servidor frescos
-// (nunca comparten estado). El throughput se reporta como
-// mediana + rango (min/max) entre las 3 repeticiones — nunca un
-// promedio simple, que escondería cuánto varió una corrida de otra.
+// combinación (perfil x concurrencia x modo OTel): cada repetición
+// corre con decider/servidor frescos, nunca comparten estado. El
+// throughput se reporta como mediana + rango (min/max) entre las 3
+// repeticiones — nunca un promedio simple, que escondería cuánto
+// varió una corrida de otra.
 //
 // P50/P95/P99 son la MEDIANA de los percentiles calculados POR
-// REPETICIÓN (corrección explícita de la tarea 1.10: nunca mezclar
-// las muestras crudas de las 3 repeticiones en un pool único antes
-// de calcular el percentil — eso podría ocultar que una repetición
-// concreta tuvo una cola mucho peor que las otras dos). PerRepetition
-// conserva el resultado crudo de cada una, sin perder esa
-// granularidad.
+// REPETICIÓN: nunca se mezclan las muestras crudas de las 3
+// repeticiones en un pool único antes de calcular el percentil,
+// porque eso podría ocultar que una repetición concreta tuvo una
+// cola mucho peor que las otras dos. PerRepetition conserva el
+// resultado crudo de cada una, sin perder esa granularidad.
 type AggregatedResult struct {
 	Repetitions int
 

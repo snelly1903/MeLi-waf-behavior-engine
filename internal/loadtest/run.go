@@ -1,14 +1,13 @@
-// Package loadtest es el harness del load test HTTP end-to-end de la
-// tarea 1.10 (POST /v1/events): un cliente de carga chico, sin
-// dependencias externas (net/http + sync/atomic de la librería
-// estándar), pensado para correr contra un *httpapi.Server real
-// montado en un httptest.Server local — nunca contra Internet.
+// Package loadtest es el harness del load test HTTP end-to-end
+// (POST /v1/events): un cliente de carga chico, sin dependencias
+// externas (net/http + sync/atomic de la librería estándar), pensado
+// para correr contra un *httpapi.Server real montado en un
+// httptest.Server local — nunca contra Internet.
 //
 // Los resultados de este paquete son "local end-to-end / loopback
 // throughput" — cliente y servidor comparten el mismo proceso y
 // máquina, así que NO representan la capacidad absoluta de un
-// servidor desplegado por separado (ver docs/decisiones.md, tarea
-// 1.10).
+// servidor desplegado por separado (ver docs/decisiones.md).
 package loadtest
 
 import (
@@ -25,12 +24,12 @@ import (
 )
 
 // PerfSeed es la semilla determinista compartida por los perfiles de
-// tráfico de performance (tarea 1.10) — nunca 101/102/103 (tuning) ni
-// 201/202/203 (holdout), para no mezclar conceptos. Se redefine tal
-// cual en internal/engine/decide_bench_test.go (no se puede importar
-// un paquete de test externo desde acá) — mismo criterio ya usado en
-// el proyecto para constantes compartidas entre binarios/paquetes de
-// test independientes (ver cmd/diagnosecs, tarea 1.9).
+// tráfico de performance — nunca 101/102/103 (tuning) ni 201/202/203
+// (holdout), para no mezclar conceptos. Se redefine tal cual en
+// internal/engine/decide_bench_test.go (no se puede importar un
+// paquete de test externo desde acá) — mismo criterio ya usado en el
+// proyecto para constantes compartidas entre binarios/paquetes de
+// test independientes (ver cmd/diagnosecs).
 const PerfSeed uint64 = 901
 
 // DefaultMaxIdleConnsPerHost es el mínimo recomendado para
@@ -43,12 +42,12 @@ const DefaultMaxIdleConnsPerHost = 256
 // (nunca http.DefaultTransport, cuyo MaxIdleConnsPerHost=2 de
 // fábrica fuerza a reabrir conexión TCP en casi cada request bajo
 // concurrencia alta, midiendo el costo de abrir conexiones en vez
-// del costo real de servir — tarea 1.10) — keep-alive habilitado
-// (default de http.Transport), con MaxIdleConns/MaxIdleConnsPerHost
-// generosos respecto a concurrency para que nunca sea el cuello de
-// botella. Pensado para construirse UNA vez por repetición
-// (compartido entre todos los workers de esa repetición, nunca uno
-// por worker) — ver Run.
+// del costo real de servir) — keep-alive habilitado (default de
+// http.Transport), con MaxIdleConns/MaxIdleConnsPerHost generosos
+// respecto a concurrency para que nunca sea el cuello de botella.
+// Pensado para construirse UNA vez por repetición (compartido entre
+// todos los workers de esa repetición, nunca uno por worker) — ver
+// Run.
 func NewClient(concurrency int) *http.Client {
 	maxConns := DefaultMaxIdleConnsPerHost
 	if concurrency > maxConns {
@@ -84,15 +83,14 @@ type RunConfig struct {
 	// única entre ellos (request n -> Events[n % len(Events)]) — así
 	// aumentar Concurrency nunca duplica artificialmente el mismo
 	// evento N veces en simultáneo, y se mantiene aproximadamente la
-	// composición real del escenario (tarea 1.10, ajuste 2). El MISMO
-	// cursor sigue avanzando entre la fase de warmup y la de
-	// medición (nunca se resetea ahí) — solo se resetea entre
-	// repeticiones (cada llamada a Run arranca su propio cursor).
-	// Timestamp se reescribe a time.Now() en cada envío (nunca se
-	// reutiliza el timestamp original del escenario): el validador
-	// de producción exige timestamps recientes, y esto mide
-	// rendimiento de serving, no reproduce detección — ver
-	// docs/decisiones.md, tarea 1.10.
+	// composición real del escenario. El MISMO cursor sigue avanzando
+	// entre la fase de warmup y la de medición (nunca se resetea ahí)
+	// — solo se resetea entre repeticiones (cada llamada a Run
+	// arranca su propio cursor). Timestamp se reescribe a time.Now()
+	// en cada envío (nunca se reutiliza el timestamp original del
+	// escenario): el validador de producción exige timestamps
+	// recientes, y esto mide rendimiento de serving, no reproduce
+	// detección — ver docs/decisiones.md.
 	Events []event.Event
 
 	Concurrency int
@@ -142,17 +140,17 @@ func (r RunResult) ErrorRate() float64 {
 
 // P50/P95/P99 son los percentiles de Latencies de ESTA repetición
 // sola (nearest-rank) — la base de "mediana de percentiles entre
-// repeticiones" que calcula Aggregate (tarea 1.10, corrección: nunca
-// mezclar las muestras crudas de las 3 repeticiones en un solo pool
-// antes de calcular el percentil).
+// repeticiones" que calcula Aggregate (nunca mezclar las muestras
+// crudas de las 3 repeticiones en un solo pool antes de calcular el
+// percentil).
 func (r RunResult) P50() time.Duration { return percentile(r.Latencies, 50) }
 func (r RunResult) P95() time.Duration { return percentile(r.Latencies, 95) }
 func (r RunResult) P99() time.Duration { return percentile(r.Latencies, 99) }
 
-// Run ejecuta UNA repetición en DOS fases estructuralmente separadas
-// (tarea 1.10, corrección): primero fireWorkers corre durante Warmup
-// con record=false (tráfico real enviado, cada muestra descartada en
-// el momento — nunca llega a existir en ningún resultado), y recién
+// Run ejecuta UNA repetición en DOS fases estructuralmente separadas:
+// primero fireWorkers corre durante Warmup con record=false (tráfico
+// real enviado, cada muestra descartada en el momento — nunca llega a
+// existir en ningún resultado), y recién
 // DESPUÉS de que esa fase termina por completo (wg.Wait() adentro de
 // fireWorkers) arranca la fase de medición, con su propio reloj de
 // referencia (measureStart) y record=true. No hay ninguna condición
@@ -167,13 +165,12 @@ func (r RunResult) P99() time.Duration { return percentile(r.Latencies, 99) }
 func Run(ctx context.Context, cfg RunConfig) RunResult {
 	var cursor int64
 
-	// Fase 1: warmup. Tráfico real, servidor/conexiones se calientan,
-	// pero ninguna muestra se conserva.
+	// Warm-up: prepara conexiones y estado sin registrar métricas.
 	fireWorkers(ctx, cfg, &cursor, time.Now().Add(cfg.Warmup), false)
 
-	// Fase 2: medición. Separada por completo del warmup — arranca su
-	// propio reloj de referencia, recién acá empieza a existir
-	// cualquier RunResult.
+	// Medición: registra las métricas del intervalo evaluado. Separada
+	// por completo del warmup — arranca su propio reloj de referencia,
+	// recién acá empieza a existir cualquier RunResult.
 	measureStart := time.Now()
 	results := fireWorkers(ctx, cfg, &cursor, measureStart.Add(cfg.Measurement), true)
 	actualEnd := time.Now()

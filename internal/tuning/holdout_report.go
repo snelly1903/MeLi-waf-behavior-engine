@@ -8,8 +8,8 @@ import (
 
 // DetectorLayerStability resume, para UN candidato/ratio, cuánto
 // varían las métricas centrales entre seeds — Range = max-min,
-// ignorando N/A (mismo criterio que PolicySweepStability, tarea 1.9,
-// reutilizado acá para el reporte de holdout).
+// ignorando N/A (mismo criterio que PolicySweepStability, reutilizado
+// acá para el reporte de holdout).
 type DetectorLayerStability struct {
 	Candidate string
 	Ratio     int
@@ -90,7 +90,7 @@ func renderActionDistributionTable(candidateName string, actionsByRatio map[int]
 // HoldoutDatasetReport agrupa todo lo calculado para UN dataset
 // (tuning u holdout): el reporte completo de Baseline y de Final, más
 // su Action distribution pooled por ratio — todo lo necesario para
-// las tablas de comparación del reporte final de holdout (tarea 1.9).
+// las tablas de comparación del reporte final de holdout.
 type HoldoutDatasetReport struct {
 	Label string // "tuning" u "holdout"
 
@@ -102,7 +102,7 @@ type HoldoutDatasetReport struct {
 }
 
 // RenderHoldoutReport arma el reporte final baseline-vs-tuned de
-// holdout (tarea 1.9): las secciones completas de Baseline y Final en
+// holdout: las secciones completas de Baseline y Final en
 // tuning y en holdout, la comparación lado a lado Baseline-vs-Final
 // DENTRO de cada dataset, la comparación Final-tuning-vs-Final-holdout
 // (para generalización/overfitting), Action distribution y

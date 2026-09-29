@@ -1,12 +1,11 @@
 // Command validatelayer es la validación combinada final de la
-// detector layer (tarea 1.9), antes de calibrar ScoreFloor/Policy:
-// compara D0 (baseline completo, sin ningún cambio de threshold) con
-// D1 (los tres detectores ya tuneados: credential_stuffing CSw2,
-// slow_scan S3, statistical_anomaly A3), solo sobre tuning (seeds
-// 101/102/103, ratios 0/10/30%), nunca holdout. ScoreFloor,
-// ChallengeThreshold y BlockThreshold se mantienen exactamente
-// iguales en los dos — esos se calibran en un paso posterior. Ver
-// docs/decisiones.md, tarea 1.9.
+// detector layer, antes de calibrar ScoreFloor/Policy: compara D0
+// (baseline completo, sin ningún cambio de threshold) con D1 (los
+// tres detectores ya tuneados: credential_stuffing CSw2, slow_scan
+// S3, statistical_anomaly A3), solo sobre tuning (seeds 101/102/103,
+// ratios 0/10/30%), nunca holdout. ScoreFloor, ChallengeThreshold y
+// BlockThreshold se mantienen exactamente iguales en los dos — esos
+// se calibran en un paso posterior. Ver docs/decisiones.md.
 package main
 
 import (
@@ -120,7 +119,7 @@ func main() {
 		log.Printf("validatelayer: %s listo (%d seeds x %d ratios)", candidate.Name, len(seeds), len(ratios))
 	}
 
-	report := "# Validación combinada final de la detector layer (tarea 1.9)\n\n" +
+	report := "# Validación combinada final de la detector layer\n\n" +
 		"D0 = baseline completo, sin ningún cambio. D1 = credential_stuffing CSw2 + slow_scan S3 + statistical_anomaly A3. " +
 		"ScoreFloor, ChallengeThreshold y BlockThreshold son EXACTAMENTE los mismos en los dos — no se tocan en este paso. " +
 		"Solo tuning (seeds 101/102/103, ratios 0/10/30%), sin holdout.\n\n" +

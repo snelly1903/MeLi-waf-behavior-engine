@@ -1,6 +1,6 @@
 # Prometheus scrapea al OpenTelemetry Collector (nunca directamente a
 # cmd/engine, que habla OTLP/gRPC, no el formato de exposición de
-# Prometheus) -- ver docs/decisiones.md, tarea 1.8.
+# Prometheus).
 global:
   scrape_interval: 5s
 

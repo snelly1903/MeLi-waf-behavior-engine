@@ -1,10 +1,9 @@
-// Command diagnosecswindow es la verificación offline pedida antes
-// de aprobar el sweep de Credential Stuffing (tarea 1.9): para las
-// tres campañas reales de credential_stuffing al 10%, recalcula el
-// máximo rolling de las cuatro señales del gate con Window=30m
-// (producción), 60m y 90m — usando exactamente los mismos eventos,
-// sin tocar ningún threshold ni el detector de producción. Ver
-// docs/decisiones.md, tarea 1.9.
+// Command diagnosecswindow es la verificación offline pedida antes de
+// aprobar el sweep de Credential Stuffing: para las tres campañas
+// reales de credential_stuffing al 10%, recalcula el máximo rolling
+// de las cuatro señales del gate con Window=30m (producción), 60m y
+// 90m — usando exactamente los mismos eventos, sin tocar ningún
+// threshold ni el detector de producción. Ver docs/decisiones.md.
 package main
 
 import (
@@ -53,7 +52,7 @@ func main() {
 		log.Fatalf("diagnosecswindow: creando carpeta de salida: %v", err)
 	}
 
-	report := "# Sensibilidad de credential_stuffing a Window (tarea 1.9)\n\n" +
+	report := "# Sensibilidad de credential_stuffing a Window\n\n" +
 		"Campañas al 10%, seeds 101/102/103. Candidato de referencia: C2 (S3+A3) — los thresholds " +
 		"de credential_stuffing son los del baseline, sin cambios, en las tres columnas de Window.\n\n" +
 		tuning.RenderWindowSensitivity(allRows, candidate.CredentialStuffing)

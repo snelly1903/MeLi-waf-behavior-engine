@@ -1,6 +1,6 @@
 // Command sweepcs corre los 5 candidatos de credential_stuffing
-// aprobados tras el diagnóstico de sensibilidad a Window (tarea 1.9):
-// CS0 baseline (Window=30m, MinDistinctIPs=20, MinDistinctAccounts=15,
+// aprobados tras el diagnóstico de sensibilidad a Window: CS0
+// baseline (Window=30m, MinDistinctIPs=20, MinDistinctAccounts=15,
 // MinAttempts=25, MinFailedRatio=0.60), CSw1 (solo Window=90m,
 // candidato de control), CSw2 (+MinDistinctIPs=16), CSw3
 // (+MinDistinctIPs=16+MinAttempts=24, el "agresivo" derivado
@@ -11,7 +11,7 @@
 // provisionalmente) para slow_scan/anomaly — S3/A3/ScoreFloor/Policy
 // nunca se tocan acá, solo credential_stuffing.
 // MinDistinctAccounts/MinFailedRatio se mantienen en su valor actual
-// en los cinco candidatos. Ver docs/decisiones.md, tarea 1.9.
+// en los cinco candidatos. Ver docs/decisiones.md.
 package main
 
 import (

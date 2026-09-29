@@ -1,12 +1,10 @@
-// Package slowscan es el segundo detector real del motor (tarea 1.4):
-// busca escaneo/enumeración lenta de rutas HTTP — un atacante que
-// mantiene una tasa baja de requests, precisamente para evitar
-// cualquier rate limiter, pero deja un patrón de exploración
+// Package slowscan busca escaneo/enumeración lenta de rutas HTTP — un
+// atacante que mantiene una tasa baja de requests, precisamente para
+// evitar cualquier rate limiter, pero deja un patrón de exploración
 // acumulado a lo largo de una ventana. A diferencia de
-// internal/credstuffing (tarea 1.3), esta señal es por entidad
-// individual (IP y/o sesión), nunca correlacionada entre IPs — mismo
-// criterio que usa internal/datagen para generar el tráfico de
-// escaneo lento.
+// internal/credstuffing, esta señal es por entidad individual (IP
+// y/o sesión), nunca correlacionada entre IPs — mismo criterio que
+// usa internal/datagen para generar el tráfico de escaneo lento.
 //
 // Este paquete nunca importa internal/groundtruth ni internal/datagen.
 package slowscan
@@ -37,16 +35,16 @@ type ScoreWeights struct {
 	Referer  float64
 }
 
-// Config configura el detector. Igual que internal/baseline (tarea
-// 0.9) e internal/credstuffing (tarea 1.3), ningún valor tiene acá un
-// default "recomendado": los umbrales se calibran en una tarea
-// posterior contra un dataset separado del de reporte, nunca mirando
-// la semilla 42.
+// Config configura el detector. Igual que internal/baseline e
+// internal/credstuffing, ningún valor tiene acá un default
+// "recomendado": los umbrales se calibran en una tarea posterior
+// contra un dataset separado del de reporte, nunca mirando la
+// semilla 42.
 type Config struct {
 	// Window es la ventana de acumulación por entidad (IP o sesión) Y
 	// la ventana del índice de popularidad de rutas (ver
 	// NovelPathRatio) — una sola ventana para las dos cosas, mismo
-	// criterio de simplicidad que profile.Store (tarea 1.2).
+	// criterio de simplicidad que profile.Store.
 	Window time.Duration
 
 	// MinRequests, MinDistinctPaths, MinNotFoundRatio, MinRouteEntropy
@@ -73,8 +71,8 @@ type Config struct {
 
 	// ScoreFloor es el piso de RiskScore cuando Triggered es true.
 	// Debe estar estrictamente entre 0 y 1 — mismo mecanismo y misma
-	// razón que internal/credstuffing (tarea 1.3): en el borde exacto
-	// del gate, los componentes normalizados de las cinco señales del
+	// razón que internal/credstuffing: en el borde exacto del gate,
+	// los componentes normalizados de las cinco señales del
 	// gate dan 0, y un detector que disparó no puede reportar riesgo
 	// cero.
 	ScoreFloor float64
@@ -145,15 +143,15 @@ type pathVisit struct {
 }
 
 // pathState es el estado retenido de una ruta: su watermark (nunca
-// retrocede — mismo mecanismo que internal/profile, tarea 1.2, y
-// internal/credstuffing, tarea 1.3) y las visitas todavía dentro de la
-// ventana relativa a ese watermark.
+// retrocede — mismo mecanismo que internal/profile e
+// internal/credstuffing) y las visitas todavía dentro de la ventana
+// relativa a ese watermark.
 type pathState struct {
 	watermark time.Time
 	visits    []pathVisit
 }
 
-// pathPopularity es el ÚNICO estado nuevo de esta tarea: cuántas IPs
+// pathPopularity es el único estado nuevo de este paquete: cuántas IPs
 // distintas, en todo el tráfico observado, pidieron cada ruta dentro
 // de la ventana — la pieza que internal/profile.Store no puede dar,
 // necesaria para NovelPathRatio (ver Detector.novelPathRatio).
@@ -227,7 +225,7 @@ func (p *pathPopularity) sweep(now time.Time, idleTTL time.Duration) int {
 // para uso concurrente.
 type Detector struct {
 	cfg      Config
-	profiles *profile.Store // reutilizado tal cual de la tarea 1.2 — ver docs/decisiones.md, tarea 1.4
+	profiles *profile.Store // reutilizado tal cual — ver docs/decisiones.md
 	paths    *pathPopularity
 }
 
@@ -252,8 +250,8 @@ func NewDetector(cfg Config) (*Detector, error) {
 }
 
 // Observe registra e tanto en los perfiles de comportamiento (IP y,
-// si corresponde, sesión — internal/profile, tarea 1.2) como en el
-// índice de popularidad de rutas.
+// si corresponde, sesión — internal/profile) como en el índice de
+// popularidad de rutas.
 func (d *Detector) Observe(e event.Event) {
 	d.profiles.Observe(e)
 	d.paths.observe(e.Path, e.ClientIP, e.Timestamp)
@@ -262,11 +260,6 @@ func (d *Detector) Observe(e event.Event) {
 // scope identifica si un candidato de Finding salió de la perspectiva
 // de IP o de sesión, y se usa para construir Finding.EntityID
 // (formato "ip:<addr>" o "session:<id>", ver evaluateMetrics).
-//
-// Resuelto en la tarea 1.5 lo que quedó pendiente en la 1.4:
-// finding.Finding ahora tiene un campo EntityID estructurado — antes,
-// esta información solo vivía en texto libre dentro de Explanation, y
-// el motor no podía depender de parsearlo.
 type scope struct {
 	label string // "ip" o "session"
 	key   string
@@ -276,8 +269,8 @@ type scope struct {
 // si existe, de su sesión, hay evidencia de escaneo lento — evaluando
 // SIEMPRE la IP y, cuando e.SessionID no está vacío, TAMBIÉN la
 // sesión, y devolviendo como máximo un único Finding (ver
-// docs/decisiones.md, tarea 1.4, para por qué evaluar siempre la IP
-// —incluso habiendo sesión— es necesario para atrapar a un atacante
+// docs/decisiones.md para por qué evaluar siempre la IP —incluso
+// habiendo sesión— es necesario para atrapar a un atacante
 // que rota session_id para quedar bajo los umbrales por sesión, sin
 // por eso reintroducir falsos positivos de un NAT legítimo: el mismo
 // gate completo de cinco condiciones se le aplica a la IP).
@@ -337,10 +330,10 @@ func (d *Detector) evaluateMetrics(m profile.Metrics, sc scope) finding.Finding 
 	avg := (cRequests*w.Requests + cPaths*w.Paths + cNotFound*w.NotFound +
 		cEntropy*w.Entropy + cNovelty*w.Novelty + cReferer*w.Referer) / weightSum
 
-	// Mismo mecanismo de piso que internal/credstuffing (tarea 1.3):
-	// sin él, las cinco señales del gate exactamente en su umbral
-	// darían componentes en 0, y un Finding disparado no puede
-	// reportar riesgo cero.
+	// Mismo mecanismo de piso que internal/credstuffing: sin él, las
+	// cinco señales del gate exactamente en su umbral darían
+	// componentes en 0, y un Finding disparado no puede reportar
+	// riesgo cero.
 	riskScore := d.cfg.ScoreFloor + (1-d.cfg.ScoreFloor)*avg
 
 	return finding.Finding{
@@ -356,8 +349,7 @@ func (d *Detector) evaluateMetrics(m profile.Metrics, sc scope) finding.Finding 
 			{Name: "without_referer_ratio", Value: withoutRefererRatio, Weight: w.Referer},
 		},
 		// El scope (IP o sesión) ya queda identificado en EntityID —
-		// acá no se repite, Explanation se enfoca en el porqué (tarea
-		// 1.5).
+		// acá no se repite, Explanation se enfoca en el porqué.
 		Explanation: fmt.Sprintf(
 			"%d requests across %d distinct paths, %.0f%% not-found, entropy=%.2f, %.0f%% novel paths within the window",
 			total, gate.DistinctPaths, gate.NotFoundRatio*100, gate.RouteEntropy, gate.NovelPathRatio*100,
@@ -367,8 +359,8 @@ func (d *Detector) evaluateMetrics(m profile.Metrics, sc scope) finding.Finding 
 }
 
 // GateMetrics es la evaluación diagnóstica de las cinco condiciones
-// del gate para UN scope (IP o sesión) — tarea 1.9: expone los
-// números crudos (TotalRequests, DistinctPaths, NotFoundRatio,
+// del gate para UN scope (IP o sesión): expone los números crudos
+// (TotalRequests, DistinctPaths, NotFoundRatio,
 // RouteEntropy, NovelPathRatio) SIN IMPORTAR si dispararon o no.
 // evaluateMetrics los descarta en el caso no disparado (devuelve
 // finding.Finding{}) — GateMetrics es la forma de ver, para una
@@ -439,10 +431,10 @@ func (d *Detector) gateMetricsFor(m profile.Metrics, scopeLabel string) GateMetr
 
 // novelPathRatio es la fracción de las rutas distintas de m que son
 // "novel" según el índice global de popularidad — ver el tipo
-// pathPopularity y docs/decisiones.md, tarea 1.4, para la definición
-// completa y por qué esta es la opción mínima técnicamente correcta
-// dado lo que el motor puede observar hoy (sin catálogo externo de
-// rutas reales, sin ground truth).
+// pathPopularity y docs/decisiones.md para la definición completa y
+// por qué esta es la opción mínima técnicamente correcta dado lo que
+// el motor puede observar hoy (sin catálogo externo de rutas reales,
+// sin ground truth).
 func (d *Detector) novelPathRatio(pathCounts map[string]int, distinctPaths int) float64 {
 	if distinctPaths == 0 {
 		return 0
@@ -460,9 +452,9 @@ func (d *Detector) novelPathRatio(pathCounts map[string]int, distinctPaths int) 
 // rutas de pathCounts, normalizada a [0,1] dividiendo por
 // log2(distinctPaths) — así perfiles con distinta cantidad de rutas
 // distintas siguen siendo comparables con el mismo umbral (ver
-// docs/decisiones.md, tarea 1.4, con dos ejemplos calculados a mano).
-// Da 0 si hay una sola ruta distinta o ninguna — sin diversidad que
-// medir, por definición.
+// docs/decisiones.md, con dos ejemplos calculados a mano). Da 0 si
+// hay una sola ruta distinta o ninguna — sin diversidad que medir,
+// por definición.
 func normalizedEntropy(pathCounts map[string]int, total, distinctPaths int) float64 {
 	if distinctPaths <= 1 || total == 0 {
 		return 0
@@ -483,9 +475,8 @@ func normalizedEntropy(pathCounts map[string]int, total, distinctPaths int) floa
 }
 
 // excessComponent es la misma heurística "cuánto se superó el umbral"
-// ya usada y justificada en internal/baseline (tarea 0.9) e
-// internal/credstuffing (tarea 1.3): 1 - umbral/valor, siempre en
-// [0,1), 0 justo en el umbral.
+// ya usada y justificada en internal/baseline e internal/credstuffing:
+// 1 - umbral/valor, siempre en [0,1), 0 justo en el umbral.
 func excessComponent(actual, threshold float64) float64 {
 	if actual <= 0 {
 		return 0

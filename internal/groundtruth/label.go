@@ -4,8 +4,8 @@
 //
 // Regla de dependencia, verificada en docs/decisiones.md: groundtruth
 // importa event (necesita saber qué es un evento para etiquetarlo), pero
-// event nunca importa groundtruth, y el motor de detección (Fase 1)
-// tampoco lo va a importar. Así, la separación entre "lo que el motor
+// event nunca importa groundtruth, y el motor de detección tampoco lo
+// va a importar. Así, la separación entre "lo que el motor
 // puede ver" y "la respuesta correcta" no depende de que nadie tenga
 // cuidado al escribir código nuevo: el propio grafo de dependencias del
 // módulo lo impide.
@@ -41,8 +41,8 @@ func (l Label) Valid() bool {
 var ErrInvalidLabel = errors.New("groundtruth: label must be legit, credential_stuffing or slow_scan")
 
 // LabeledEvent junta un evento con su etiqueta de verdad. Es exactamente
-// la forma que escribe el generador de tráfico (tarea 0.4 en adelante)
-// en el dataset JSONL: una línea por evento, con su etiqueta al lado.
+// la forma que escribe el generador de tráfico en el dataset JSONL: una
+// línea por evento, con su etiqueta al lado.
 //
 // Nada fuera de este paquete y del generador de tráfico debería
 // construir o leer un LabeledEvent completo. Todo lo que se le envía al

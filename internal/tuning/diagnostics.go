@@ -14,8 +14,8 @@ import (
 )
 
 // EventDiagnostic es, para UN evento del escenario, el detalle CRUDO
-// de cada detector — nunca solo la Decision final ya combinada (tarea
-// 1.9, pasada diagnóstica). Decision viene de una corrida real con
+// de cada detector — nunca solo la Decision final ya combinada.
+// Decision viene de una corrida real con
 // engine.BehavioralDecider (ver RunDiagnostics) — nunca se reinventa
 // su lógica de combinación/policy acá. El resto de los campos viene
 // de tres detectores propios de esta corrida de diagnóstico,

@@ -1,10 +1,9 @@
-// Command sweepcombined corre los 4 candidatos combinados
-// (slow_scan + statistical_anomaly a la vez) aprobados para la tarea
-// 1.9: C0 baseline, C1 slow-scan-only, C2 slow-scan+account-weight,
-// C3 slow-scan+trigger020 — solo sobre tuning (seeds 101/102/103,
-// ratios 0/10/30%), nunca holdout. No toca credential_stuffing,
-// ScoreFloor, ChallengeThreshold ni BlockThreshold. Ver
-// docs/decisiones.md, tarea 1.9.
+// Command sweepcombined corre los 4 candidatos combinados (slow_scan
+// + statistical_anomaly a la vez) aprobados: C0 baseline, C1
+// slow-scan-only, C2 slow-scan+account-weight, C3
+// slow-scan+trigger020 — solo sobre tuning (seeds 101/102/103, ratios
+// 0/10/30%), nunca holdout. No toca credential_stuffing, ScoreFloor,
+// ChallengeThreshold ni BlockThreshold. Ver docs/decisiones.md.
 package main
 
 import (

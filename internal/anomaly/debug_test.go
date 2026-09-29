@@ -19,9 +19,9 @@ func evaluateDebugBatch(d *Detector, events []event.Event) []DebugEvaluation {
 // TestEvaluateDebug_MatchesEvaluate_WhenTriggered confirma que, para
 // el mismo escenario que ya prueba TestEvaluate_ClearDeviation_Triggers
 // (Evaluate), EvaluateDebug reporta el mismo Triggered/RiskScore desde
-// su propio camino de código independiente (tarea 1.9) — necesario
-// para poder confiar en los reportes de diagnóstico sin dudar si
-// reflejan lo que el motor real haría.
+// su propio camino de código independiente — necesario para poder
+// confiar en los reportes de diagnóstico sin dudar si reflejan lo que
+// el motor real haría.
 func TestEvaluateDebug_MatchesEvaluate_WhenTriggered(t *testing.T) {
 	dEval := newTestDetector(t, testConfig())
 	dDebug := newTestDetector(t, testConfig())
@@ -56,8 +56,8 @@ func TestEvaluateDebug_MatchesEvaluate_WhenTriggered(t *testing.T) {
 }
 
 // TestEvaluateDebug_ExposesCombinedScore_WhenNotTriggered es el punto
-// central de este método (tarea 1.9): Evaluate descarta el score
-// combinado cuando no cruza TriggerThreshold (devuelve
+// central de este método: Evaluate descarta el score combinado
+// cuando no cruza TriggerThreshold (devuelve
 // finding.Finding{} vacío) — EvaluateDebug lo expone siempre, para
 // poder medir "qué tan cerca estuvo" el tráfico legítimo que nunca
 // disparó, no solo contar cuántas veces disparó.

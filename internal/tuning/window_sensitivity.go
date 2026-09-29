@@ -13,8 +13,8 @@ import (
 
 // WindowSensitivityRow es, para UNA campaña real de credential_stuffing
 // y UNA duración de ventana candidata, el máximo rolling de las
-// cuatro señales del gate calculado offline — tarea 1.9, verificación
-// previa al sweep de credential_stuffing. Se calcula con un Detector
+// cuatro señales del gate calculado offline — verificación previa al
+// sweep de credential_stuffing. Se calcula con un Detector
 // propio (nunca el de producción) cuyo único campo distinto de la
 // Config actual es Window: los cuatro Min* siguen siendo los
 // ACTUALES, así que Crosses* solo informa si ESE máximo, con ESA
@@ -46,7 +46,7 @@ type WindowSensitivityRow struct {
 // cada señal del gate únicamente en los eventos etiquetados
 // credential_stuffing de cada campaña (agrupada por seed+ratio+grupo
 // de red). No modifica baseCfg ni ningún detector usado en el resto
-// de la tarea 1.9.
+// de esta evaluación.
 func AnalyzeWindowSensitivity(scenario datagen.Scenario, resolver credstuffing.NetworkResolver, baseCfg credstuffing.Config, windows []time.Duration) ([]WindowSensitivityRow, error) {
 	seed := scenario.Stats.Seed
 	ratio := int(math.Round(scenario.Stats.TargetMaliciousRatio * 100))

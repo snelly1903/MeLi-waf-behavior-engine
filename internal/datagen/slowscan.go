@@ -65,22 +65,21 @@ type SlowScanProfile struct {
 	// hace GenerateSlowScanCampaign (Pool.DistinctAddrs) — usa
 	// exactamente estas IPs, una por escáner, en lugar de sortearlas.
 	// GenerateSlowScanSession, en cambio, ya recibe su IP explícita por
-	// parámetro y nunca lee este campo. Se agregó en la tarea 0.6, con
-	// el mismo propósito que el campo homónimo de
-	// CredentialStuffingCampaign: que el mezclador de escenarios pueda
-	// coordinar de antemano direcciones disjuntas entre generadores. Si
-	// es nil, el comportamiento es idéntico al de la tarea 0.5.
+	// parámetro y nunca lee este campo. Cumple el mismo propósito que
+	// el campo homónimo de CredentialStuffingCampaign: que el
+	// mezclador de escenarios pueda coordinar de antemano direcciones
+	// disjuntas entre generadores. Si es nil, se sortean del Pool.
 	IPs []netip.Addr
 }
 
-// DefaultValidScanPaths reutiliza las rutas reales de ProfileNavegante
-// (tarea 0.4), más el login, para que el escáner a veces "pise" rutas
-// legítimas de la misma aplicación que navegan los usuarios reales, en
-// lugar de un catálogo de rutas válidas inventado aparte.
+// DefaultValidScanPaths reutiliza las rutas reales de ProfileNavegante,
+// más el login, para que el escáner a veces "pise" rutas legítimas de
+// la misma aplicación que navegan los usuarios reales, en lugar de un
+// catálogo de rutas válidas inventado aparte.
 var DefaultValidScanPaths = append([]string{DefaultLoginPath}, ProfileNavegante.Paths...)
 
 // DefaultSlowScanProfile son los valores acordados para el dataset de
-// prueba del challenge (ver docs/decisiones.md, tarea 0.5).
+// prueba del challenge (ver docs/decisiones.md).
 var DefaultSlowScanProfile = SlowScanProfile{
 	Pool:                 PoolHostingSim,
 	MinRequests:          20,
@@ -104,11 +103,10 @@ var DefaultSlowScanProfile = SlowScanProfile{
 
 // GenerateSlowScanSession genera la secuencia de eventos de un único
 // escáner, empezando en start, reutilizando el mismo patrón de sesión
-// continua con event.ManualClock que GenerateLegitSession (tarea 0.4):
-// acá sí hace falta un reloj que avance paso a paso, porque, a
-// diferencia del credential stuffing, esto es una única entidad
-// explorando de forma continua a lo largo del tiempo, no sondas
-// aisladas.
+// continua con event.ManualClock que GenerateLegitSession: acá sí hace
+// falta un reloj que avance paso a paso, porque, a diferencia del
+// credential stuffing, esto es una única entidad explorando de forma
+// continua a lo largo del tiempo, no sondas aisladas.
 func GenerateSlowScanSession(rng *RNG, profile SlowScanProfile, start time.Time, clientIP netip.Addr) []groundtruth.LabeledEvent {
 	clock := event.NewManualClock(start)
 	requestCount := rng.IntRange(profile.MinRequests, profile.MaxRequests)

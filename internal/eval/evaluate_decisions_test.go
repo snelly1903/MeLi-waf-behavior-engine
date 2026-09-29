@@ -7,11 +7,10 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// TestEvaluateDecisions_InvalidDecisionIsExcludedNotAllow confirma el
-// requisito explícito de la tarea 0.8: una decisión que no pasa
-// decision.Validate() no se cuenta silenciosamente como ALLOW, y
-// tampoco aparece duplicada en MissingDecisionIDs además de en
-// InvalidDecisionIDs.
+// TestEvaluateDecisions_InvalidDecisionIsExcludedNotAllow confirma que
+// una decisión que no pasa decision.Validate() no se cuenta
+// silenciosamente como ALLOW, y tampoco aparece duplicada en
+// MissingDecisionIDs además de en InvalidDecisionIDs.
 func TestEvaluateDecisions_InvalidDecisionIsExcludedNotAllow(t *testing.T) {
 	labels := map[string]groundtruth.Label{
 		"r-1": groundtruth.LabelLegit,

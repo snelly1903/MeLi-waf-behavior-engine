@@ -10,16 +10,16 @@ import (
 )
 
 // TestDetect_IntegratesWithEval genera un escenario real (mismo patrón
-// que TestEvaluate_EndToEnd_RealScenarioShape en internal/eval, tarea
-// 0.7), corre el baseline sobre sus eventos, escribe decisions.jsonl y
-// confirma que todo el pipeline generar → detectar → escribir →
-// cargar → cruzar → evaluar funciona de punta a punta, sin ningún
-// problema de integridad (Issues.Clean() == true) — porque Detect
-// siempre devuelve exactamente una decisión por evento de entrada.
+// que TestEvaluate_EndToEnd_RealScenarioShape en internal/eval), corre
+// el baseline sobre sus eventos, escribe decisions.jsonl y confirma
+// que todo el pipeline generar → detectar → escribir → cargar →
+// cruzar → evaluar funciona de punta a punta, sin ningún problema de
+// integridad (Issues.Clean() == true) — porque Detect siempre
+// devuelve exactamente una decisión por evento de entrada.
 //
 // No es una afirmación sobre qué tan bueno es el rate limit: es una
 // prueba de que la tubería completa funciona sobre datos con la forma
-// real, igual que hizo la tarea 0.7 con su "motor de juguete".
+// real, igual que ya se probó con un motor de juguete.
 func TestDetect_IntegratesWithEval(t *testing.T) {
 	cfg := datagen.DefaultScenarioConfig(999, 0.10)
 	scenario := datagen.BuildScenario(cfg)

@@ -22,11 +22,11 @@ func TestPercentile_NearestRank(t *testing.T) {
 	}
 }
 
-// TestAggregate_ThroughputIsMedianAndRange_NeverMean confirma el
-// ajuste 4: el throughput agregado es la MEDIANA de las 3
-// repeticiones, con min/max reportados aparte -- nunca un promedio
-// simple, que en un conjunto asimétrico como {10,10,100} daría un
-// número (40) que no representa a ninguna repetición real.
+// TestAggregate_ThroughputIsMedianAndRange_NeverMean confirma que el
+// throughput agregado es la MEDIANA de las 3 repeticiones, con
+// min/max reportados aparte -- nunca un promedio simple, que en un
+// conjunto asimétrico como {10,10,100} daría un número (40) que no
+// representa a ninguna repetición real.
 func TestAggregate_ThroughputIsMedianAndRange_NeverMean(t *testing.T) {
 	reps := []RunResult{
 		{Requests: 100, ActualDuration: 10 * time.Second},  // 10 req/s
@@ -44,12 +44,12 @@ func TestAggregate_ThroughputIsMedianAndRange_NeverMean(t *testing.T) {
 }
 
 // TestAggregate_PercentilesAreMedianOfPerRunPercentiles_NeverPooled
-// confirma la corrección explícita de la tarea 1.10: P50/P95/P99 se
-// calculan calculando el percentil DENTRO de cada repetición primero
-// y tomando la MEDIANA de esos percentiles — nunca mezclando las
-// muestras crudas de las repeticiones en un pool único antes de
-// percentilar (que daría un número distinto, y ocultaría que una
-// repetición concreta tuvo una cola peor que las otras).
+// confirma que P50/P95/P99 se calculan calculando el percentil
+// DENTRO de cada repetición primero y tomando la MEDIANA de esos
+// percentiles — nunca mezclando las muestras crudas de las
+// repeticiones en un pool único antes de percentilar (que daría un
+// número distinto, y ocultaría que una repetición concreta tuvo una
+// cola peor que las otras).
 func TestAggregate_PercentilesAreMedianOfPerRunPercentiles_NeverPooled(t *testing.T) {
 	reps := []RunResult{
 		{Requests: 2, Latencies: []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}, ActualDuration: time.Second}, // P50 propio = 10ms
@@ -60,19 +60,17 @@ func TestAggregate_PercentilesAreMedianOfPerRunPercentiles_NeverPooled(t *testin
 		t.Errorf("Requests = %d, want 4 (suma cruda entre las 2 repeticiones)", agg.Requests)
 	}
 
-	// Pooled (el criterio ANTERIOR, ya no vigente) daría, sobre
-	// [10,10,20,20]ms, p50=10ms. Mediana de los P50 por repetición
-	// ([10ms, 20ms]) da 15ms -- el valor correcto según la corrección
-	// pedida.
+	// Pooled daría, sobre [10,10,20,20]ms, p50=10ms. La mediana de
+	// los P50 por repetición ([10ms, 20ms]) da 15ms -- el valor
+	// correcto.
 	if agg.P50 != 15*time.Millisecond {
 		t.Errorf("P50 = %v, want 15ms (mediana de los P50 por repetición [10ms,20ms], nunca 10ms pooled)", agg.P50)
 	}
 }
 
 // TestAggregate_PreservesRawPerRepetitionResults confirma que
-// Aggregate conserva el resultado crudo de CADA repetición (tarea
-// 1.10: "conserva también los resultados crudos por repetición"),
-// nunca solo el agregado ya combinado.
+// Aggregate conserva el resultado crudo de CADA repetición, nunca
+// solo el agregado ya combinado.
 func TestAggregate_PreservesRawPerRepetitionResults(t *testing.T) {
 	reps := []RunResult{
 		{Requests: 5, Errors: 1, Latencies: []time.Duration{10 * time.Millisecond}, ActualDuration: time.Second},

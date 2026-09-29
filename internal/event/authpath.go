@@ -7,9 +7,9 @@ import "strings"
 // qué ruta significa "login" es un hecho sobre la aplicación protegida,
 // no una propiedad del contrato del evento, así que tiene que quedar
 // configurable en lugar de fijo dentro de la validación. Un Validator
-// nunca usa este tipo; un detector (Fase 1) sí, para decidir qué
-// eventos alimentan las señales de credential stuffing (el ratio de
-// 401/403, la diversidad de cuentas probadas).
+// nunca usa este tipo; un detector sí, para decidir qué eventos
+// alimentan las señales de credential stuffing (el ratio de 401/403,
+// la diversidad de cuentas probadas).
 type AuthPathMatcher struct {
 	exact    map[string]struct{}
 	prefixes []string

@@ -1,16 +1,13 @@
 // Package wiring arma el stack real del motor (los tres detectores
 // conductuales + BehavioralDecider + httpapi.Server) a partir de
 // flags/parámetros — la MISMA construcción que usa cmd/engine en
-// producción, extraída acá (tarea 1.10) para que también la use
-// cmd/loadtest y los microbenchmarks de internal/engine, sin
-// duplicar ni un valor de configuración. Antes vivía inline en
-// cmd/engine/main.go (package main, no importable) — ese primer paso
-// fue un refactor puro, sin cambio de comportamiento. FinalConfigs()/
-// FinalPolicy() son la ÚNICA fuente de verdad de la configuración
-// RUNTIME final congelada tras el holdout (tarea 1.9) — antes de
-// esto, cmd/engine servía engine.Default*Config() sin calibrar
-// mientras internal/tuning/cmd/holdout ya evaluaban con otra
-// configuración: cmd/engine y cmd/loadtest ahora consumen
+// producción, extraída acá para que también la use cmd/loadtest y
+// los microbenchmarks de internal/engine, sin duplicar ni un valor
+// de configuración. FinalConfigs()/FinalPolicy() son la ÚNICA fuente
+// de verdad de la configuración RUNTIME final congelada tras el
+// holdout — antes de esto, cmd/engine servía engine.Default*Config()
+// sin calibrar mientras internal/tuning/cmd/holdout ya evaluaba con
+// otra configuración: cmd/engine y cmd/loadtest ahora consumen
 // exactamente lo mismo.
 package wiring
 
@@ -36,22 +33,21 @@ const (
 
 // FinalConfigs es la configuración RUNTIME final de los tres
 // detectores — la ÚNICA fuente de verdad, congelada tras el holdout
-// de la tarea 1.9 (checkpoint pre-holdout, commit 6abed47):
-// credential_stuffing CSw2 (Window=90m, MinDistinctIPs=16), slow_scan
-// S3 (MaxVisitorsForNovelPath=3, MinNovelPathRatio=0.35),
+// (checkpoint pre-holdout, commit 6abed47): credential_stuffing CSw2
+// (Window=90m, MinDistinctIPs=16), slow_scan S3
+// (MaxVisitorsForNovelPath=3, MinNovelPathRatio=0.35),
 // statistical_anomaly A3 (AccountDiversityWeight=0.5) — el resto de
 // cada Config, incluido ScoreFloor, es el default sin tocar
 // (engine.Default*Config()). cmd/engine (producción) y cmd/loadtest
-// (medición de performance, tarea 1.10) consumen EXACTAMENTE esto —
-// antes cmd/engine servía engine.Default*Config() sin calibrar,
-// mientras internal/tuning/cmd/holdout ya evaluaban con esta
-// configuración: este helper cierra esa brecha, sin cambiar ni un
-// valor (nunca es un re-tuning, es wiring de lo ya decidido). La
-// configuración BASELINE (sin ningún override) sigue viviendo
-// EXCLUSIVAMENTE en internal/engine.Default*Config(), consumida
-// directamente por internal/tuning.BaselineCandidate() para
-// evaluación/comparación — internal/wiring nunca la expone como su
-// propio default.
+// (medición de performance) consumen EXACTAMENTE esto — antes
+// cmd/engine servía engine.Default*Config() sin calibrar, mientras
+// internal/tuning/cmd/holdout ya evaluaba con esta configuración:
+// este helper cierra esa brecha, sin cambiar ni un valor (nunca es
+// un re-tuning, es wiring de lo ya decidido). La configuración
+// BASELINE (sin ningún override) sigue viviendo EXCLUSIVAMENTE en
+// internal/engine.Default*Config(), consumida directamente por
+// internal/tuning.BaselineCandidate() para evaluación/comparación —
+// internal/wiring nunca la expone como su propio default.
 func FinalConfigs() (credstuffing.Config, slowscan.Config, anomaly.Config) {
 	cs := engine.DefaultCredentialStuffingConfig()
 	cs.Window = 90 * time.Minute
@@ -67,10 +63,10 @@ func FinalConfigs() (credstuffing.Config, slowscan.Config, anomaly.Config) {
 	return cs, ss, an
 }
 
-// FinalPolicy es la Policy final congelada tras el holdout de la
-// tarea 1.9: ChallengeThreshold=0.50, BlockThreshold=0.75.
-// ScoreFloor no es parte de Policy (vive en cada Config de detector,
-// ver FinalConfigs) y nunca se tocó en ningún paso de la tarea 1.9.
+// FinalPolicy es la Policy final congelada tras el holdout:
+// ChallengeThreshold=0.50, BlockThreshold=0.75. ScoreFloor no es
+// parte de Policy (vive en cada Config de detector, ver
+// FinalConfigs) y nunca se tocó durante el holdout.
 func FinalPolicy() engine.Policy {
 	return engine.Policy{ChallengeThreshold: 0.50, BlockThreshold: 0.75}
 }
@@ -79,18 +75,18 @@ func FinalPolicy() engine.Policy {
 // BuildServer (usados por cmd/engine) sirven por default —
 // inicializados desde FinalConfigs(), nunca desde
 // engine.Default*Config() directamente, para que cmd/engine y
-// cmd/loadtest consuman la MISMA fuente de verdad (blocker de la
-// tarea 1.10). Acá solo falta completar
-// credentialStuffingConfig.Resolver, que se hace en BuildDecider con
-// credstuffing.UnavailableNetworkResolver o internal/asn.Resolver
-// según el proveedor de ASN pedido — es la única pieza que cambia
-// entre producción y evaluación/medición offline.
+// cmd/loadtest consuman la MISMA fuente de verdad. Acá solo falta
+// completar credentialStuffingConfig.Resolver, que se hace en
+// BuildDecider con credstuffing.UnavailableNetworkResolver o
+// internal/asn.Resolver según el proveedor de ASN pedido — es la
+// única pieza que cambia entre producción y evaluación/medición
+// offline.
 var credentialStuffingConfig, slowScanConfig, anomalyConfig = FinalConfigs()
 
 // BuildCredentialStuffingResolver arma el credstuffing.NetworkResolver
-// según provider. Ver docs/decisiones.md, tarea 1.5, para el porqué
-// de las alternativas descartadas, y tarea 1.7 para "ripestat".
-// "none" (default seguro) nunca hace tráfico de salida a Internet.
+// según provider. Ver docs/decisiones.md para el porqué de las
+// alternativas descartadas, y para "ripestat". "none" (default
+// seguro) nunca hace tráfico de salida a Internet.
 func BuildCredentialStuffingResolver(provider string, timeout time.Duration, successTTL time.Duration, metrics asn.MetricsRecorder) (credstuffing.NetworkResolver, error) {
 	switch provider {
 	case "", ASNProviderNone:
@@ -131,8 +127,8 @@ func BuildDecider(challengeThreshold, blockThreshold float64, asnProvider string
 
 // BuildDeciderWithResolver es la misma construcción que BuildDecider,
 // pero recibe el credstuffing.NetworkResolver YA CONSTRUIDO en vez de
-// elegirlo por nombre de proveedor — pensado para cmd/loadtest (tarea
-// 1.10), que necesita el resolver DETERMINISTA de
+// elegirlo por nombre de proveedor — pensado para cmd/loadtest, que
+// necesita el resolver DETERMINISTA de
 // internal/datagen.NewSimulatedASNResolver() para ejercitar la
 // correlación real de credential_stuffing sin tocar la red (ni
 // "none", que lo dejaría estructuralmente inerte, ni "ripestat", que
@@ -196,7 +192,7 @@ func BuildServer(challengeThreshold, blockThreshold float64, asnProvider string,
 }
 
 // BuildServerWithResolver es el equivalente de BuildServer para
-// cmd/loadtest (tarea 1.10): recibe el resolver ya construido, ver
+// cmd/loadtest: recibe el resolver ya construido, ver
 // BuildDeciderWithResolver.
 func BuildServerWithResolver(challengeThreshold, blockThreshold float64, resolver credstuffing.NetworkResolver, recorders *telemetry.Recorders) (*httpapi.Server, error) {
 	decider, err := BuildDeciderWithResolver(challengeThreshold, blockThreshold, resolver, recorders)

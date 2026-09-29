@@ -15,8 +15,8 @@ import (
 // contraste entre lo que pasó de verdad en TODA la campaña (ground
 // truth: duración, IPs/cuentas distintas totales) y lo máximo que el
 // detector real llegó a ver dentro de CUALQUIER ventana de
-// correlación suya — tarea 1.9, diagnóstico previo a tocar cualquier
-// threshold de credential_stuffing.
+// correlación suya — diagnóstico previo a tocar cualquier threshold
+// de credential_stuffing.
 type CredentialStuffingCampaignAnalysis struct {
 	Seed        uint64
 	Ratio       int

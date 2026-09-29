@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-// envInfo es la información de entorno pedida explícitamente para el
-// reporte (tarea 1.10): SO/versión, arquitectura, CPU, RAM, Go
-// version y GOMAXPROCS. OSVersion/RAMBytes se obtienen con comandos
-// del propio sistema operativo (os/exec, sin dependencias nuevas) —
-// nunca fallan de forma fatal: si el comando no está disponible o el
-// SO no está soportado, quedan en "" / 0 y el reporte lo muestra
-// como "desconocido", nunca bloquea la corrida por esto.
+// envInfo es la información de entorno para el reporte: SO/versión,
+// arquitectura, CPU, RAM, Go version y GOMAXPROCS. OSVersion/RAMBytes
+// se obtienen con comandos del propio sistema operativo (os/exec, sin
+// dependencias nuevas) — nunca fallan de forma fatal: si el comando
+// no está disponible o el SO no está soportado, quedan en "" / 0 y el
+// reporte lo muestra como "desconocido", nunca bloquea la corrida por
+// esto.
 type envInfo struct {
 	GoVersion  string
 	GOOS       string

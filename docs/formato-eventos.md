@@ -10,9 +10,9 @@ entrevista técnica.
 Un evento **no es** el request HTTP en vivo. Es la descripción de un
 request que **ya ocurrió**, tal como la reportaría el log de un servidor
 web, un WAF o un balanceador de carga. El motor de decisión nunca
-intercepta tráfico directamente en esta fase del proyecto (esa es la
-diferencia entre la "API de decisión basada en metadata" que elegimos y
-un "reverse proxy inline", que descartamos en el análisis general).
+intercepta tráfico directamente (esa es la diferencia entre la "API de
+decisión basada en metadata" que elegimos y un "reverse proxy inline",
+que descartamos en el análisis general).
 
 Como el evento describe algo que ya pasó, puede incluir el
 **`status_code`** de la respuesta — y eso es clave, porque las señales
@@ -55,14 +55,14 @@ según el estándar HTTP (una palabra sin espacios ni caracteres raros,
 de hasta 20 caracteres) y que no venga vacío. Esto separa dos cosas
 distintas: "¿es un texto con forma de método HTTP?" (regla de
 validación, acá) de "¿es un método sospechoso?" (decisión de un
-detector, más adelante, en la Fase 1).
+detector, más adelante, dentro del motor).
 
 ## Por qué el ASN no viaja en el evento
 
 El ASN (el "barrio" de Internet al que pertenece una IP — ver la
 sección 6 del análisis general) **no es un dato que el evento traiga**.
 Es un dato que se calcula **después**, a partir del `client_ip`, usando
-el componente de enriquecimiento (Fase 1). Dos razones:
+el componente de enriquecimiento (`internal/asn`). Dos razones:
 
 1. **Separación de responsabilidades.** El evento describe "qué pasó en
    ese request"; el ASN describe "quién es dueño de esa IP", que es un
@@ -76,9 +76,9 @@ el componente de enriquecimiento (Fase 1). Dos razones:
    y recalcularlo cuando la fuente vuelva.
 
 El diseño queda preparado para la correlación por ASN porque
-`client_ip` es el dato base a partir del cual el enriquecimiento (Fase
-1) construye ese contexto adicional, y ese contexto se junta al perfil
-de la IP, no al evento individual.
+`client_ip` es el dato base a partir del cual el enriquecimiento
+construye ese contexto adicional, y ese contexto se junta al perfil de
+la IP, no al evento individual.
 
 ## Cómo se identifican las rutas de autenticación
 
@@ -126,28 +126,27 @@ guardar o reenviar una versión "limpia" del evento.
 Hay **dos mecanismos distintos** relacionados con el tiempo, y es
 importante no confundirlos:
 
-1. **Validación de rango (esta tarea, `Validator`).** Rechaza eventos
-   con una fecha claramente rota: demasiado vieja (más de
-   `MaxPastAge`, 5 minutos por defecto) o demasiado futura (más de
-   `MaxFutureSkew`, 1 minuto por defecto). Es una regla de **higiene de
-   datos**: protege contra basura, relojes mal configurados en el
-   origen, o un intento de confundir al motor con fechas absurdas.
-   Ambos límites son campos del `Validator` y se pueden ajustar.
+1. **Validación de rango (`Validator`).** Rechaza eventos con una fecha
+   claramente rota: demasiado vieja (más de `MaxPastAge`, 5 minutos por
+   defecto) o demasiado futura (más de `MaxFutureSkew`, 1 minuto por
+   defecto). Es una regla de **higiene de datos**: protege contra
+   basura, relojes mal configurados en el origen, o un intento de
+   confundir al motor con fechas absurdas. Ambos límites son campos del
+   `Validator` y se pueden ajustar.
 
-2. **Manejo de eventos tardíos en las ventanas (Fase 1, todavía no
-   implementado).** Cuando el motor arme los perfiles de comportamiento
-   por ventanas de tiempo (por ejemplo, "los últimos 5 minutos"), un
-   evento válido pero que llega un poco tarde respecto de la ventana
-   que ya se cerró necesita una tolerancia propia, que puede ser
-   distinta de la tolerancia de validación. Ese evento se cuenta en una
-   métrica separada (`late_events_total`), pero **nunca se descarta
-   silenciosamente** ni se rechaza como si fuera inválido.
+2. **Manejo de eventos tardíos en las ventanas de los detectores**
+   (`internal/profile`, con watermark por entidad). Un evento válido
+   pero que llega un poco tarde respecto de la ventana que ya se cerró
+   necesita una tolerancia propia, distinta de la tolerancia de
+   validación. Ese evento se cuenta en una métrica separada
+   (`late_events_total`), pero **nunca se descarta silenciosamente** ni
+   se rechaza como si fuera inválido.
 
-En criollo: la validación de esta tarea es un filtro de "¿esta fecha
-tiene sentido?" que corre una sola vez, al entrar el evento. Las
-ventanas de la Fase 1 son un mecanismo aparte que decide "¿a qué
-bloque de tiempo pertenece este evento, dado que puede llegar
-desordenado?" y corre después, dentro del motor.
+En criollo: la validación de rango es un filtro de "¿esta fecha tiene
+sentido?" que corre una sola vez, al entrar el evento. Las ventanas de
+los detectores son un mecanismo aparte que decide "¿a qué bloque de
+tiempo pertenece este evento, dado que puede llegar desordenado?" y
+corre después, dentro del motor.
 
 **Por qué usamos un reloj inyectable (`Clock`).** Si `Validator`
 llamara directamente a `time.Now()`, sería imposible escribir un test
@@ -196,5 +195,5 @@ tres capas:
    por accidente aparece esa palabra en los datos que viajarían por la
    red hacia el motor.
 
-`internal/groundtruth` (tarea 0.3) va a ser un paquete separado, y el
-motor de detección nunca lo va a importar.
+`internal/groundtruth` es un paquete separado, y el motor de detección
+nunca lo importa.

@@ -1,11 +1,11 @@
-# Generated datasets (can be hundreds of MB) — never committed, always reproducible from a seed.
+# Datasets generados (pueden pesar cientos de MB) — nunca se commitean, siempre reproducibles a partir de una semilla.
 /data/
 /data-calibration/
 
-# Generated Markdown reports — always reproducible by re-running cmd/eval.
+# Reportes Markdown generados — siempre reproducibles volviendo a correr cmd/eval.
 /reports/
 
-# Compiled binaries.
+# Binarios compilados.
 /bin/
 *.exe
 *.test
@@ -13,10 +13,10 @@
 # macOS.
 .DS_Store
 
-# Editors.
+# Editores.
 .vscode/
 .idea/
 
-# Local env overrides.
+# Overrides de entorno locales.
 .env
 .env.local

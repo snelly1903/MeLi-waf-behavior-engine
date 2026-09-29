@@ -12,8 +12,7 @@ import (
 // cuántos dependieron ÚNICAMENTE de statistical_anomaly (su propio
 // detector no disparó, pero anomaly sí). Reutiliza directamente los
 // Finding crudos que ya expone RunDiagnostics — no agrega ninguna
-// corrida ni estado nuevo (tarea 1.9, pedido explícito de "sin
-// añadir complejidad grande").
+// corrida ni estado nuevo.
 type MitigationAttribution struct {
 	Vector groundtruth.Label
 
@@ -44,7 +43,7 @@ type MitigationAttribution struct {
 // MitigationAttribution por cada uno de los dos vectores de ataque
 // (credential_stuffing, slow_scan) — nunca statistical_anomaly, que
 // no tiene un tipo de ataque propio con el que comparar (ver
-// docs/decisiones.md, tarea 1.6).
+// docs/decisiones.md).
 func ComputeMitigationAttribution(diagnostics []EventDiagnostic, policy eval.Policy) []MitigationAttribution {
 	vectors := []struct {
 		label groundtruth.Label

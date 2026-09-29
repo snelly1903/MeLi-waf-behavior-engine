@@ -10,7 +10,7 @@ import (
 
 // CredentialStuffingSweepRow es, para UN candidato y UN seed, todas
 // las métricas pedidas explícitamente en el sweep de credential
-// stuffing (tarea 1.9): FPR@0%, recall broad y de credential_stuffing
+// stuffing: FPR@0%, recall broad y de credential_stuffing
 // (decision-based Y detector-específico, mantenidos separados) a
 // 10%/30%, detección eventual de campaña (usando el gate PROPIO de
 // credstuffing.Detector — AnalyzeCredentialStuffingCampaigns, nunca

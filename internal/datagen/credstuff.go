@@ -12,9 +12,9 @@ import (
 // CredentialStuffingCampaign configura una campaña de credential
 // stuffing distribuido. Los valores de DefaultCredentialStuffingCampaign
 // son un punto de partida razonable para generar el dataset de prueba
-// del challenge — NO son umbrales de detección: el motor (Fase 1) va a
-// definir sus propios umbrales de forma independiente de cómo se generó
-// este tráfico.
+// del challenge — NO son umbrales de detección: el motor va a definir
+// sus propios umbrales de forma independiente de cómo se generó este
+// tráfico.
 type CredentialStuffingCampaign struct {
 	// Pool es la red simulada de la que salen las IPs atacantes — todas
 	// del mismo ASN simulado, para que exista algo real que
@@ -28,12 +28,11 @@ type CredentialStuffingCampaign struct {
 
 	// IPs, si no es nil, reemplaza el sorteo interno de direcciones:
 	// la campaña usa exactamente estas IPs en lugar de llamar a
-	// Pool.DistinctAddrs. Se agregó en la tarea 0.6 para que el
-	// mezclador de escenarios pueda coordinar de antemano qué
-	// direcciones le da a cada generador (por ejemplo, para que un
-	// tenant legítimo del mismo ASN y las IPs atacantes nunca
-	// coincidan). Si es nil, el comportamiento es idéntico al de la
-	// tarea 0.5: se sortean IPCount direcciones del Pool.
+	// Pool.DistinctAddrs. Permite que el mezclador de escenarios
+	// coordine de antemano qué direcciones le da a cada generador (por
+	// ejemplo, para que un tenant legítimo del mismo ASN y las IPs
+	// atacantes nunca coincidan). Si es nil, se sortean IPCount
+	// direcciones del Pool.
 	IPs []netip.Addr
 
 	// MinAttemptsPerIP / MaxAttemptsPerIP acota cuántos intentos de
@@ -68,7 +67,7 @@ type CredentialStuffingCampaign struct {
 }
 
 // DefaultCredentialStuffingCampaign son los valores acordados para el
-// dataset de prueba del challenge (ver docs/decisiones.md, tarea 0.5).
+// dataset de prueba del challenge (ver docs/decisiones.md).
 var DefaultCredentialStuffingCampaign = CredentialStuffingCampaign{
 	Pool:                    PoolHostingSim,
 	IPCount:                 150,
@@ -93,12 +92,12 @@ var DefaultCredentialStuffingCampaign = CredentialStuffingCampaign{
 // azar en toda la ventana de la campaña, probando en su mayoría cuentas
 // distintas. El resultado queda ordenado por Timestamp.
 //
-// A diferencia de GenerateLegitSession (tarea 0.4) y de
-// GenerateSlowScanSession (esta misma tarea), acá no hay una "sesión"
-// continua por IP: cada IP participa con 1 a 3 sondas aisladas, así que
-// no hace falta un event.ManualClock que avance paso a paso — cada
-// timestamp se calcula directo como un desplazamiento aleatorio dentro
-// de start..start+cfg.Window, y después se ordena todo el conjunto.
+// A diferencia de GenerateLegitSession y GenerateSlowScanSession, acá
+// no hay una "sesión" continua por IP: cada IP participa con 1 a 3
+// sondas aisladas, así que no hace falta un event.ManualClock que
+// avance paso a paso — cada timestamp se calcula directo como un
+// desplazamiento aleatorio dentro de start..start+cfg.Window, y
+// después se ordena todo el conjunto.
 func GenerateCredentialStuffingCampaign(rng *RNG, cfg CredentialStuffingCampaign, start time.Time) []groundtruth.LabeledEvent {
 	ips := cfg.IPs
 	if ips == nil {

@@ -191,8 +191,8 @@ func fakeEntityID(ip string) string { return "ip:" + ip }
 // decideNaiveRule es una regla de juguete de una sola línea, construida
 // ÚNICAMENTE a partir de los campos de event.Event — nunca mira ninguna
 // etiqueta. Existe solo para ejercitar la tubería completa del
-// evaluador (leer, cruzar, calcular) sobre datos con la forma real de
-// la tarea 0.6, no para medir si la regla en sí es buena.
+// evaluador (leer, cruzar, calcular) sobre datos con forma real, no
+// para medir si la regla en sí es buena.
 func decideNaiveRule(e event.Event) decision.Decision {
 	action := decision.ActionAllow
 	vector := decision.AttackVectorUnknown

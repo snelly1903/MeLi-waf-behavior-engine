@@ -30,8 +30,8 @@ func percentile(values []float64, p float64) float64 {
 }
 
 // PercentileSummary son min/p50/p75/p90/p95/max de un conjunto de
-// valores — el resumen mínimo pedido en la tarea 1.9 para las
-// distribuciones de score. N es cuántas muestras tiene la
+// valores — el resumen mínimo usado para las distribuciones de score.
+// N es cuántas muestras tiene la
 // distribución: 0 significa que este resumen no tiene ningún dato
 // real detrás (nunca se confunde con "todos los valores son cero").
 type PercentileSummary struct {

@@ -18,18 +18,17 @@ type SimulatedASN uint32
 // todo IPPool definido en este archivo salen de bloques reservados para
 // documentación por la IANA (RFC 5737: 192.0.2.0/24, 198.51.100.0/24 y
 // 203.0.113.0/24) — ninguna es una dirección pública real ni pertenece
-// a ningún proveedor de verdad. Se verificó (ver docs/decisiones.md,
-// tarea 0.4) que ninguno de estos tres bloques activa las reglas de "IP
-// privada" del Validator de la tarea 0.2, así que no hizo falta
-// modificarlo. El enriquecimiento real de IP se integra más adelante
-// (Fase 1) mediante un adaptador independiente que esta simulación no
-// necesita conocer.
+// a ningún proveedor de verdad. Se verificó (ver docs/decisiones.md)
+// que ninguno de estos tres bloques activa las reglas de "IP privada"
+// del Validator, así que no hizo falta modificarlo. El enriquecimiento
+// real de IP se integra más adelante mediante un adaptador
+// independiente que esta simulación no necesita conocer.
 //
 // Nota de alcance: RandomAddr y DistinctAddrs asumen que Prefix es
 // exactamente un /24 IPv4 (254 direcciones utilizables, .1 a .254) — es
-// lo único que necesitan las tareas 0.4 y 0.5 (la campaña de credential
-// stuffing de la tarea 0.5 usa 150 de esas 254). Si más adelante hiciera
-// falta más espacio de direcciones, el candidato natural es el rango
+// lo único que necesita este generador (la campaña de credential
+// stuffing usa 150 de esas 254). Si más adelante hiciera falta más
+// espacio de direcciones, el candidato natural es el rango
 // 198.18.0.0/15, reservado por el RFC 2544 para benchmarking, que da
 // lugar a muchas más direcciones y tampoco activa las reglas de "IP
 // privada".
@@ -41,15 +40,13 @@ type IPPool struct {
 
 var (
 	// PoolHostingSim simula una red "tipo hosting": poca diversidad de
-	// usuarios reales detrás de ella. La va a usar el generador de
-	// ataques (tarea 0.5); en esta tarea no se usa todavía, pero se
-	// define acá junto con las otras dos redes simuladas para que
+	// usuarios reales detrás de ella. La usa el generador de ataques;
+	// se define acá junto con las otras dos redes simuladas para que
 	// queden documentadas en un solo lugar.
 	PoolHostingSim = IPPool{Name: "hosting-sim", ASN: 64512, Prefix: netip.MustParsePrefix("192.0.2.0/24")}
 
 	// PoolResidentialSimA y PoolResidentialSimB simulan dos redes "tipo
-	// residencial" distintas, usadas por el tráfico legítimo de esta
-	// tarea.
+	// residencial" distintas, usadas por el tráfico legítimo.
 	PoolResidentialSimA = IPPool{Name: "residential-sim-a", ASN: 64513, Prefix: netip.MustParsePrefix("198.51.100.0/24")}
 	PoolResidentialSimB = IPPool{Name: "residential-sim-b", ASN: 64514, Prefix: netip.MustParsePrefix("203.0.113.0/24")}
 )
@@ -70,10 +67,10 @@ func (p IPPool) RandomAddr(rng *RNG) netip.Addr {
 const poolCapacity = 254
 
 // DistinctAddrs sortea n direcciones DISTINTAS dentro del pool, sin
-// reemplazo — necesario para el credential stuffing distribuido (tarea
-// 0.5), donde cada IP atacante tiene que ser única. Mezcla el espacio
-// de direcciones utilizables (Fisher-Yates) y toma las primeras n, así
-// la selección es uniforme y sin un orden artificial (no son "las
+// reemplazo — necesario para el credential stuffing distribuido, donde
+// cada IP atacante tiene que ser única. Mezcla el espacio de
+// direcciones utilizables (Fisher-Yates) y toma las primeras n, así la
+// selección es uniforme y sin un orden artificial (no son "las
 // primeras n direcciones del bloque").
 //
 // Entra en pánico si n supera la capacidad del pool: pedir más IPs
@@ -107,10 +104,10 @@ func (p IPPool) DistinctAddrs(rng *RNG, n int) []netip.Addr {
 // DistinctAddrsExcluding funciona como DistinctAddrs, pero nunca
 // devuelve ninguna dirección presente en exclude. Se usa cuando dos
 // generadores distintos necesitan direcciones garantizadamente
-// disjuntas del mismo pool — por ejemplo, en la tarea 0.6, para que un
-// tenant legítimo (ProfileHostedTenant) y las IPs atacantes nunca
-// coincidan dentro del mismo escenario, sin depender de la
-// probabilidad de que dos sorteos independientes no se solapen.
+// disjuntas del mismo pool — por ejemplo, para que un tenant legítimo
+// (ProfileHostedTenant) y las IPs atacantes nunca coincidan dentro del
+// mismo escenario, sin depender de la probabilidad de que dos sorteos
+// independientes no se solapen.
 //
 // Entra en pánico si, después de descontar exclude, no quedan
 // suficientes direcciones para dar las n pedidas.

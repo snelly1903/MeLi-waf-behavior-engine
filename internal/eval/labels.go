@@ -4,9 +4,9 @@
 // y de internal/decision, este paquete SÍ importa internal/groundtruth
 // — es, junto con internal/datagen, el único lugar del proyecto donde
 // eso es correcto: su trabajo es precisamente comparar el ground truth
-// con lo que decidió el motor. La regla de separación de la tarea 0.2
-// nunca fue "nadie puede ver el ground truth", fue "el motor nunca lo
-// ve" — eval no es el motor.
+// con lo que decidió el motor. La regla de separación nunca fue "nadie
+// puede ver el ground truth", fue "el motor nunca lo ve" — eval no es
+// el motor.
 package eval
 
 import (
@@ -36,13 +36,12 @@ type LoadLabelsResult struct {
 }
 
 // LoadLabels lee un archivo labels.jsonl — el formato que escribe
-// WriteScenario en la tarea 0.6: una línea por evento, con request_id y
-// label — y arma el mapa request_id -> Label.
+// WriteScenario: una línea por evento, con request_id y label — y arma
+// el mapa request_id -> Label.
 //
 // No confía ciegamente en el archivo: un request_id duplicado o una
 // etiqueta que no sea una de las tres conocidas no interrumpen la
-// carga, quedan anotados en el resultado (ver docs/decisiones.md,
-// tarea 0.7).
+// carga, quedan anotados en el resultado (ver docs/decisiones.md).
 func LoadLabels(path string) (LoadLabelsResult, error) {
 	f, err := os.Open(path)
 	if err != nil {

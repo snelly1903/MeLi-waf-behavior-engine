@@ -2,7 +2,7 @@
 // legítimo mezclado con credential stuffing distribuido y escaneo
 // lento, en las proporciones 0%, 10% o 30% de tráfico malicioso que
 // exige el PDF, con su ground truth guardado aparte (ver
-// docs/decisiones.md, tarea 0.6).
+// docs/decisiones.md).
 package main
 
 import (

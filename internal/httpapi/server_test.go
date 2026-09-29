@@ -23,7 +23,7 @@ func testServer(t *testing.T) *Server {
 
 // fakeDecisionRecorder captura cada llamada a RecordDecision — usado
 // para verificar que Server la invoca con action/attack_vector
-// correctos, sin necesitar OpenTelemetry en este test (tarea 1.8).
+// correctos, sin necesitar OpenTelemetry en este test.
 type fakeDecisionRecorder struct {
 	calls []fakeDecisionCall
 }
@@ -97,9 +97,8 @@ func TestHandleEvents_ValidEvent_ReturnsAllowDecision(t *testing.T) {
 // TestHandleEvents_RecordsDecisionMetric verifica que handleEvents
 // llame al DecisionRecorder exactamente una vez, con el action y
 // attack_vector reales de la Decision devuelta — la métrica
-// waf.decisions de la tarea 1.8. Nunca con EntityID/RequestID (esos
-// campos ni siquiera están disponibles en la interfaz
-// DecisionRecorder).
+// waf.decisions. Nunca con EntityID/RequestID (esos campos ni
+// siquiera están disponibles en la interfaz DecisionRecorder).
 func TestHandleEvents_RecordsDecisionMetric(t *testing.T) {
 	clock := event.NewManualClock(time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC))
 	validator := event.NewValidator(clock)

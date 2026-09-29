@@ -1,17 +1,16 @@
-// Command loadtest es el load test HTTP end-to-end de la tarea 1.10
-// (POST /v1/events): corre la matriz perfil x concurrencia contra un
-// *httpapi.Server real montado en httptest.NewServer (socket real en
-// loopback — cliente y servidor comparten proceso y máquina, así que
-// los resultados son "local end-to-end / loopback throughput", NUNCA
+// Command loadtest es el load test HTTP end-to-end (POST /v1/events):
+// corre la matriz perfil x concurrencia contra un *httpapi.Server
+// real montado en httptest.NewServer (socket real en loopback —
+// cliente y servidor comparten proceso y máquina, así que los
+// resultados son "local end-to-end / loopback throughput", NUNCA
 // capacidad absoluta de un servidor desplegado por separado). La
 // detector layer, Policy y ScoreFloor son los CONGELADOS tras el
-// holdout (tarea 1.9), servidos vía internal/wiring.FinalConfigs()/
-// FinalPolicy() — la MISMA fuente de verdad que cmd/engine en
-// producción — este comando nunca los modifica, solo los mide. No
-// usa RIPEstat real: el resolver de ASN es
-// datagen.NewSimulatedASNResolver() por default (determinista, sin
-// red), o UnavailableNetworkResolver con --asn-mode=none. Ver
-// docs/decisiones.md, tarea 1.10.
+// holdout, servidos vía internal/wiring.FinalConfigs()/FinalPolicy()
+// — la MISMA fuente de verdad que cmd/engine en producción — este
+// comando nunca los modifica, solo los mide. No usa RIPEstat real: el
+// resolver de ASN es datagen.NewSimulatedASNResolver() por default
+// (determinista, sin red), o UnavailableNetworkResolver con
+// --asn-mode=none. Ver docs/decisiones.md.
 package main
 
 import (
@@ -36,17 +35,17 @@ import (
 
 // Nombres válidos de --asn-mode. Deliberadamente NO incluye
 // "ripestat" -- un load test de performance nunca debe medir
-// latencia de Internet/proveedor (tarea 1.10, ajuste 3).
+// latencia de Internet/proveedor.
 const (
 	asnModeNone      = "none"
 	asnModeSimulated = "simulated"
 )
 
 // otelPairedConcurrencies son los dos puntos del comparativo OTel
-// pareado (tarea 1.10, corrección): mixed@25 y mixed@100, cada uno
-// corriendo OFF x3 inmediatamente seguido de ON x3 -- cerca en el
-// tiempo, para que una eventual deriva del sistema (térmica, otros
-// procesos) no contamine la comparación.
+// pareado: mixed@25 y mixed@100, cada uno corriendo OFF x3
+// inmediatamente seguido de ON x3 -- cerca en el tiempo, para que una
+// eventual deriva del sistema (térmica, otros procesos) no contamine
+// la comparación.
 var otelPairedConcurrencies = []int{25, 100}
 
 func main() {
@@ -96,11 +95,11 @@ func main() {
 		}
 	}
 
-	// Comparativo PAREADO de OTel (tarea 1.10, corrección): solo si
-	// se pasó --otel-endpoint. Para cada concurrencia de interés,
-	// OFF x reps corre INMEDIATAMENTE seguido de ON x reps -- cerca
-	// en el tiempo, nunca separados por el resto de la matriz
-	// principal. Nunca se agranda la matriz principal para esto.
+	// Comparativo PAREADO de OTel: solo si se pasó --otel-endpoint.
+	// Para cada concurrencia de interés, OFF x reps corre
+	// INMEDIATAMENTE seguido de ON x reps -- cerca en el tiempo,
+	// nunca separados por el resto de la matriz principal. Nunca se
+	// agranda la matriz principal para esto.
 	if *otelEndpoint != "" {
 		if _, ok := eventsByProfile["mixed"]; !ok {
 			// El comparativo OTel siempre necesita el perfil "mixed",
@@ -156,14 +155,13 @@ func main() {
 
 // runCombination corre reps repeticiones independientes de UNA
 // combinación (perfil x concurrencia x modo OTel), CADA UNA con un
-// decider/servidor frescos (tarea 1.10, ajuste 4) Y un
-// *http.Client/*http.Transport propios (loadtest.NewClient,
-// keep-alive habilitado, pool de conexiones dimensionado para
-// concurrency) COMPARTIDOS entre todos los workers de esa
-// repetición -- nunca se reutiliza estado entre repeticiones ni
-// entre combinaciones. La configuración de los tres detectores es
+// decider/servidor frescos Y un *http.Client/*http.Transport propios
+// (loadtest.NewClient, keep-alive habilitado, pool de conexiones
+// dimensionado para concurrency) COMPARTIDOS entre todos los workers
+// de esa repetición -- nunca se reutiliza estado entre repeticiones
+// ni entre combinaciones. La configuración de los tres detectores es
 // SIEMPRE wiring.FinalConfigs() (vía BuildServerWithResolver) -- la
-// misma que sirve cmd/engine en producción (tarea 1.10, blocker).
+// misma que sirve cmd/engine en producción.
 func runCombination(profile string, concurrency int, otelEnabled, paired bool, events []event.Event, resolver credstuffing.NetworkResolver, recorders *telemetry.Recorders, reps int, warmup, measurement time.Duration, challengeThreshold, blockThreshold float64) loadtest.CombinationResult {
 	var memBefore, memAfter runtime.MemStats
 	runtime.ReadMemStats(&memBefore)
@@ -211,9 +209,9 @@ func buildResolver(asnMode string) credstuffing.NetworkResolver {
 // buildProfileEvents genera, UNA sola vez, los eventos de cada
 // perfil pedido -- reutiliza datagen/escenarios existentes
 // (DefaultScenarioConfig con ratio 0/0.10/0.30), nunca un generador
-// propio de tráfico de performance (tarea 1.10). PerfSeed (901) es
-// una semilla dedicada, distinta de tuning (101-103) y holdout
-// (201-203), para no mezclar conceptos.
+// propio de tráfico de performance. PerfSeed (901) es una semilla
+// dedicada, distinta de tuning (101-103) y holdout (201-203), para no
+// mezclar conceptos.
 func buildProfileEvents(profiles []string) map[string][]event.Event {
 	ratios := map[string]float64{
 		"normal":       0,

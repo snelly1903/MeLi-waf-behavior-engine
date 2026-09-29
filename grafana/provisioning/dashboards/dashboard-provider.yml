@@ -1,6 +1,5 @@
 # Provisioning automático del dashboard -- carga cualquier JSON que
-# haya en grafana/dashboards/ sin que el evaluador tenga que
-# importarlo a mano (tarea 1.8).
+# haya en grafana/dashboards/ sin tener que importarlo a mano.
 apiVersion: 1
 providers:
   - name: waf-engine

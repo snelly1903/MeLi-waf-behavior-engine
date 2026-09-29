@@ -19,13 +19,12 @@ func decisionFor(le groundtruth.LabeledEvent, action decision.Action) decision.D
 	}
 }
 
-// TestComputeDetectionDelay_CredentialStuffing_GroupsByASNNotByIP es
-// el test central del ajuste 1: dos IPs DISTINTAS, del mismo grupo de
-// red simulado, participando de la MISMA campaña de credential
-// stuffing distribuido — igual que hace el detector real (tarea 1.3),
-// nunca una campaña por IP. La primera decisión positiva de
-// CUALQUIERA de las dos IPs cuenta como la detección de la campaña
-// completa.
+// TestComputeDetectionDelay_CredentialStuffing_GroupsByASNNotByIP
+// confirma que dos IPs DISTINTAS, del mismo grupo de red simulado,
+// participan de la MISMA campaña de credential stuffing distribuido —
+// igual que hace el detector real, nunca una campaña por IP. La
+// primera decisión positiva de CUALQUIERA de las dos IPs cuenta como
+// la detección de la campaña completa.
 func TestComputeDetectionDelay_CredentialStuffing_GroupsByASNNotByIP(t *testing.T) {
 	ipA := netip.MustParseAddr("192.0.2.10")
 	ipB := netip.MustParseAddr("192.0.2.20")

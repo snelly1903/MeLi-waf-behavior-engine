@@ -88,7 +88,7 @@ func (m monotonicEventStream) at(i int, cursor *time.Time) event.Event {
 // benchScenario genera, para seed y ratio dados, el escenario base
 // del microbenchmark — la MISMA semilla de performance (901, nunca
 // 101-103/201-203 de tuning/holdout, para no mezclar conceptos)
-// usada también por cmd/loadtest, tarea 1.10.
+// usada también por cmd/loadtest.
 const perfSeed = 901
 
 func benchScenario(ratio float64) datagen.Scenario {
@@ -96,12 +96,11 @@ func benchScenario(ratio float64) datagen.Scenario {
 }
 
 // newBenchDecider arma un *engine.BehavioralDecider real con la
-// configuración FINAL congelada (post-tarea 1.9: credential_stuffing
-// CSw2, slow_scan S3, statistical_anomaly A3, Policy
-// Challenge=0.50/Block=0.75 — ver internal/wiring, que es la MISMA
-// construcción que sirve cmd/engine en producción) y el resolver
-// determinista de ASN (nunca RIPEstat real: un microbenchmark no
-// debe medir latencia de red — tarea 1.10, ajuste 3).
+// configuración final congelada (credential_stuffing CSw2, slow_scan
+// S3, statistical_anomaly A3, Policy Challenge=0.50/Block=0.75 — ver
+// internal/wiring, que es la MISMA construcción que sirve cmd/engine
+// en producción) y el resolver determinista de ASN (nunca RIPEstat
+// real: un microbenchmark no debe medir latencia de red).
 func newBenchDecider(b *testing.B) *engine.BehavioralDecider {
 	b.Helper()
 	d, err := wiring.BuildDecider(0.50, 0.75, wiring.ASNProviderNone, 0, 0, nil)

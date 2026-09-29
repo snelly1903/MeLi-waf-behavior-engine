@@ -65,10 +65,10 @@ func (v AttackVector) Valid() bool {
 //
 // Por ahora Weight no está normalizado a que la suma de todas las
 // señales de una decisión dé exactamente 1 — esa regla se define recién
-// cuando exista el algoritmo de combinación de señales (Fase 1), que es
-// quien sabe si conviene normalizar antes o después de guardar la
-// decisión. Lo único que este contrato garantiza hoy es que Weight sea
-// un número finito y no negativo.
+// cuando exista el algoritmo de combinación de señales, que es quien
+// sabe si conviene normalizar antes o después de guardar la decisión.
+// Lo único que este contrato garantiza hoy es que Weight sea un número
+// finito y no negativo.
 type ContributingSignal struct {
 	// Name identifica la señal, por ejemplo "cluster_fail_ratio_wilson"
 	// o "path_entropy_normalized".
@@ -113,8 +113,8 @@ type Decision struct {
 	// estadísticamente calibrada — no hay, en esta fase del proyecto,
 	// ninguna garantía de que "0.7" signifique literalmente "70% de
 	// probabilidad de que sea un ataque". Es un puntaje de riesgo
-	// comparable entre decisiones, que la política del motor (Fase 1)
-	// corta con dos umbrales configurables para elegir la acción:
+	// comparable entre decisiones, que la política del motor corta con
+	// dos umbrales configurables para elegir la acción:
 	//
 	//   score < umbral_challenge                   → ALLOW
 	//   umbral_challenge ≤ score < umbral_block     → CHALLENGE
@@ -159,19 +159,19 @@ type Decision struct {
 	// donde sí corre pero de forma asíncrona) y "el LLM respondió esto"
 	// (puntero a un string, incluso si ese string fuera "").
 	//
-	// Nota de diseño para la Fase 1: como el LLM corre de forma
-	// asíncrona (ver el análisis general, sección 13), este campo
-	// nunca va a completarse modificando el log JSON que ya se emitió
-	// para la decisión original — los logs son de solo anexado
-	// (append-only) y no se editan en el lugar. En cambio, cuando la
-	// explicación del LLM esté lista, se va a emitir un **evento de
-	// auditoría separado** (por ejemplo, algo del estilo
-	// "decision_explanation"), correlacionado con la decisión original
-	// por RequestID (o por un DecisionID dedicado, si en la Fase 1
-	// resulta que un request puede generar más de una decisión y hace
-	// falta distinguirlas). Quien lea los logs de auditoría necesita
-	// poder reconstruir la decisión completa cruzando ambos eventos por
-	// esa clave, no esperando que el primero se actualice.
+	// Nota de diseño: como el LLM corre de forma asíncrona (ver el
+	// análisis general, sección 13), este campo nunca va a completarse
+	// modificando el log JSON que ya se emitió para la decisión
+	// original — los logs son de solo anexado (append-only) y no se
+	// editan en el lugar. En cambio, cuando la explicación del LLM esté
+	// lista, se va a emitir un **evento de auditoría separado** (por
+	// ejemplo, algo del estilo "decision_explanation"), correlacionado
+	// con la decisión original por RequestID (o por un DecisionID
+	// dedicado, si más adelante resulta que un request puede generar
+	// más de una decisión y hace falta distinguirlas). Quien lea los
+	// logs de auditoría necesita poder reconstruir la decisión completa
+	// cruzando ambos eventos por esa clave, no esperando que el primero
+	// se actualice.
 	LLMExplanation *string `json:"llm_explanation,omitempty"`
 }
 

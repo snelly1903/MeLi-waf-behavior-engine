@@ -13,7 +13,7 @@ import (
 // repeticiones, más el delta de memoria del proceso COMBINADO
 // cliente+servidor (nunca "RAM exclusiva del servidor" — cliente y
 // servidor comparten el mismo proceso Go en este harness, ver
-// docs/decisiones.md, tarea 1.10).
+// docs/decisiones.md).
 type CombinationResult struct {
 	Profile     string
 	Concurrency int
@@ -22,9 +22,9 @@ type CombinationResult struct {
 	// PairedOTelComparison marca las combinaciones que pertenecen al
 	// bloque comparativo OTel ON/OFF pareado (mixed@25 y mixed@100,
 	// cada par OFF->ON corrido uno inmediatamente después del otro,
-	// cerca en el tiempo — tarea 1.10) — nunca las mismas
-	// combinaciones (perfil/concurrencia) que ya corrió la matriz
-	// principal, aunque coincidan en Profile/Concurrency/OTelEnabled=false.
+	// cerca en el tiempo) — nunca las mismas combinaciones
+	// (perfil/concurrencia) que ya corrió la matriz principal, aunque
+	// coincidan en Profile/Concurrency/OTelEnabled=false.
 	PairedOTelComparison bool
 
 	Aggregated AggregatedResult
@@ -91,10 +91,8 @@ func msOf(d interface{ Seconds() float64 }) float64 {
 
 // WriteJSON escribe results en path como JSON indentado — los mismos
 // datos agregados que WriteCSV (latencias ya en milisegundos), MÁS
-// el detalle crudo de cada repetición individual
-// (`repetitions`, tarea 1.10: "conserva también los resultados
-// crudos por repetición") — el CSV, al ser tabular, se queda solo
-// con el agregado.
+// el detalle crudo de cada repetición individual (`repetitions`) —
+// el CSV, al ser tabular, se queda solo con el agregado.
 func WriteJSON(path string, results []CombinationResult) error {
 	type repetitionJSON struct {
 		Requests      int     `json:"requests"`

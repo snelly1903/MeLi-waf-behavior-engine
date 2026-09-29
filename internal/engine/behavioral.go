@@ -1,9 +1,8 @@
 // Package engine (behavioral.go): el Decider real — combina los
-// detectores conductuales (internal/credstuffing, internal/slowscan,
-// y desde la tarea 1.6, internal/anomaly) en una única
-// decision.Decision. Sin LLM, sin ASN real, sin OTel/Grafana/k6/AWS
-// todavía — ver docs/decisiones.md, tareas 1.5 y 1.6, para el alcance
-// exacto.
+// detectores conductuales (internal/credstuffing, internal/slowscan e
+// internal/anomaly) en una única decision.Decision. Sin LLM, sin ASN
+// real, sin OTel/Grafana/k6/AWS todavía — ver docs/decisiones.md para
+// el alcance exacto.
 package engine
 
 import (
@@ -24,7 +23,7 @@ import (
 // — la más alta (el desempate más débil) de las tres, y la referencia
 // para distinguir "detector específico" (credential_stuffing/
 // slow_scan, priority < anomalyPriority) de "genérico" en
-// selectAttribution (tarea 1.9, corrección de attribution).
+// selectAttribution.
 const anomalyPriority = 2
 
 // Errores centinela de construcción, comprobables individualmente con
@@ -37,20 +36,19 @@ var (
 
 // detector es la interfaz mínima que BehavioralDecider necesita de
 // cada fuente de Finding — privada, definida acá porque acá es donde
-// se consume (mismo criterio que engine.Decider, tarea 1.1), y usada
+// se consume (mismo criterio que engine.Decider), y usada
 // ÚNICAMENTE para el bucle de combinación interno de Decide/Sweep.
 // internal/credstuffing.Detector, internal/slowscan.Detector e
 // internal/anomaly.Detector ya la cumplen tal cual — no se les tocó
 // ni una firma para esto.
 //
-// Se agregó recién ahora, con el tercer detector (tarea 1.6): con
-// dos, comparar a mano alcanzaba; con tres, la comparación escrita a
-// mano ya no puede extenderse sin reescribirse, y una lista + un
-// bucle es objetivamente menos código y menos propenso a errores que
-// agregar una rama más a mano cada vez que aparezca un detector
-// nuevo — la misma "regla de tres" ya aplicada en este proyecto para
-// decidir cuándo extraer algo (ver el patrón de ventana con
-// watermark, tareas 1.2-1.4).
+// Se agregó recién con el tercer detector: con dos, comparar a mano
+// alcanzaba; con tres, la comparación escrita a mano ya no puede
+// extenderse sin reescribirse, y una lista + un bucle es objetivamente
+// menos código y menos propenso a errores que agregar una rama más a
+// mano cada vez que aparezca un detector nuevo — la misma "regla de
+// tres" ya aplicada en este proyecto para decidir cuándo extraer algo
+// (ver el patrón de ventana con watermark).
 type detector interface {
 	Observe(event.Event)
 	Evaluate(event.Event) finding.Finding
@@ -59,25 +57,36 @@ type detector interface {
 
 // FindingsRecorder es la interfaz mínima que BehavioralDecider usa
 // para reportar, por cada detector, si disparó un Finding en este
-// evento — sin importar si terminó siendo el principal de la
-// Decision o no (tarea 1.8). El nombre del detector es siempre uno
-// de los ya registrados explícitamente en namedDetector.name
-// ("credential_stuffing", "slow_scan", "statistical_anomaly"): nunca
-// se infiere con un type switch sobre el detector concreto.
+// evento — sin importar si terminó siendo el principal de la Decision
+// o no. El nombre del detector es siempre uno de los ya registrados
+// explícitamente en namedDetector.name ("credential_stuffing",
+// "slow_scan", "statistical_anomaly"): nunca se infiere con un type
+// switch sobre el detector concreto.
+//
+// RecordAnomalyScore reporta el RiskScore de statistical_anomaly en
+// CADA evaluación, dispare o no — a diferencia de RecordFinding, que
+// solo cuenta disparos. Es lo que permite observar la distribución
+// completa del score (no solo la cola que llegó a disparar), igual
+// criterio que ya usan los reportes offline de tuning/holdout. Solo
+// existe para statistical_anomaly (no para los otros dos detectores):
+// es el único requisito de observabilidad pendiente, no un patrón
+// genérico para generalizar sin necesidad.
 //
 // Exportada porque internal/telemetry la implementa desde otro
 // paquete, por tipado estructural — BehavioralDecider nunca importa
 // OpenTelemetry directamente, mismo criterio que
-// credstuffing.NetworkResolver (tarea 1.3).
+// credstuffing.NetworkResolver.
 type FindingsRecorder interface {
 	RecordFinding(detector string)
+	RecordAnomalyScore(score float64)
 }
 
 // noopFindingsRecorder es el valor por defecto cuando
 // NewBehavioralDecider recibe recorder=nil.
 type noopFindingsRecorder struct{}
 
-func (noopFindingsRecorder) RecordFinding(string) {}
+func (noopFindingsRecorder) RecordFinding(string)       {}
+func (noopFindingsRecorder) RecordAnomalyScore(float64) {}
 
 // namedDetector empareja un detector con su prioridad de desempate
 // (menor número gana un empate exacto de RiskScore) y un nombre solo
@@ -91,9 +100,8 @@ type namedDetector struct {
 
 // BehavioralDecider combina la evidencia de varios detectores en una
 // única decision.Decision. No agrega ningún estado mutable propio —
-// los detectores ya son seguros para concurrencia por su cuenta
-// (tareas 1.3/1.4/1.6), así que Decide lo es también sin necesitar un
-// lock nuevo acá.
+// los detectores ya son seguros para concurrencia por su cuenta, así
+// que Decide lo es también sin necesitar un lock nuevo acá.
 type BehavioralDecider struct {
 	detectors []namedDetector
 	policy    Policy
@@ -104,8 +112,8 @@ type BehavioralDecider struct {
 // detectores son obligatorios — nunca nil: si todavía no existe un
 // NetworkResolver real para credential stuffing, se construye ese
 // detector igual, con credstuffing.UnavailableNetworkResolver (ver
-// docs/decisiones.md, tarea 1.5) — nunca se omite un detector por
-// completo, para no tener que ramificar con "if nil" en Decide.
+// docs/decisiones.md) — nunca se omite un detector por completo, para
+// no tener que ramificar con "if nil" en Decide.
 //
 // El constructor sigue recibiendo parámetros explícitos y tipados
 // (no una lista genérica): el sitio de construcción en cmd/engine se
@@ -117,8 +125,8 @@ type BehavioralDecider struct {
 // Prioridad de desempate, fija y documentada: credential_stuffing
 // (0) > slow_scan (1) > statistical_anomaly (2) — el más específico
 // gana un empate exacto de RiskScore; el genérico es el último
-// recurso. Generaliza la regla ya establecida en la tarea 1.5
-// ("credential_stuffing gana empates contra slow_scan").
+// recurso. Generaliza la regla ya establecida de que
+// credential_stuffing gana empates contra slow_scan.
 // recorder es opcional: si es nil, se usa noopFindingsRecorder — un
 // caller que no le importa la telemetría (por ejemplo, la mayoría de
 // los tests de este paquete) puede seguir pasando nil.
@@ -155,8 +163,7 @@ func NewBehavioralDecider(cs *credstuffing.Detector, ss *slowscan.Detector, an *
 // ellos no importa, no comparten estado); después Evaluate en todos —
 // mismo contrato de dos pasos que cada detector ya exige por
 // separado. Con los Finding disparados, separa DOS preguntas
-// independientes (tarea 1.9, corrección de attribution — ver
-// docs/decisiones.md):
+// independientes (ver docs/decisiones.md):
 //
 //   - Qué tan riesgoso es este evento (Action/ConfidenceScore): el
 //     mayor RiskScore entre TODOS los Triggered, sin importar qué
@@ -169,7 +176,7 @@ func NewBehavioralDecider(cs *credstuffing.Detector, ss *slowscan.Detector, an *
 //     queda reservado al caso donde NINGÚN detector específico
 //     disparó.
 //
-// Antes de esta tarea, ambas preguntas las respondía el mismo
+// Originalmente ambas preguntas las respondía el mismo
 // Finding (el de mayor RiskScore) — así que un statistical_anomaly
 // con score más alto podía dejar attack_vector=unknown aunque
 // credential_stuffing o slow_scan también hubieran disparado, lo cual
@@ -184,6 +191,9 @@ func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.De
 	var triggered []triggeredFinding
 	for _, nd := range d.detectors {
 		f := nd.detector.Evaluate(e)
+		if nd.name == "statistical_anomaly" {
+			d.recorder.RecordAnomalyScore(f.RiskScore)
+		}
 		if f.Triggered {
 			d.recorder.RecordFinding(nd.name)
 			triggered = append(triggered, triggeredFinding{finding: f, priority: nd.priority})
@@ -195,9 +205,8 @@ func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.De
 	if scoreSource == nil {
 		// Ningún detector disparó: el único caso que cae al default
 		// "nada que reportar" — AttackVector=unknown, score 0. El
-		// EntityID sigue la misma convención que AllowAllDecider
-		// (tarea 1.1): nunca vacío, nunca hace fallar
-		// decision.Validate().
+		// EntityID sigue la misma convención que AllowAllDecider: nunca
+		// vacío, nunca hace fallar decision.Validate().
 		return decision.Decision{
 			RequestID:    e.RequestID,
 			Timestamp:    e.Timestamp,
@@ -220,7 +229,7 @@ func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.De
 	// disparó — sin importar si Action terminó en ALLOW porque el
 	// score no alcanzó ChallengeThreshold. Action refleja qué se hizo
 	// con el riesgo; estos campos reflejan DE QUÉ ataque se trata. Son
-	// preguntas distintas — ver docs/decisiones.md, tareas 1.5 y 1.9.
+	// preguntas distintas — ver docs/decisiones.md.
 	explanation := explanationFor(*attribution, secondaries, action, scoreSource.RiskScore, d.policy)
 
 	return decision.Decision{
@@ -260,11 +269,11 @@ func bestIndexByScore(pool []triggeredFinding) int {
 }
 
 // selectPrincipal elige, entre los Finding que dispararon, cuál
-// decide Action/ConfidenceScore (tarea 1.9: "qué tan riesgoso es
-// esto", nunca "de qué ataque se trata" — ver selectAttribution para
-// eso). El mayor RiskScore entre TODOS los Triggered — nunca se
-// suman ni se promedian scores de detectores distintos, cada uno mide
-// algo diferente con su propia escala heurística.
+// decide Action/ConfidenceScore — "qué tan riesgoso es esto", nunca
+// "de qué ataque se trata" (ver selectAttribution para eso). El mayor
+// RiskScore entre TODOS los Triggered — nunca se suman ni se
+// promedian scores de detectores distintos, cada uno mide algo
+// diferente con su propia escala heurística.
 //
 // secondaries son los demás Finding que también dispararon (nunca
 // nil, puede ser vacío) — ya no se usan para construir el
@@ -287,8 +296,8 @@ func selectPrincipal(triggered []triggeredFinding) (principal *finding.Finding, 
 
 // selectAttribution elige, entre los Finding que dispararon, cuál
 // decide AttackVector/EntityID/ContributingSignals/el Explanation
-// principal (tarea 1.9: "de qué ataque se trata", nunca "qué tan
-// riesgoso es" — ver selectPrincipal para eso). Prioridad estricta:
+// principal — "de qué ataque se trata", nunca "qué tan riesgoso es"
+// (ver selectPrincipal para eso). Prioridad estricta:
 // si CUALQUIER detector ESPECÍFICO (credential_stuffing/slow_scan,
 // priority < anomalyPriority) disparó, gana el de mayor RiskScore
 // ENTRE ESOS — statistical_anomaly nunca es candidato en ese caso,
@@ -342,11 +351,11 @@ func selectAttribution(triggered []triggeredFinding) (attribution *finding.Findi
 // la explicación de la evidencia ATRIBUIDA (attribution, ver
 // selectAttribution — nunca necesariamente la de mayor RiskScore),
 // junto con decisionScore (el score que REALMENTE decidió Action —
-// ver selectPrincipal, tarea 1.9) y la acción resultante, y — por
-// cada detector secundario que también disparó — una mención corta
-// de eso, SIN concatenar sus señales (ver docs/decisiones.md, tarea
-// 1.5, sobre por qué mezclar ContributingSignals de detectores
-// distintos sería engañoso).
+// ver selectPrincipal) y la acción resultante, y — por cada detector
+// secundario que también disparó — una mención corta de eso, SIN
+// concatenar sus señales (ver docs/decisiones.md sobre por qué
+// mezclar ContributingSignals de detectores distintos sería
+// engañoso).
 //
 // decisionScore puede diferir del RiskScore propio de attribution
 // (por ejemplo, cuando statistical_anomaly tiene mayor score pero un
@@ -362,11 +371,11 @@ func explanationFor(attribution finding.Finding, secondaries []finding.Finding, 
 		explanation = fmt.Sprintf("%s: %s (decision score %.2f; action=%s)",
 			attribution.AttackVector, attribution.Explanation, decisionScore, action)
 	}
-	// Nunca se afirma "scored lower" acá: desde esta tarea, un
-	// secondary puede tener un RiskScore mayor que decisionScore
-	// (por ejemplo, statistical_anomaly perdiendo la attribution
-	// frente a un detector específico con score menor) — el texto se
-	// limita al score, sin caracterizar la comparación.
+	// Nunca se afirma "scored lower" acá: un secondary puede tener un
+	// RiskScore mayor que decisionScore (por ejemplo, statistical_anomaly
+	// perdiendo la attribution frente a un detector específico con
+	// score menor) — el texto se limita al score, sin caracterizar la
+	// comparación.
 	for _, s := range secondaries {
 		explanation = fmt.Sprintf("%s; %s signals were also present (risk score %.2f)",
 			explanation, s.AttackVector, s.RiskScore)
@@ -375,7 +384,7 @@ func explanationFor(attribution finding.Finding, secondaries []finding.Finding, 
 }
 
 // Sweep reenvía a todos los detectores. Conectarlo a un scheduler
-// real queda fuera del alcance de estas tareas.
+// real queda fuera del alcance de este proyecto.
 func (d *BehavioralDecider) Sweep(now time.Time, idleTTL time.Duration) int {
 	total := 0
 	for _, nd := range d.detectors {

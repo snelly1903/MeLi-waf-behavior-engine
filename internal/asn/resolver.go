@@ -88,8 +88,8 @@ type Config struct {
 	FailureTTL time.Duration
 
 	// Clock provee el "ahora" para el TTL del caché — reutiliza
-	// event.Clock (tarea 0.2) en vez de otra interfaz de reloj más.
-	// Si es nil, se usa event.SystemClock{}.
+	// event.Clock en vez de otra interfaz de reloj más. Si es nil, se
+	// usa event.SystemClock{}.
 	Clock event.Clock
 
 	// HTTPClient es el cliente HTTP a usar. Si es nil, se construye
@@ -98,11 +98,11 @@ type Config struct {
 
 	// Metrics recibe, si no es nil, las métricas de operación de este
 	// Resolver (caché hit/miss, resultado de cada resolución, y
-	// cuánto tarda la llamada real al proveedor) — tarea 1.8. Si es
-	// nil, se usa un noopMetricsRecorder: este paquete nunca importa
+	// cuánto tarda la llamada real al proveedor). Si es nil, se usa
+	// un noopMetricsRecorder: este paquete nunca importa
 	// OpenTelemetry directamente; internal/telemetry implementa esta
 	// interfaz desde afuera, por tipado estructural (mismo criterio
-	// que credstuffing.NetworkResolver, tarea 1.3).
+	// que credstuffing.NetworkResolver).
 	Metrics MetricsRecorder
 }
 
@@ -111,7 +111,7 @@ type Config struct {
 // RecordProviderDuration, es siempre uno de "success", "failure" o
 // (solo en RecordResolveResult) "capacity_timeout" — nunca un ASN
 // individual ni ninguna otra cadena de alta cardinalidad; ver
-// docs/decisiones.md, tarea 1.8, sobre por qué.
+// docs/decisiones.md sobre por qué.
 type MetricsRecorder interface {
 	// RecordCacheResult informa si Resolve encontró la IP en caché
 	// (hit=true) o no (hit=false) — incluye tanto "nunca se cacheó"
@@ -377,7 +377,7 @@ func (r *Resolver) cacheSet(ip netip.Addr, group string, ok bool) {
 // Sweep elimina del caché cualquier entrada vencida respecto a now, y
 // devuelve cuántas eliminó — mismo patrón que
 // internal/profile.Store.Sweep, internal/credstuffing.Detector.Sweep
-// e internal/anomaly.Detector.Sweep (tareas 1.2/1.3/1.6). now se
+// e internal/anomaly.Detector.Sweep. now se
 // recibe como parámetro (nunca time.Now() internamente), así que
 // sigue siendo determinista y testeable. Conectarlo a un scheduler
 // real queda fuera del alcance de esta tarea.

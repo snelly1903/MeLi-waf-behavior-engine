@@ -25,9 +25,8 @@ type LegitProfile struct {
 
 	// UserAgents es el conjunto de User-Agent posibles para una sesión
 	// de este perfil. Se elige uno solo al empezar la sesión y se
-	// mantiene fijo durante toda ella — a diferencia de un atacante
-	// (tarea 0.5), un usuario real no rota de navegador a mitad de
-	// sesión.
+	// mantiene fijo durante toda ella — a diferencia de un atacante, un
+	// usuario real no rota de navegador a mitad de sesión.
 	UserAgents []string
 
 	// HasSession indica si el usuario manda session_id.
@@ -55,9 +54,9 @@ type LegitProfile struct {
 	// LoginRetryProbability es la probabilidad de que la sesión incluya
 	// un intento de login fallido (401) seguido de un reintento
 	// exitoso con la MISMA cuenta — un typo humano, no un ataque. La
-	// diferencia clave con el credential stuffing (tarea 0.5) es
-	// exactamente esa: acá se reintenta la misma cuenta; en el ataque,
-	// cada intento prueba una cuenta distinta.
+	// diferencia clave con el credential stuffing es exactamente esa:
+	// acá se reintenta la misma cuenta; en el ataque, cada intento
+	// prueba una cuenta distinta.
 	LoginRetryProbability float64
 
 	// BrokenLinkProbability es la probabilidad de que una visita a una
@@ -134,9 +133,8 @@ var (
 	// comportamiento que ProfileAPIClient (se construye a partir de él,
 	// así que hereda cualquier ajuste futuro), cambiando solo el pool
 	// de IP. Existe para que "esta IP pertenece al ASN de hosting"
-	// nunca sea, por sí sola, una señal suficiente — se usa recién en
-	// la tarea 0.6, al mezclar tráfico legítimo y malicioso dentro del
-	// mismo ASN simulado.
+	// nunca sea, por sí sola, una señal suficiente — se usa al mezclar
+	// tráfico legítimo y malicioso dentro del mismo ASN simulado.
 	ProfileHostedTenant = func() LegitProfile {
 		p := ProfileAPIClient
 		p.Name = "hosted_tenant"
@@ -181,15 +179,15 @@ var (
 // Coherencia de tiempo al mezclar sesiones: esta función usa un
 // event.ManualClock propio e interno que solo avanza hacia adelante
 // dentro de esta sesión — no hace falta esperar tiempo real, y no se
-// crea un tipo de reloj nuevo (se reutiliza el de la tarea 0.2). Los
-// eventos de una misma sesión quedan en orden por construcción. Cuando
-// la tarea 0.6 mezcle muchas sesiones —de distintos perfiles y con
-// distintos horarios de inicio— en un único dataset, la forma correcta
-// de lograr que el archivo final quede coherente en el tiempo es
-// generar cada sesión por separado (con su propio start) y después
-// ordenar todos los eventos por Timestamp al juntarlos, en vez de
-// compartir un único reloj entre sesiones. GenerateOfficeCluster, más
-// abajo, ya hace ese ordenamiento para las sesiones que junta.
+// crea un tipo de reloj nuevo (se reutiliza el existente). Los eventos
+// de una misma sesión quedan en orden por construcción. Al mezclar
+// muchas sesiones —de distintos perfiles y con distintos horarios de
+// inicio— en un único dataset, la forma correcta de lograr que el
+// archivo final quede coherente en el tiempo es generar cada sesión
+// por separado (con su propio start) y después ordenar todos los
+// eventos por Timestamp al juntarlos, en vez de compartir un único
+// reloj entre sesiones. GenerateOfficeCluster, más abajo, ya hace ese
+// ordenamiento para las sesiones que junta.
 func GenerateLegitSession(rng *RNG, profile LegitProfile, start time.Time, clientIP netip.Addr) []groundtruth.LabeledEvent {
 	clock := event.NewManualClock(start)
 	userAgent := Pick(rng, profile.UserAgents)
@@ -221,8 +219,8 @@ func GenerateLegitSession(rng *RNG, profile LegitProfile, start time.Time, clien
 	}
 
 	// Intento de login ocasional, con la MISMA cuenta en el reintento —
-	// a diferencia del credential stuffing (tarea 0.5), que prueba una
-	// cuenta distinta en cada intento.
+	// a diferencia del credential stuffing, que prueba una cuenta
+	// distinta en cada intento.
 	if profile.LoginPath != "" && rng.Bool(profile.LoginRetryProbability) {
 		accountHash := rng.HexHash(64)
 		emit("POST", profile.LoginPath, 401, lastPath, accountHash)
@@ -265,7 +263,7 @@ func GenerateLegitSession(rng *RNG, profile LegitProfile, start time.Time, clien
 // startJitter respecto de clusterStart. El resultado queda ordenado por
 // Timestamp antes de devolverse — es, en sí misma, una mezcla de varias
 // sesiones, así que aplica acá el mismo principio de ordenar al final
-// que se documentó para la tarea 0.6.
+// documentado más arriba.
 func GenerateOfficeCluster(rng *RNG, employees int, clusterStart time.Time, startJitter time.Duration) []groundtruth.LabeledEvent {
 	sharedIP := ProfileOffice.Pool.RandomAddr(rng)
 

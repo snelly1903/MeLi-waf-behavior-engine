@@ -1,16 +1,12 @@
 // Command tune es el evaluador/calibrador offline del motor
-// conductual (tarea 1.9). Este primer paso implementa únicamente el
-// "baseline": generar los escenarios de tuning (seeds 101/102/103 por
-// defecto, ratios 0/10/30%), correr la configuración ACTUAL de
+// conductual: genera los escenarios de tuning (seeds 101/102/103 por
+// defecto, ratios 0/10/30%), corre la configuración ACTUAL de
 // cmd/engine (internal/tuning.BaselineCandidate, que nunca duplica
 // esos valores — ver internal/engine/defaults.go) sobre cada uno, y
-// producir un reporte reproducible (Markdown + CSV + JSON) con todas
-// las métricas — nunca solo la configuración elegida (todavía no hay
-// ninguna elegida: este paso es puramente de diagnóstico).
-//
-// El sweep de candidatos alternativos (ajustar detectores/policy)
-// llega en un paso posterior, después del Punto de Control 1 — ver
-// docs/decisiones.md, tarea 1.9.
+// produce un reporte reproducible (Markdown + CSV + JSON) con todas
+// las métricas — nunca solo la configuración elegida. El sweep de
+// candidatos alternativos (ajustar detectores/policy) vive en
+// cmd/sweep. Ver docs/decisiones.md.
 package main
 
 import (

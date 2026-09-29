@@ -1,9 +1,8 @@
-# Stack de observabilidad de la tarea 1.8: OpenTelemetry Collector +
-# Prometheus + Grafana. cmd/engine (el motor Go) NO corre acá -- sigue
-# levantándose local con "go run ./cmd/engine", apuntando su
-# exportador OTLP al Collector expuesto en localhost:4317 (ver
-# docs/decisiones.md, tarea 1.8, sobre por qué). Versiones de imagen
-# fijas, nunca "latest" -- reproducibilidad.
+# Stack de observabilidad: OpenTelemetry Collector + Prometheus +
+# Grafana. cmd/engine (el motor Go) NO corre acá -- sigue levantándose
+# local con "go run ./cmd/engine", apuntando su exportador OTLP al
+# Collector expuesto en localhost:4317. Versiones de imagen fijas,
+# nunca "latest" -- reproducibilidad.
 services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.113.0

@@ -9,13 +9,11 @@ import (
 
 var allPools = []IPPool{PoolHostingSim, PoolResidentialSimA, PoolResidentialSimB}
 
-// TestPools_AddressesArePublic es la comprobación empírica que pediste
-// antes de implementar: confirma que ninguna dirección sorteada de
-// estos pools activa las reglas de "IP privada" del Validator (RFC1918,
-// loopback, link-local, sin especificar). Se llegó a la misma
-// conclusión "a mano" antes de escribir este archivo (ver
-// docs/decisiones.md, tarea 0.4); este test la deja fijada como
-// regresión permanente.
+// TestPools_AddressesArePublic confirma que ninguna dirección sorteada
+// de estos pools activa las reglas de "IP privada" del Validator
+// (RFC1918, loopback, link-local, sin especificar) — la misma
+// conclusión verificada "a mano" (ver docs/decisiones.md), ahora
+// fijada como regresión permanente.
 func TestPools_AddressesArePublic(t *testing.T) {
 	rng := NewRNG(1)
 	for _, pool := range allPools {
@@ -44,7 +42,7 @@ func TestPools_AddressesStayWithinPrefix(t *testing.T) {
 
 // TestPools_AddressesPassEventValidator confirma que una IP sorteada de
 // cualquiera de los tres pools, dentro de un Event por lo demás válido,
-// pasa el Validator de la tarea 0.2 sin errores.
+// pasa el Validator sin errores.
 func TestPools_AddressesPassEventValidator(t *testing.T) {
 	rng := NewRNG(3)
 	now := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)

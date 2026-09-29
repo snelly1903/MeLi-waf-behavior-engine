@@ -23,7 +23,7 @@ import (
 // Dicho esto, esta prueba es una red de seguridad, no una garantía: es
 // una lista fija de palabras, y no sustituye la validación,
 // minimización y sanitización de datos sensibles que hace falta aplicar
-// en la ingesta real y en los logs del motor (Fase 1) — ahí es donde
+// en la ingesta real y en los logs del motor — ahí es donde
 // corresponde decidir, por ejemplo, qué hacer si un cliente manda un
 // header con forma de credencial en un campo que no la espera.
 var forbiddenJSONSubstrings = []string{

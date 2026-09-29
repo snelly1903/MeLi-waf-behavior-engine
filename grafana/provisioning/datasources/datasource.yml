@@ -1,5 +1,5 @@
-# Provisioning automático del datasource de Grafana -- el evaluador
-# no tiene que configurar nada a mano (tarea 1.8).
+# Provisioning automático del datasource de Grafana -- no hace falta
+# configurar nada a mano.
 apiVersion: 1
 datasources:
   - name: Prometheus

@@ -24,7 +24,7 @@ type ReportMeta struct {
 
 // formatRatio imprime r como porcentaje con tres decimales, o "N/A" si
 // r.Defined es false — nunca disimula un denominador en cero con un
-// número (ver docs/decisiones.md, tarea 0.7).
+// número (ver docs/decisiones.md).
 func formatRatio(r Ratio) string {
 	if !r.Defined {
 		return "N/A"

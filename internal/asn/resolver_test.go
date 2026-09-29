@@ -119,10 +119,9 @@ func TestResolve_ZeroASNs_ReturnsUnresolved(t *testing.T) {
 	}
 }
 
-// TestResolve_MultipleASNs_ReturnsUnresolved es el test pedido
-// explícitamente: RIPEstat puede devolver más de un ASN (multi-homing)
-// — este prototipo no elige uno arbitrariamente, trata la ambigüedad
-// como no resoluble.
+// TestResolve_MultipleASNs_ReturnsUnresolved cubre el caso en que
+// RIPEstat devuelve más de un ASN (multi-homing) — este prototipo no
+// elige uno arbitrariamente, trata la ambigüedad como no resoluble.
 func TestResolve_MultipleASNs_ReturnsUnresolved(t *testing.T) {
 	srv := httptest.NewServer(networkInfoHandler([]string{"15169", "6432"}, "ok"))
 	defer srv.Close()
@@ -196,8 +195,8 @@ func TestResolve_ProviderTooSlow_TimesOutAndReturnsUnresolved(t *testing.T) {
 	}
 }
 
-// TestResolve_TimeoutConsumedWaitingForCapacity_NeverCallsProvider es el
-// segundo ajuste pedido: si el plazo se agota esperando un cupo de
+// TestResolve_TimeoutConsumedWaitingForCapacity_NeverCallsProvider
+// confirma que, si el plazo se agota esperando un cupo de
 // concurrencia, Resolve devuelve ("", false) SIN llegar a llamar al
 // proveedor — nunca una espera ilimitada antes del timeout.
 //
@@ -264,7 +263,7 @@ func TestResolve_CachesSuccessfulResult_AvoidsSecondCall(t *testing.T) {
 
 // fakeMetricsRecorder captura cada llamada — usado para verificar que
 // Resolve reporta caché hit/miss y el resultado de cada resolución
-// real, sin necesitar OpenTelemetry en este test (tarea 1.8).
+// real, sin necesitar OpenTelemetry en este test.
 type fakeMetricsRecorder struct {
 	mu             sync.Mutex
 	cacheResults   []bool

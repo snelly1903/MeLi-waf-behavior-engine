@@ -42,10 +42,9 @@ func genericGroupFor(label groundtruth.Label) string {
 
 // AnalyzeRiskScoreDistributions calcula, para los tres detectores, la
 // distribución de RiskScore por evento (0 si no disparó) separada por
-// grupo de ground truth — tarea 1.9, Punto de Control 2, pedido antes
-// de calibrar Policy: entender por qué BlockThreshold=0.80 produce
-// tan pocos BLOCK requiere ver contra qué RiskScores reales se lo
-// está comparando.
+// grupo de ground truth — diagnóstico previo a calibrar Policy:
+// entender por qué BlockThreshold=0.80 produce tan pocos BLOCK
+// requiere ver contra qué RiskScores reales se lo está comparando.
 func AnalyzeRiskScoreDistributions(diagnostics []EventDiagnostic) []RiskScoreBucket {
 	type key struct{ detector, group string }
 	samples := make(map[key][]float64)

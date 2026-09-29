@@ -1,20 +1,20 @@
 .PHONY: test fmt vet data-0 data-10 data-30 data-all eval baseline tune-baseline perf-bench perf-load perf-load-otel perf
 
-# Runs every test in the module with the race detector enabled.
+# Corre todos los tests del módulo con el detector de carreras (race) habilitado.
 test:
 	go test -race ./...
 
-# Formats all Go source files in place.
+# Formatea todos los archivos fuente Go in place.
 fmt:
 	go fmt ./...
 
-# Runs Go's static analysis checks.
+# Corre los checks de análisis estático de Go.
 vet:
 	go vet ./...
 
-# Generates the three test scenarios (0%, 10%, 30% malicious traffic)
-# required by the challenge. Output goes to data/ (gitignored) and is
-# fully reproducible: the same --seed always produces the same files.
+# Genera los tres escenarios de prueba (0%, 10%, 30% de tráfico
+# malicioso). La salida va a data/ (gitignored) y es completamente
+# reproducible: el mismo --seed siempre produce los mismos archivos.
 data-0:
 	go run ./cmd/datagen --seed 42 --ratio 0
 
@@ -26,20 +26,19 @@ data-30:
 
 data-all: data-0 data-10 data-30
 
-# Runs cmd/eval against a scenario folder that already has a
-# decisions.jsonl next to its events.jsonl/labels.jsonl (produced by a
-# real or toy engine — no real engine exists yet, see
-# docs/decisiones.md, tarea 0.8). Override SCENARIO/OUT as needed:
+# Corre cmd/eval contra una carpeta de escenario que ya tiene un
+# decisions.jsonl junto a su events.jsonl/labels.jsonl (producido por
+# el motor real o por el baseline). Override SCENARIO/OUT si hace falta:
 #   make eval SCENARIO=data/scenario-10 OUT=reports/scenario-10.md
 SCENARIO ?= data/scenario-0
 OUT ?= reports/$(notdir $(SCENARIO)).md
 eval:
 	go run ./cmd/eval --scenario $(SCENARIO) --out $(OUT)
 
-# Runs the rate-limit baseline (internal/baseline, tarea 0.9) against
-# a scenario folder's events.jsonl and writes decisions.jsonl next to
-# it. Override SCENARIO/MODE/MAX_REQUESTS/WINDOW/BASELINE_OUT as
-# needed:
+# Corre el baseline de rate limiting (internal/baseline) contra el
+# events.jsonl de una carpeta de escenario y escribe decisions.jsonl
+# junto a él. Override SCENARIO/MODE/MAX_REQUESTS/WINDOW/BASELINE_OUT
+# si hace falta:
 #   make baseline SCENARIO=data/scenario-10 MODE=auth MAX_REQUESTS=20 WINDOW=60s
 # By default BASELINE_OUT is left empty so cmd/baseline picks its own
 # collision-safe name; pass BASELINE_OUT=$(SCENARIO)/decisions.jsonl
@@ -54,19 +53,18 @@ baseline:
 # Corre el motor conductual REAL (internal/engine.BehavioralDecider,
 # con los mismos defaults que cmd/engine — ver internal/engine/defaults.go)
 # sobre los escenarios de tuning (seeds 101/102/103, ratios 0/10/30%
-# por defecto) y escribe el reporte baseline en reports/tuning/
-# (tarea 1.9, Punto de Control 1). Los escenarios se generan en
-# data/tuning/ (gitignored). Override TUNE_SEEDS/TUNE_RATIOS/TUNE_OUT
-# si hace falta.
+# por defecto) y escribe el reporte baseline en reports/tuning/. Los
+# escenarios se generan en data/tuning/ (gitignored). Override
+# TUNE_SEEDS/TUNE_RATIOS/TUNE_OUT si hace falta.
 TUNE_SEEDS ?= 101,102,103
 TUNE_RATIOS ?= 0,10,30
 TUNE_OUT ?= reports/tuning/baseline
 tune-baseline:
 	go run ./cmd/tune --seeds $(TUNE_SEEDS) --ratios $(TUNE_RATIOS) --data-dir data/tuning --out $(TUNE_OUT)
 
-# Performance / load testing (tarea 1.10). Detector layer, Policy y
-# ScoreFloor son los congelados tras el holdout (tarea 1.9) — estos
-# targets solo MIDEN, nunca los modifican.
+# Performance / load testing. Detector layer, Policy y ScoreFloor son
+# la configuración final congelada — estos targets solo MIDEN, nunca
+# los modifican.
 PERF_OUT ?= reports/performance
 
 # Microbenchmark de BehavioralDecider.Decide() (go test -bench,
@@ -90,5 +88,5 @@ perf-load-otel:
 	go run ./cmd/loadtest --out $(PERF_OUT) --otel-endpoint localhost:4317
 
 # Corre el microbenchmark y la matriz de load test completa, en ese
-# orden — el comando único, reproducible, para toda la tarea 1.10.
+# orden — el comando único y reproducible para medir performance.
 perf: perf-bench perf-load

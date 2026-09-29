@@ -7,8 +7,8 @@ import (
 )
 
 // PolicyCandidate identifica una combinación de ChallengeThreshold/
-// BlockThreshold a evaluar en el sweep de Policy (tarea 1.9) —
-// ScoreFloor nunca se toca en este sweep.
+// BlockThreshold a evaluar en el sweep de Policy — ScoreFloor nunca
+// se toca en este sweep.
 type PolicyCandidate struct {
 	Name               string
 	ChallengeThreshold float64

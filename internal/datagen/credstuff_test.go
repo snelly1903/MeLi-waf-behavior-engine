@@ -135,7 +135,7 @@ func TestGenerateCredentialStuffingCampaign_AllEventsLabeled(t *testing.T) {
 
 // TestGenerateCredentialStuffingCampaign_PayloadNeverCarriesLabel es una
 // capa extra de confianza específica de este generador, además de la
-// garantía genérica ya probada en internal/groundtruth (tarea 0.3).
+// garantía genérica ya probada en internal/groundtruth.
 func TestGenerateCredentialStuffingCampaign_PayloadNeverCarriesLabel(t *testing.T) {
 	events := GenerateCredentialStuffingCampaign(NewRNG(8), DefaultCredentialStuffingCampaign, campaignStart)
 	for _, le := range events {

@@ -13,7 +13,7 @@ import (
 // las proporciones exigidas por el challenge (0%, 10%, 30% de tráfico
 // malicioso). Todos los valores son configurables y ninguno es un
 // umbral de detección — son parámetros de generación de datos de
-// prueba, documentados en docs/decisiones.md (tarea 0.6).
+// prueba, documentados en docs/decisiones.md.
 type ScenarioConfig struct {
 	Seed   uint64
 	Start  time.Time
@@ -37,7 +37,7 @@ type ScenarioConfig struct {
 	// StuffingShareOfMalicious es el tope de qué fracción del volumen
 	// malicioso objetivo puede aportar como máximo el credential
 	// stuffing — el resto lo cubre el escaneo lento. Refleja que el
-	// stuffing es, por diseño, de bajo volumen (tarea 0.5): no se infla
+	// stuffing es, por diseño, de bajo volumen: no se infla
 	// artificialmente para "completar" el porcentaje pedido.
 	StuffingShareOfMalicious float64
 
@@ -56,10 +56,10 @@ type ScenarioConfig struct {
 }
 
 // DefaultScenarioConfig son los valores acordados para el dataset
-// funcional de prueba del challenge (ver docs/decisiones.md, tarea
-// 0.6): una población pensada para generarse y evaluarse rápido, no
-// para las pruebas de carga — esas van a reutilizar estos mismos
-// generadores desde una herramienta distinta (k6), más adelante.
+// funcional de prueba del challenge (ver docs/decisiones.md): una
+// población pensada para generarse y evaluarse rápido, no para las
+// pruebas de carga — esas van a reutilizar estos mismos generadores
+// desde una herramienta distinta (k6), más adelante.
 func DefaultScenarioConfig(seed uint64, targetMaliciousRatio float64) ScenarioConfig {
 	return ScenarioConfig{
 		Seed:   seed,
@@ -176,7 +176,7 @@ func BuildScenario(cfg ScenarioConfig) Scenario {
 		// no midiendo el resultado real del stuffing antes de calcular
 		// el escaneo — es más simple, y la diferencia práctica es
 		// chica porque ambos promedios son razonablemente estables con
-		// las cantidades de esta tarea (ver docs/decisiones.md).
+		// estas cantidades (ver docs/decisiones.md).
 		avgAttempts := float64(cfg.StuffingBase.MinAttemptsPerIP+cfg.StuffingBase.MaxAttemptsPerIP) / 2
 		stuffBudget := int(math.Round(float64(mTarget) * cfg.StuffingShareOfMalicious))
 		ipCount := clampInt(int(math.Round(float64(stuffBudget)/avgAttempts)), 1, cfg.StuffingIPCap)

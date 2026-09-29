@@ -11,8 +11,8 @@ import (
 )
 
 // LoadEvents lee un archivo events.jsonl — el formato que escribe
-// datagen.WriteScenario (tarea 0.6): un event.Event por línea, sin
-// ninguna etiqueta — y devuelve los eventos en el mismo orden en que
+// datagen.WriteScenario: un event.Event por línea, sin ninguna
+// etiqueta — y devuelve los eventos en el mismo orden en que
 // aparecen en el archivo. LoadEvents no reordena nada: es
 // responsabilidad de quien generó el archivo (datagen.WriteScenario ya
 // lo garantiza) que las líneas vengan en orden cronológico, que es lo
@@ -43,9 +43,8 @@ func LoadEvents(path string) ([]event.Event, error) {
 }
 
 // WriteDecisions escribe decisions en path, un decision.Decision por
-// línea — el mismo formato decisions.jsonl que ya consume cmd/eval
-// (tarea 0.8). No agrega nada que Detect no haya puesto ya en cada
-// Decision.
+// línea — el mismo formato decisions.jsonl que ya consume cmd/eval.
+// No agrega nada que Detect no haya puesto ya en cada Decision.
 func WriteDecisions(path string, decisions []decision.Decision) error {
 	f, err := os.Create(path)
 	if err != nil {

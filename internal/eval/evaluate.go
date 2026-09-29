@@ -11,9 +11,9 @@ type PolicyResult struct {
 
 // Result es el resultado completo de evaluar un conjunto de decisiones
 // contra su ground truth. Result.Issues.Clean() dice si el resultado es
-// íntegro o solo un diagnóstico parcial (ver docs/decisiones.md, tarea
-// 0.7) — quien lea este resultado tiene que comprobarlo antes de
-// tratarlo como definitivo, nunca asumirlo.
+// íntegro o solo un diagnóstico parcial (ver docs/decisiones.md) —
+// quien lea este resultado tiene que comprobarlo antes de tratarlo
+// como definitivo, nunca asumirlo.
 type Result struct {
 	// Strict y Broad son las dos políticas de evaluación — ver
 	// metrics.go.
@@ -40,8 +40,8 @@ type Result struct {
 
 // Evaluate cruza las etiquetas ya cargadas (por ejemplo, con
 // LoadLabels) con decisions — en memoria, sin leer ningún archivo de
-// decisiones todavía (eso queda para cmd/eval, tarea 0.8) — y calcula
-// el resultado completo.
+// decisiones todavía (eso queda para cmd/eval) — y calcula el
+// resultado completo.
 //
 // Evaluate nunca falla por problemas de integridad de datos: los
 // reporta en Result.Issues y calcula las métricas con lo que sí pudo
@@ -69,8 +69,8 @@ func Evaluate(labelsResult LoadLabelsResult, decisions []decision.Decision) Resu
 	}
 }
 
-// EvaluateDecisions es la puerta de entrada que usa cmd/eval (tarea
-// 0.8): igual que Evaluate, pero a partir de un LoadDecisionsResult
+// EvaluateDecisions es la puerta de entrada que usa cmd/eval: igual
+// que Evaluate, pero a partir de un LoadDecisionsResult
 // (ver decisions.go) en lugar de un []decision.Decision ya limpio. No
 // duplica ningún cálculo de métricas — llama a Evaluate con las
 // decisiones utilizables y después le agrega a Issues los problemas

@@ -430,7 +430,7 @@ func TestEvaluate_EntityID_ForSession(t *testing.T) {
 	f := evaluateBatch(d, events)
 
 	// Toda la IP pertenece a una única sesión: en empate, gana
-	// sesión — mismo criterio que internal/slowscan (tarea 1.4).
+	// sesión — mismo criterio que internal/slowscan.
 	want := "session:" + sessionID
 	if f.EntityID != want {
 		t.Errorf("EntityID = %q, want %q", f.EntityID, want)

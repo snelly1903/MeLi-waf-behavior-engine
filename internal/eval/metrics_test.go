@@ -153,10 +153,10 @@ func TestBuildConfusionMatrix_StrictVsBroadPolicy(t *testing.T) {
 }
 
 // TestPolicy_IsPositive_MatchesInternalRule confirma que el método
-// exportado IsPositive (agregado en la tarea 1.9 para que
-// internal/tuning pueda reusar la misma regla sin duplicarla) da
-// exactamente los mismos resultados que ya prueba
-// TestBuildConfusionMatrix_StrictVsBroadPolicy indirectamente.
+// exportado IsPositive (para que internal/tuning pueda reusar la
+// misma regla sin duplicarla) da exactamente los mismos resultados que
+// ya prueba TestBuildConfusionMatrix_StrictVsBroadPolicy
+// indirectamente.
 func TestPolicy_IsPositive_MatchesInternalRule(t *testing.T) {
 	tests := []struct {
 		action     decision.Action

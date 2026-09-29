@@ -13,7 +13,7 @@ import (
 // sistema que produce el evento y este validador). Ambas son
 // deliberadamente configurables — ver docs/formato-eventos.md para cómo
 // se relacionan con, y en qué se diferencian de, el manejo de eventos
-// tardíos en las ventanas del motor (Fase 1).
+// tardíos en las ventanas del motor.
 const (
 	DefaultMaxPastAge      = 5 * time.Minute
 	DefaultMaxFutureSkew   = 1 * time.Minute
@@ -46,7 +46,7 @@ type Validator struct {
 	// MaxPastAge es cuánto puede tener de antigüedad un timestamp antes
 	// de ser rechazado directamente (a diferencia de solo estar
 	// "tarde" para la ventana a la que hubiera pertenecido, algo que el
-	// motor maneja aparte en la Fase 1).
+	// motor maneja aparte).
 	MaxPastAge time.Duration
 
 	// MaxFutureSkew es cuánto puede adelantarse al futuro un timestamp

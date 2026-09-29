@@ -13,7 +13,7 @@ import (
 // disparó (SlowScan.Triggered — no la Decision final combinada, que
 // podría reflejar otro detector) y, para las campañas no detectadas o
 // detectadas tarde, cuál de las cinco condiciones del gate seguía sin
-// cumplirse justo antes (tarea 1.9, Punto de Control 2).
+// cumplirse justo antes.
 type CampaignGateAnalysis struct {
 	Seed        uint64
 	Ratio       int
@@ -133,8 +133,7 @@ func AnalyzeSlowScanCampaigns(diagnostics []EventDiagnostic, cfg slowscan.Config
 }
 
 // CampaignSizeDistribution resume TotalRequests entre varias
-// campañas — la distribución de tamaño de campaña pedida
-// explícitamente en la tarea 1.9.
+// campañas: la distribución de tamaño de campaña.
 func CampaignSizeDistribution(campaigns []CampaignGateAnalysis) PercentileSummary {
 	sizes := make([]float64, len(campaigns))
 	for i, c := range campaigns {

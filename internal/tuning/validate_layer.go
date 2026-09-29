@@ -8,16 +8,15 @@ import (
 )
 
 // DetectorLayerRow es, para UN candidato (D0/D1), UN seed y UN ratio,
-// la fila de la validación combinada final de la detector layer
-// (tarea 1.9): las matrices de confusión Strict/Broad y sus métricas
-// derivadas (nunca recalculadas a mano — vienen tal cual de
-// RunResult.Eval, mismo criterio que el resto de internal/tuning),
-// el recall detector-específico (request-level, sobre el gate propio,
-// nunca la Decision final) de credential_stuffing y slow_scan, y la
-// detección eventual/delay por vector — policy-level (Decision-based),
-// ya vector-específica por diseño desde ComputeDetectionDelay
-// (ajuste 1: red simulada para credential_stuffing, sesión/IP para
-// slow_scan).
+// la fila de la validación combinada final de la detector layer: las
+// matrices de confusión Strict/Broad y sus métricas derivadas (nunca
+// recalculadas a mano — vienen tal cual de RunResult.Eval, mismo
+// criterio que el resto de internal/tuning), el recall
+// detector-específico (request-level, sobre el gate propio, nunca la
+// Decision final) de credential_stuffing y slow_scan, y la detección
+// eventual/delay por vector — policy-level (Decision-based), ya
+// vector-específica por diseño desde ComputeDetectionDelay (red
+// simulada para credential_stuffing, sesión/IP para slow_scan).
 type DetectorLayerRow struct {
 	Candidate string
 	Seed      uint64
@@ -176,8 +175,8 @@ var detectorLayerRatios = []int{0, 10, 30}
 // DetectorLayerCandidateReport, todas sus tablas (confusión, recall
 // detector-específico, delay por vector, atribución, RiskScore) —
 // extraído de RenderDetectorLayerComparison para poder reutilizarlo
-// también en el reporte de holdout (tarea 1.9), que necesita más de
-// dos reportes (baseline/final x tuning/holdout).
+// también en el reporte de holdout, que necesita más de dos reportes
+// (baseline/final x tuning/holdout).
 func renderDetectorLayerCandidateSection(rep DetectorLayerCandidateReport) string {
 	var b []byte
 	w := func(format string, args ...any) { b = append(b, []byte(fmt.Sprintf(format, args...))...) }
@@ -252,8 +251,8 @@ func renderDetectorLayerCandidateSection(rep DetectorLayerCandidateReport) strin
 // renderDetectorLayerSideBySide arma una tabla-resumen lado a lado
 // entre DOS DetectorLayerCandidateReport (cualquiera, no solo D0/D1 —
 // reutilizada por el reporte de holdout para comparar baseline vs.
-// final y tuning vs. holdout, tarea 1.9), para las métricas más
-// importantes en cada ratio.
+// final y tuning vs. holdout), para las métricas más importantes en
+// cada ratio.
 func renderDetectorLayerSideBySide(title string, a, b DetectorLayerCandidateReport) string {
 	var buf []byte
 	w := func(format string, args ...any) { buf = append(buf, []byte(fmt.Sprintf(format, args...))...) }

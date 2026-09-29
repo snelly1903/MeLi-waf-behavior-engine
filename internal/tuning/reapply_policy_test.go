@@ -13,8 +13,8 @@ import (
 )
 
 // TestRunResultWithPolicy_SamePolicy_MatchesFullRun es el test
-// central de esta optimización (tarea 1.9, sweep de Policy): reaplicar
-// LA MISMA Policy que ya produjo baseDecisions, sin volver a correr
+// central de esta optimización: reaplicar LA MISMA Policy que ya
+// produjo baseDecisions, sin volver a correr
 // ningún detector, tiene que dar EXACTAMENTE el mismo Eval y Delay que
 // una corrida completa con RunScenario — si esto no fuera cierto, el
 // sweep de Policy estaría comparando candidatos con una métrica

@@ -1,8 +1,7 @@
 // Command baseline genera decisions.jsonl para un escenario de datos
 // (ver cmd/datagen), aplicando un rate limit tradicional por IP con
-// ventana deslizante (internal/baseline, tarea 0.9). Es la línea base
-// contra la que se compara el futuro motor conductual de la Fase 1 —
-// no es, en sí mismo, ese motor.
+// ventana deslizante (internal/baseline). Es la línea base contra la
+// que se compara el motor conductual — no es, en sí mismo, ese motor.
 package main
 
 import (
@@ -21,7 +20,7 @@ func main() {
 	mode := flag.String("mode", "all", `modo de conteo: "all" (todas las peticiones) o "auth" (solo endpoints de autenticación)`)
 	maxRequests := flag.Int("max-requests", 100, "peticiones contadas permitidas por IP dentro de la ventana")
 	windowStr := flag.String("window", "60s", "tamaño de la ventana deslizante (formato time.ParseDuration, ej. 60s, 5m)")
-	out := flag.String("out", "", "ruta del decisions.jsonl a generar; por defecto incluye modo/umbral/ventana en el nombre para no pisar otras corridas (ver docs/decisiones.md, tarea 0.9)")
+	out := flag.String("out", "", "ruta del decisions.jsonl a generar; por defecto incluye modo/umbral/ventana en el nombre para no pisar otras corridas (ver docs/decisiones.md)")
 	flag.Parse()
 
 	if *scenario == "" {

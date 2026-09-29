@@ -19,7 +19,7 @@ type JoinedRecord struct {
 // cargar las etiquetas y al cruzarlas con las decisiones. Ninguno de
 // estos problemas frena el cálculo de métricas — pero su presencia
 // significa que el resultado es un diagnóstico parcial, no un
-// resultado definitivo (ver docs/decisiones.md, tarea 0.7).
+// resultado definitivo (ver docs/decisiones.md).
 type Issues struct {
 	// DuplicateLabelIDs y UnknownLabelIDs vienen tal cual de LoadLabels.
 	DuplicateLabelIDs []string
@@ -42,10 +42,9 @@ type Issues struct {
 
 	// InvalidDecisionIDs: la decisión tiene un request_id utilizable
 	// pero no pasa decision.Validate() (por ejemplo, un BLOCK sin
-	// Explanation). Viene de LoadDecisions (tarea 0.8) y, al igual que
-	// las demás listas de esta struct, se excluye del cálculo de
-	// métricas — una decisión inválida nunca se convierte
-	// silenciosamente en un ALLOW.
+	// Explanation). Viene de LoadDecisions y, al igual que las demás
+	// listas de esta struct, se excluye del cálculo de métricas — una
+	// decisión inválida nunca se convierte silenciosamente en un ALLOW.
 	InvalidDecisionIDs []string
 
 	// CorruptDecisionLines: números de línea (1-indexado) de

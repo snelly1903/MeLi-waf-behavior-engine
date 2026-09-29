@@ -11,7 +11,7 @@ import (
 
 // asnRecorder implementa asn.MetricsRecorder registrando tres
 // métricas, todas con atributos de baja cardinalidad (nunca un
-// número de ASN individual -- ver docs/decisiones.md, tarea 1.8):
+// número de ASN individual -- ver docs/decisiones.md):
 //
 //   - waf.asn.cache: Counter, atributo "result" (hit/miss).
 //   - waf.asn.resolve: Counter, atributo "result"

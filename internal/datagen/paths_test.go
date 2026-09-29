@@ -3,8 +3,8 @@ package datagen
 import "testing"
 
 // allLegitPaths reúne todas las rutas que puede visitar cualquiera de
-// los tres perfiles legítimos (tarea 0.4): páginas, assets estáticos y
-// endpoints de login.
+// los tres perfiles legítimos: páginas, assets estáticos y endpoints
+// de login.
 func allLegitPaths() map[string]bool {
 	paths := make(map[string]bool)
 	for _, profile := range []LegitProfile{ProfileNavegante, ProfileAPIClient, ProfileOffice} {

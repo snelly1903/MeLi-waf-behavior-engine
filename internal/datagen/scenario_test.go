@@ -168,9 +168,9 @@ func TestBuildScenario_CampaignsFitWithinWindow(t *testing.T) {
 	}
 }
 
-// TestBuildScenario_HostedTenantAndAttackerIPsAreDisjoint confirma la
-// garantía del punto 9 de la tarea 0.6: en este escenario controlado,
-// ninguna IP de ProfileHostedTenant coincide con una IP atacante.
+// TestBuildScenario_HostedTenantAndAttackerIPsAreDisjoint confirma que,
+// en este escenario controlado, ninguna IP de ProfileHostedTenant
+// coincide con una IP atacante.
 func TestBuildScenario_HostedTenantAndAttackerIPsAreDisjoint(t *testing.T) {
 	s := BuildScenario(DefaultScenarioConfig(10, 0.30))
 

@@ -1,12 +1,12 @@
 // Package baseline implementa una línea base de comparación sencilla
-// para el futuro motor conductual de la Fase 1: un rate limiter
-// tradicional por IP, con ventana deslizante. Igual que
-// internal/datagen, nunca importa internal/groundtruth — solo ve lo
-// mismo que vería cualquier detector real (internal/event), la misma
-// separación de la tarea 0.2. El objetivo de este paquete no es que
-// el detector sea bueno: es tener un punto de comparación conocido y
-// documentado, contra el que medir después cuánto aporta el motor
-// conductual (ver docs/decisiones.md, tarea 0.9).
+// para el motor conductual: un rate limiter tradicional por IP, con
+// ventana deslizante. Igual que internal/datagen, nunca importa
+// internal/groundtruth — solo ve lo mismo que vería cualquier
+// detector real (internal/event), la misma separación que exige el
+// resto del motor. El objetivo de este paquete no es que el detector
+// sea bueno: es tener un punto de comparación conocido y documentado,
+// contra el que medir después cuánto aporta el motor conductual (ver
+// docs/decisiones.md).
 package baseline
 
 import (
@@ -65,8 +65,8 @@ type Config struct {
 	// AuthMatcher decide qué rutas son de autenticación cuando Mode es
 	// CountModeAuth. Si es nil, se usa event.DefaultAuthPathMatcher().
 	// Se ignora cuando Mode es CountModeAll. No duplica ninguna lógica
-	// de reconocimiento de rutas: reutiliza tal cual el matcher de la
-	// tarea 0.2.
+	// de reconocimiento de rutas: reutiliza tal cual el matcher ya
+	// existente.
 	AuthMatcher *event.AuthPathMatcher
 }
 
@@ -107,7 +107,7 @@ var ErrEventsOutOfOrder = errors.New("baseline: events must be sorted by timesta
 // entrada, en el mismo orden — así decisions.jsonl siempre tiene el
 // mismo conjunto de request_id que events.jsonl/labels.jsonl, sin
 // generar problemas de integridad artificiales al evaluarlo (ver
-// internal/eval, tareas 0.7/0.8).
+// internal/eval).
 //
 // Ventana: para el evento actual, con timestamp t, de la IP X, Detect
 // cuenta cuántas peticiones "contadas" de X (según cfg.Mode) tienen
@@ -194,8 +194,8 @@ func allowDecision(e event.Event) decision.Decision {
 // confidenceScore mide cuántas veces se superó el límite, no si el
 // tráfico "es" un ataque: es una heurística legible y determinista,
 // NO una probabilidad estadísticamente calibrada (misma advertencia
-// que decision.Decision.ConfidenceScore documenta desde la tarea
-// 0.3). La fórmula 1 - MaxRequests/count se eligió en vez de
+// que documenta decision.Decision.ConfidenceScore). La fórmula
+// 1 - MaxRequests/count se eligió en vez de
 // min(count/MaxRequests, 1.0) porque esa segunda versión "satura" de
 // golpe: con el doble del límite ya da 1.0 y no distingue más entre
 // el doble y las cien veces el límite. Con esta fórmula:

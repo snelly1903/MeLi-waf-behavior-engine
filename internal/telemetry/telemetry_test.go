@@ -32,15 +32,16 @@ func TestInit_EmptyEndpoint_IsNoopWithoutDialing(t *testing.T) {
 	}
 	// Debe ser inocuo llamarlo, incluso sin ningún Collector real.
 	recorders.Engine.RecordFinding("credential_stuffing")
+	recorders.Engine.RecordAnomalyScore(0.5)
 	recorders.ASN.RecordCacheResult(true)
 	recorders.HTTP.RecordDecision("ALLOW", "unknown")
 }
 
-// TestInit_CollectorUnreachable_FallsBackToNoop es el test central del
-// ajuste 3 de la tarea 1.8: si --otel-endpoint apunta a un Collector
-// que no está escuchando, Init debe caer a instrumentación no-op y
-// devolver usedNoop=true, SIN devolver un error que le impida a
-// cmd/engine arrancar -- y sin colgarse más allá de ConnectTimeout.
+// TestInit_CollectorUnreachable_FallsBackToNoop confirma que, si
+// --otel-endpoint apunta a un Collector que no está escuchando, Init
+// debe caer a instrumentación no-op y devolver usedNoop=true, SIN
+// devolver un error que le impida a cmd/engine arrancar -- y sin
+// colgarse más allá de ConnectTimeout.
 func TestInit_CollectorUnreachable_FallsBackToNoop(t *testing.T) {
 	// Un puerto TCP libre, cerrado antes de intentar conectar: nadie
 	// escucha ahí, así que la conexión gRPC falla rápido
@@ -91,7 +92,7 @@ func TestInit_CollectorUnreachable_FallsBackToNoop(t *testing.T) {
 // *sdkmetric.MeterProvider con un ManualReader (sin exportar nada por
 // red), exactamente la forma soportada por el SDK de OpenTelemetry
 // para testear instrumentación sin Collector/Prometheus/Internet (ver
-// docs/decisiones.md, tarea 1.8, punto 13 del plan).
+// docs/decisiones.md).
 
 func collect(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
 	t.Helper()
@@ -151,6 +152,39 @@ func TestEngineRecorder_RecordFinding_ExportsExpectedNameAndAttribute(t *testing
 	}
 	if got["slow_scan"] != 1 {
 		t.Errorf("slow_scan = %d, want 1", got["slow_scan"])
+	}
+}
+
+// TestEngineRecorder_RecordAnomalyScore_ExportsHistogramWithoutAttributes
+// confirma que waf.anomaly.score se exporta como Histogram (no como
+// Sum) y que cada Record, incluidos los de score 0 (evaluación no
+// disparada), queda contado -- sin ningún atributo, porque ya es
+// específico de un único detector.
+func TestEngineRecorder_RecordAnomalyScore_ExportsHistogramWithoutAttributes(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	r := newEngineRecorder(provider.Meter("test"))
+
+	r.RecordAnomalyScore(0)
+	r.RecordAnomalyScore(0.42)
+	r.RecordAnomalyScore(0.87)
+
+	rm := collect(t, reader)
+	m := findMetric(t, rm, "waf.anomaly.score")
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("waf.anomaly.score no es un Histogram[float64] (es %T)", m.Data)
+	}
+	if len(hist.DataPoints) != 1 {
+		t.Fatalf("waf.anomaly.score data points = %d, want 1 (sin atributos, una única serie)", len(hist.DataPoints))
+	}
+	dp := hist.DataPoints[0]
+	if dp.Count != 3 {
+		t.Errorf("count = %d, want 3 (los tres Record, incluido el de score 0)", dp.Count)
+	}
+	wantSum := 0 + 0.42 + 0.87
+	if dp.Sum < wantSum-0.0001 || dp.Sum > wantSum+0.0001 {
+		t.Errorf("sum = %v, want %v", dp.Sum, wantSum)
 	}
 }
 

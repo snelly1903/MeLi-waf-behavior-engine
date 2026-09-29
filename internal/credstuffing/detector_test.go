@@ -59,7 +59,7 @@ func nonAuthEvent(ip netip.Addr, offset time.Duration) event.Event {
 // este archivo — valores de prueba elegidos para que sean fáciles de
 // razonar a mano, NUNCA los umbrales finales de calibración (eso es
 // una tarea posterior, contra un dataset separado, igual que se hizo
-// con internal/baseline en la tarea 0.9).
+// con internal/baseline).
 func baseConfig(resolver NetworkResolver) Config {
 	return Config{
 		Window:              10 * time.Minute,
@@ -170,15 +170,15 @@ func TestEvaluate_DistributedCampaign_Triggers(t *testing.T) {
 	}
 }
 
-// --- El caso central de la tarea: RiskScore nunca cero al disparar ------
+// --- RiskScore nunca cero al disparar ------------------------------------
 
-// TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore es
-// el test pedido explícitamente tras la corrección: con las cuatro
-// señales EXACTAMENTE en su umbral configurado (5 IPs, 4 cuentas, 6
-// intentos, ratio de fallo 0.5), Triggered tiene que dar true, y
-// RiskScore tiene que ser estrictamente mayor que 0 — sin el piso
-// (ScoreFloor), los cuatro componentes normalizados darían 0 y el
-// score total sería 0 pese a haber disparado.
+// TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore
+// confirma que, con las cuatro señales EXACTAMENTE en su umbral
+// configurado (5 IPs, 4 cuentas, 6 intentos, ratio de fallo 0.5),
+// Triggered tiene que dar true, y RiskScore tiene que ser
+// estrictamente mayor que 0 — sin el piso (ScoreFloor), los cuatro
+// componentes normalizados darían 0 y el score total sería 0 pese a
+// haber disparado.
 func TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore(t *testing.T) {
 	resolver := fakeResolver{
 		ipFor(0): "asn:64512",

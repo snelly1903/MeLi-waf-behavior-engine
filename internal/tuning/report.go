@@ -14,13 +14,13 @@ import (
 
 // Row es una fila plana de exportación: UN candidato, UN seed, UNA
 // ratio, con TODAS las métricas — nunca solo la configuración
-// elegida (tarea 1.9, ajuste 3 del plan: "quiero poder reconstruir
-// después por qué elegimos una configuración"). Los campos que
-// pueden ser N/A (cualquier Ratio, o los promedios de delay cuando
-// nunca hubo una campaña detectada) se exportan como el string que
-// devuelve formatRatio/formatOptionalFloat/formatOptionalDuration —
-// "N/A" nunca se confunde con "0" ni acá ni en el Markdown, mismo
-// criterio que ya usa internal/eval desde la tarea 0.7.
+// elegida, para poder reconstruir después por qué se eligió una
+// configuración. Los campos que pueden ser N/A (cualquier Ratio, o
+// los promedios de delay cuando nunca hubo una campaña detectada) se
+// exportan como el string que devuelve
+// formatRatio/formatOptionalFloat/formatOptionalDuration — "N/A"
+// nunca se confunde con "0" ni acá ni en el Markdown, mismo criterio
+// que ya usa internal/eval.
 type Row struct {
 	Candidate string `json:"candidate"`
 	Seed      uint64 `json:"seed"`

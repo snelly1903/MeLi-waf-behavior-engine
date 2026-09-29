@@ -1,11 +1,10 @@
-// Command diagnose es la pasada diagnóstica de la tarea 1.9, Punto de
-// Control 2: corre la configuración BASELINE (sin ningún cambio de
-// threshold) sobre los mismos escenarios de tuning que cmd/tune, pero
-// capturando el Finding CRUDO de cada uno de los tres detectores por
-// evento (nunca solo la Decision final combinada) — para poder
+// Command diagnose corre la configuración BASELINE (sin ningún cambio
+// de threshold) sobre los mismos escenarios de tuning que cmd/tune,
+// pero capturando el Finding CRUDO de cada uno de los tres detectores
+// por evento (nunca solo la Decision final combinada) — para poder
 // explicar, con evidencia explícita y no por eliminación, qué
 // parámetro concreto causa cada error observado en el baseline. Ver
-// docs/decisiones.md, tarea 1.9.
+// docs/decisiones.md.
 package main
 
 import (
@@ -68,7 +67,7 @@ func main() {
 	// el tráfico (así se ve malicious vs legit de punta a punta).
 	riskBuckets := tuning.AnalyzeRiskScoreDistributions(all)
 
-	report := "# Pasada diagnóstica — tarea 1.9, Punto de Control 2\n\n" +
+	report := "# Pasada diagnóstica: configuración baseline\n\n" +
 		"Configuración: BASELINE (sin ningún cambio de threshold). " +
 		"Seeds de tuning: 101/102/103. Ratios: 0/10/30%.\n\n" +
 		tuning.RenderAnomalyDiagnosis(anomalyDiag) +

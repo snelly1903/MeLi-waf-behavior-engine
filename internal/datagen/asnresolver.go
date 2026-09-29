@@ -7,17 +7,17 @@ import (
 
 // SimulatedASNResolver resuelve una IP simulada a su ASN de
 // generación (ver ipspace.go) — determinista, sin ninguna llamada de
-// red, para usar en la evaluación offline del motor (tarea 1.9).
-// Nunca se usa en producción: ahí corresponde internal/asn.Resolver
-// (tarea 1.7), que consulta RIPEstat de verdad. Usar RIPEstat contra
+// red, para usar en la evaluación offline del motor.
+// Nunca se usa en producción: ahí corresponde internal/asn.Resolver,
+// que consulta RIPEstat de verdad. Usar RIPEstat contra
 // IPs sintéticas de RFC 5737 no tendría sentido — nunca va a
-// devolver nada (ver docs/decisiones.md, tarea 1.7), así que la
-// evaluación de esta tarea necesita su propio resolver, coherente con
-// cómo se generaron los datos.
+// devolver nada (ver docs/decisiones.md), así que la evaluación
+// necesita su propio resolver, coherente con cómo se generaron los
+// datos.
 //
 // Satisface credstuffing.NetworkResolver (Resolve(ip) (string, bool))
 // por tipado estructural — este paquete nunca importa credstuffing,
-// mismo criterio que internal/asn.Resolver desde la tarea 1.3.
+// mismo criterio que internal/asn.Resolver.
 type SimulatedASNResolver struct {
 	pools []IPPool
 }

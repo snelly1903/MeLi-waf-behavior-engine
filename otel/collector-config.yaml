@@ -1,10 +1,7 @@
-# Configuración del OpenTelemetry Collector para esta tarea (1.8):
-# recibe métricas OTLP/gRPC del proceso Go (cmd/engine) y las expone
-# en formato Prometheus para que prometheus/prometheus.yml las
-# scrapee. Deliberadamente mínima -- solo el pipeline de métricas que
-# necesita este challenge, sin tracing ni logs (ver
-# docs/decisiones.md, tarea 1.8, sobre por qué tracing queda fuera de
-# alcance).
+# Configuración del OpenTelemetry Collector: recibe métricas OTLP/gRPC
+# del proceso Go (cmd/engine) y las expone en formato Prometheus para
+# que prometheus/prometheus.yml las scrapee. Deliberadamente mínima --
+# solo el pipeline de métricas, sin tracing ni logs.
 receivers:
   otlp:
     protocols:

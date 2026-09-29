@@ -10,10 +10,10 @@ import (
 
 // ActionDistribution es, para UNA corrida, cuántos eventos legítimos
 // y cuántos maliciosos (cualquier vector) terminaron en cada Action —
-// la base de False Challenge Rate y False Block Rate, pedidas
-// explícitamente antes del sweep de Policy (tarea 1.9): entender el
-// costo de fricción (CHALLENGE) sobre tráfico legítimo por separado
-// del costo de bloqueo (BLOCK), no solo la Precision/Recall agregada.
+// la base de False Challenge Rate y False Block Rate, que existen
+// para entender el costo de fricción (CHALLENGE) sobre tráfico
+// legítimo por separado del costo de bloqueo (BLOCK), no solo la
+// Precision/Recall agregada.
 type ActionDistribution struct {
 	LegitAllow     int
 	LegitChallenge int

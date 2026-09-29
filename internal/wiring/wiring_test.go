@@ -16,9 +16,9 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/telemetry"
 )
 
-// TestFinalConfigs_ExactValues es el guardrail pedido explícitamente
-// (tarea 1.10, blocker): FinalConfigs() tiene que diferir de
-// engine.Default*Config() en EXACTAMENTE los campos de CSw2/S3/A3
+// TestFinalConfigs_ExactValues es el guardrail que confirma que
+// FinalConfigs() tiene que diferir de engine.Default*Config() en
+// EXACTAMENTE los campos de CSw2/S3/A3
 // (Window/MinDistinctIPs; MaxVisitorsForNovelPath/MinNovelPathRatio;
 // AccountDiversity) y en NADA más — si algún día alguien agrega un
 // override adicional sin querer, este test lo detecta de inmediato.
@@ -105,8 +105,8 @@ func postEvent(t *testing.T, mux http.Handler, body []byte) map[string]any {
 }
 
 // TestBuildServer_SlowScanPattern_ReturnsNonAllow es la prueba de
-// integración de punta a punta pedida en la tarea 1.5: confirma que
-// POST /v1/events, servido por el *httpapi.Server real que arma
+// integración de punta a punta: confirma que POST /v1/events,
+// servido por el *httpapi.Server real que arma
 // BuildServer (el mismo que usa cmd/engine en producción), ya NO
 // depende de engine.AllowAllDecider — un patrón real de escaneo lento
 // termina en CHALLENGE o BLOCK, no en ALLOW.
@@ -160,7 +160,7 @@ func TestBuildServer_InvalidPolicy_ReturnsError(t *testing.T) {
 	}
 }
 
-// --- --asn-provider (tarea 1.7) --------------------------------------------
+// --- --asn-provider ---------------------------------------------------
 //
 // Estos tests solo verifican la CONSTRUCCIÓN del resolver (nunca
 // llaman a Resolve) — construir un asn.Resolver no hace ninguna
@@ -201,7 +201,7 @@ func TestBuildServer_UnknownASNProvider_ReturnsError(t *testing.T) {
 	}
 }
 
-// --- Telemetría (tarea 1.8) --------------------------------------------
+// --- Telemetría ---------------------------------------------------------
 
 // TestBuildServer_NilRecorders_StillWorks confirma que BuildServer
 // sigue funcionando con recorders=nil (sin --otel-endpoint
@@ -244,9 +244,8 @@ func TestBuildServer_WithRecorders_RecordsRealDecision(t *testing.T) {
 }
 
 // TestBuildDecider_ReturnsUsableDecider confirma que BuildDecider
-// (nuevo en la tarea 1.10, usado por los microbenchmarks de
-// internal/engine) da un decider utilizable sin pasar por la capa
-// HTTP.
+// (usado por los microbenchmarks de internal/engine) da un decider
+// utilizable sin pasar por la capa HTTP.
 func TestBuildDecider_ReturnsUsableDecider(t *testing.T) {
 	decider, err := BuildDecider(0.5, 0.8, ASNProviderNone, 2*time.Second, time.Hour, nil)
 	if err != nil {
@@ -270,9 +269,9 @@ func (r fakeResolver) Resolve(ip netip.Addr) (string, bool) {
 }
 
 // TestBuildServerWithResolver_UsesGivenResolver_NotProviderLookup
-// confirma que BuildServerWithResolver (tarea 1.10, para
-// cmd/loadtest) usa EXACTAMENTE el resolver recibido — nunca
-// construye uno nuevo por nombre de proveedor.
+// confirma que BuildServerWithResolver (para cmd/loadtest) usa
+// EXACTAMENTE el resolver recibido — nunca construye uno nuevo por
+// nombre de proveedor.
 func TestBuildServerWithResolver_UsesGivenResolver_NotProviderLookup(t *testing.T) {
 	ip := netip.MustParseAddr("203.0.113.7")
 	resolver := fakeResolver{ip: "asn:test"}

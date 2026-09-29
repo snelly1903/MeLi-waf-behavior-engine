@@ -11,9 +11,9 @@ import (
 
 var sessionStart = time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
 
-// TestGenerateLegitSession_Reproducible es el test central de esta
-// tarea: la misma semilla, el mismo perfil y el mismo punto de partida
-// tienen que producir exactamente el mismo JSON, byte a byte.
+// TestGenerateLegitSession_Reproducible comprueba que la misma semilla,
+// el mismo perfil y el mismo punto de partida producen exactamente el
+// mismo JSON, byte a byte.
 func TestGenerateLegitSession_Reproducible(t *testing.T) {
 	for _, profile := range []LegitProfile{ProfileNavegante, ProfileAPIClient, ProfileOffice} {
 		t.Run(profile.Name, func(t *testing.T) {
@@ -46,7 +46,7 @@ func TestGenerateLegitSession_Reproducible(t *testing.T) {
 // estructural (IP, método, path, status, formato del hash) que sí
 // tiene que cumplir cualquier evento generado. Ver
 // docs/formato-eventos.md, sección de timestamps, para el mismo
-// razonamiento aplicado a la tarea 0.2.
+// razonamiento.
 func validatorAsOfEachEvent(le groundtruth.LabeledEvent) error {
 	v := event.NewValidator(event.NewManualClock(le.Event.Timestamp))
 	return le.Validate(v)

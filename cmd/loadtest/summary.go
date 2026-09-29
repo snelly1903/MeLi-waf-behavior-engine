@@ -15,10 +15,9 @@ func nonEmpty(s, fallback string) string {
 	return s
 }
 
-// summaryParams son los parámetros de la corrida, para documentarlos
-// en summary.md tal como se pidió explícitamente (tarea 1.10):
-// hardware, Go version, configuración, duración, concurrency, OTel
-// on/off, modo de ASN.
+// summaryParams son los parámetros de la corrida que se documentan en
+// summary.md: hardware, Go version, configuración, duración,
+// concurrency, OTel on/off, modo de ASN.
 type summaryParams struct {
 	Profiles      []string
 	Concurrencies []int
@@ -41,12 +40,12 @@ type summaryParams struct {
 // comparten proceso/máquina), el delta de memoria es del proceso
 // COMBINADO cliente+servidor (nunca RAM exclusiva del servidor), y
 // ningún resultado local se extrapola linealmente a 1.000 millones de
-// requests/hora (eso se trata conceptualmente en la tarea 1.11).
+// requests/hora.
 func writeSummary(path string, combos []loadtest.CombinationResult, p summaryParams) error {
 	var b []byte
 	w := func(format string, args ...any) { b = append(b, []byte(fmt.Sprintf(format, args...))...) }
 
-	w("# Performance del prototipo — resumen (tarea 1.10)\n\n")
+	w("# Performance del prototipo — resumen\n\n")
 
 	env := detectEnv()
 	w("## Entorno\n\n")
@@ -73,7 +72,7 @@ func writeSummary(path string, combos []loadtest.CombinationResult, p summaryPar
 	w("| Measurement | %s |\n", p.Measurement)
 	w("| Modo ASN | %s |\n", p.ASNMode)
 	w("| Policy (final congelada) | Challenge=%.2f Block=%.2f |\n", p.ChallengeThreshold, p.BlockThreshold)
-	w("| ScoreFloor | sin cambios (default de cada detector, congelado desde la tarea 1.9) |\n")
+	w("| ScoreFloor | sin cambios (default de cada detector, congelado tras el holdout) |\n")
 	if p.OTelEndpoint != "" {
 		w("| OTel Collector (comparativo) | %s |\n", p.OTelEndpoint)
 	} else {
@@ -120,7 +119,7 @@ func writeSummary(path string, combos []loadtest.CombinationResult, p summaryPar
 	w("Correr `go test -bench=. -benchmem ./internal/engine/...` (o `make perf-bench`) — reporta ns/op, B/op y allocs/op para los perfiles normal/mixed/attack-heavy. Salida cruda en `microbench.txt` en esta misma carpeta, si se generó con `make perf-bench`.\n\n")
 
 	w("## Limitaciones y alcance\n\n")
-	w("- **Nunca se extrapola linealmente a 1.000 millones de requests/hora.** Esa escala se trata conceptualmente en la tarea 1.11 — un resultado local de loopback en una sola máquina no dice nada por sí solo sobre un despliegue distribuido real.\n")
+	w("- **Nunca se extrapola linealmente a 1.000 millones de requests/hora.** Esa escala se trata conceptualmente en docs/scaling-1b-rph.md — un resultado local de loopback en una sola máquina no dice nada por sí solo sobre un despliegue distribuido real.\n")
 	w("- **Δ memoria es del proceso COMBINADO cliente+servidor**, nunca memoria exclusiva del servidor — este harness corre ambos en el mismo proceso Go.\n")
 	w("- **Los timestamps de los eventos se reescriben a `time.Now()` en cada envío** (el validador de producción exige timestamps recientes) — esto mide rendimiento de *serving*, no reproduce la precisión de detección de tuning/holdout: comprimir el tiempo real de una campaña a milisegundos de wall-clock cambia por completo el comportamiento de las ventanas deslizantes de los detectores. Los resultados de detección de este load test NO son comparables con los de tuning/holdout.\n")
 	w("- **No se corrió profiling (pprof)** — pedido explícito: medir primero, optimizar (si hace falta) después.\n")

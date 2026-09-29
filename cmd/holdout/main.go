@@ -1,13 +1,13 @@
-// Command holdout es la corrida de holdout de la tarea 1.9 — PRIMERA
-// Y ÚNICA vez que se usan los seeds 201/202/203, después de que toda
-// la configuración quedó congelada en un checkpoint pre-holdout.
-// Compara BASELINE ORIGINAL (sin ningún cambio) contra FINAL TUNED
-// CONFIG (credential_stuffing CSw2, slow_scan S3, statistical_anomaly
-// A3, Policy Challenge=0.50/Block=0.75, ScoreFloor sin tocar) — tanto
+// Command holdout es la corrida de holdout — PRIMERA Y ÚNICA vez que
+// se usan los seeds 201/202/203, después de que toda la
+// configuración quedó congelada en un checkpoint pre-holdout. Compara
+// BASELINE ORIGINAL (sin ningún cambio) contra FINAL TUNED CONFIG
+// (credential_stuffing CSw2, slow_scan S3, statistical_anomaly A3,
+// Policy Challenge=0.50/Block=0.75, ScoreFloor sin tocar) — tanto
 // sobre holdout como, para el análisis de generalización, sobre los
 // mismos escenarios de tuning ya usados durante la calibración. No
 // modifica ningún threshold en función de estos resultados. Ver
-// docs/decisiones.md, tarea 1.9.
+// docs/decisiones.md.
 package main
 
 import (
@@ -154,7 +154,7 @@ func main() {
 	tuningReport := runDataset("tuning", tuningSeeds, resolver)
 	holdoutReport := runDataset("holdout", holdoutSeeds, resolver)
 
-	report := "# Holdout final: Baseline vs. Final Tuned Config (tarea 1.9)\n\n" +
+	report := "# Evaluación final: Baseline vs. Final Tuned Config\n\n" +
 		"PRIMERA Y ÚNICA corrida de holdout — seeds 201/202/203, ratios 0/10/30%. " +
 		"Comparado contra los mismos escenarios de tuning (seeds 101/102/103) para medir generalización. " +
 		"Ningún threshold se modificó en función de estos resultados.\n\n" +

@@ -104,8 +104,8 @@ func TestLabeledEvent_Payload_IsExactlyTheEvent(t *testing.T) {
 }
 
 // TestLabeledEvent_Payload_NeverCarriesLabel es el test central de
-// aislamiento de esta tarea: serializa lo que efectivamente viajaría
-// hacia el motor (el resultado de Payload(), no el LabeledEvent
+// aislamiento: serializa lo que efectivamente viajaría hacia el motor
+// (el resultado de Payload(), no el LabeledEvent
 // completo) y confirma que no existen las claves JSON "label" ni
 // "ground_truth".
 //
@@ -140,8 +140,8 @@ func TestLabeledEvent_Payload_NeverCarriesLabel(t *testing.T) {
 
 // TestLabeledEvent_Payload_PassesEventValidation comprueba que las dos
 // piezas del contrato encastran: un LabeledEvent válido produce, a
-// través de Payload(), un event.Event que el Validator de la tarea 0.2
-// acepta sin cambios.
+// través de Payload(), un event.Event que el Validator acepta sin
+// cambios.
 func TestLabeledEvent_Payload_PassesEventValidation(t *testing.T) {
 	v := newTestValidator()
 	le := LabeledEvent{Label: LabelLegit, Event: validEvent()}

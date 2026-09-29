@@ -8,14 +8,14 @@ import (
 )
 
 // TestRunScenario_Reproducible_SameSeedSameResult es el test de
-// reproducibilidad pedido explícitamente en la tarea 1.9: la MISMA
-// semilla, con el MISMO candidato, tiene que dar exactamente la misma
-// CLASIFICACIÓN (Action, AttackVector, EntityID) y exactamente las
-// mismas MÉTRICAS (eval.Result, delay) — nunca "aproximadamente
-// igual" en lo que de verdad importa para calibrar.
+// reproducibilidad: la MISMA semilla, con el MISMO candidato, tiene
+// que dar exactamente la misma CLASIFICACIÓN (Action, AttackVector,
+// EntityID) y exactamente las mismas MÉTRICAS (eval.Result, delay) —
+// nunca "aproximadamente igual" en lo que de verdad importa para
+// calibrar.
 //
-// Deliberadamente NO exige bit-a-bit ConfidenceScore: se verificó (ver
-// docs/decisiones.md, tarea 1.9) que internal/slowscan acumula
+// Deliberadamente NO exige bit-a-bit ConfidenceScore: se verificó
+// (ver docs/decisiones.md) que internal/slowscan acumula
 // entropía iterando profile.Metrics.PathCounts, un map — Go
 // aleatoriza el orden de iteración de un map entre corridas por
 // diseño del lenguaje, así que la SUMA en coma flotante de esos
@@ -75,11 +75,10 @@ func TestRunScenario_DifferentSeed_TypicallyDiffersInVolume(t *testing.T) {
 	}
 }
 
-// TestRunScenario_ZeroPercentMalicious_RecallIsNA cubre el caso
-// explícito de la tarea 1.9: con 0% de tráfico malicioso, Recall (y
-// el recall por vector) tienen que quedar N/A — nunca 0% — porque no
-// hay ningún positivo real contra el que medir. Ratio.Defined es la
-// única señal correcta acá.
+// TestRunScenario_ZeroPercentMalicious_RecallIsNA cubre el caso de 0%
+// de tráfico malicioso: Recall (y el recall por vector) tienen que
+// quedar N/A — nunca 0% — porque no hay ningún positivo real contra
+// el que medir. Ratio.Defined es la única señal correcta acá.
 func TestRunScenario_ZeroPercentMalicious_RecallIsNA(t *testing.T) {
 	scenario := datagen.BuildScenario(datagen.DefaultScenarioConfig(42, 0))
 	resolver := datagen.NewSimulatedASNResolver()

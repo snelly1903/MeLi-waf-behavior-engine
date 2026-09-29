@@ -9,8 +9,8 @@ import (
 
 // CombinedSweepRow es, para UN candidato combinado (slow_scan +
 // statistical_anomaly a la vez) y UN seed, todas las métricas pedidas
-// para comparar C0-C3 (tarea 1.9). Reutiliza directamente lo que ya
-// calcula RunScenario (Eval, DelaySummary) — nunca vuelve a correr
+// para comparar C0-C3. Reutiliza directamente lo que ya calcula
+// RunScenario (Eval, DelaySummary) — nunca vuelve a correr
 // ninguna evaluación por su cuenta — más ComputeMitigationAttribution
 // sobre los diagnósticos de 10%/30%.
 type CombinedSweepRow struct {
@@ -36,7 +36,7 @@ type CombinedSweepRow struct {
 
 	// EventualDetection*/MeanRequestsToDetection* vienen de
 	// RunResult.DelaySummary — nivel POLICY (cualquier detector),
-	// coherente con el resto de esta tarea.
+	// coherente con el resto de esta evaluación.
 	EventualDetectionCSAt10 eval.Ratio
 	EventualDetectionCSAt30 eval.Ratio
 	EventualDetectionSSAt10 eval.Ratio

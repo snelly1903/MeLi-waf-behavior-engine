@@ -1,5 +1,5 @@
-// Command sweeppolicy es el sweep de Policy (tarea 1.9): con la
-// detector layer ya congelada en D1 (credential_stuffing CSw2,
+// Command sweeppolicy es el sweep de Policy: con la detector layer ya
+// congelada en D1 (credential_stuffing CSw2,
 // slow_scan S3, statistical_anomaly A3 — ver docs/decisiones.md),
 // evalúa 9 combinaciones de ChallengeThreshold x BlockThreshold sobre
 // tuning (seeds 101/102/103, ratios 0/10/30%), sin holdout, sin tocar
@@ -131,7 +131,7 @@ func main() {
 		log.Printf("sweeppolicy: %s (Challenge=%.2f Block=%.2f) listo", pc.Name, pc.ChallengeThreshold, pc.BlockThreshold)
 	}
 
-	report := "# Sweep de Policy (tarea 1.9)\n\n" +
+	report := "# Sweep de Policy\n\n" +
 		"Detector layer congelada en D1 (credential_stuffing CSw2, slow_scan S3, statistical_anomaly A3). ScoreFloor sin tocar. " +
 		"Solo tuning (seeds 101/102/103, ratios 0/10/30%), sin holdout. Los 9 candidatos reaplican Policy sobre las MISMAS decisiones " +
 		"de D1 (ConfidenceScore/AttackVector ya calculados) — ningún detector se volvió a correr.\n\n" +

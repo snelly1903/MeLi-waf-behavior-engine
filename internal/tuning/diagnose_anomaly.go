@@ -13,8 +13,7 @@ import (
 // EXPLÍCITA de que el detector responsable fue statistical_anomaly:
 // nunca se infiere por eliminación, se comprueba que
 // CredentialStuffing.Triggered y SlowScan.Triggered sean false Y que
-// exista una evaluación de anomaly con Triggered=true (tarea 1.9,
-// Punto de Control 2).
+// exista una evaluación de anomaly con Triggered=true.
 type AnomalyFPRow struct {
 	Seed      uint64
 	RequestID string
@@ -55,7 +54,7 @@ type AnomalyDiagnosis struct {
 //
 // policy decide qué Action cuenta como "positivo" (broad, para poder
 // ver también los CHALLENGE, no solo los BLOCK) — mismo criterio que
-// el resto de esta tarea.
+// el resto de esta evaluación.
 func AnalyzeAnomalyFalsePositives(diagnostics []EventDiagnostic, policy eval.Policy) AnomalyDiagnosis {
 	var diag AnomalyDiagnosis
 	byAction := make(map[decision.Action][]struct{ combined, risk float64 })

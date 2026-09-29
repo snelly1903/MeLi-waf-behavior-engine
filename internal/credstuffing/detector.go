@@ -1,16 +1,15 @@
-// Package credstuffing es el primer detector real del motor (tarea
-// 1.3): busca credential stuffing distribuido de bajo volumen por IP,
-// correlacionando actividad entre múltiples IPs de un mismo grupo de
-// red (ASN) dentro de una ventana temporal. Deliberadamente no
-// depende de que ninguna IP individual supere ningún umbral por sí
-// sola — el baseline de la Fase 0 (internal/baseline, tarea 0.9) ya
+// Package credstuffing busca credential stuffing distribuido de bajo
+// volumen por IP, correlacionando actividad entre múltiples IPs de un
+// mismo grupo de red (ASN) dentro de una ventana temporal.
+// Deliberadamente no depende de que ninguna IP individual supere
+// ningún umbral por sí sola — el baseline (internal/baseline) ya
 // demostró con datos reales que esa técnica no alcanza contra este
 // patrón de ataque.
 //
 // Este paquete nunca importa internal/groundtruth ni internal/datagen
 // — decide únicamente con lo que ve en event.Event y con lo que le
 // informe el NetworkResolver inyectado, igual que exige el resto del
-// motor desde la tarea 0.2.
+// motor.
 package credstuffing
 
 import (
@@ -33,18 +32,18 @@ import (
 // Detector.Observe para qué hace el detector en ese caso.
 //
 // Definida acá, en el paquete que la consume, no en quien la
-// implementa — mismo criterio que engine.Decider (tarea 1.1). En esta
-// tarea no existe ninguna implementación real: los tests usan un fake
-// determinista. La integración con una fuente real de ASN queda para
-// una tarea posterior.
+// implementa — mismo criterio que engine.Decider. Acá no existe
+// ninguna implementación real: los tests usan un fake determinista.
+// La integración con una fuente real de ASN queda para una tarea
+// posterior.
 type NetworkResolver interface {
 	Resolve(ip netip.Addr) (group string, ok bool)
 }
 
 // UnavailableNetworkResolver es un NetworkResolver de PRODUCCIÓN (no
 // un fake de test) para usar mientras no exista ningún proveedor real
-// de ASN/grupo de red — ver docs/decisiones.md, tarea 1.5. Resolve
-// siempre devuelve ok=false, así que, según la propia regla de
+// de ASN/grupo de red — ver docs/decisiones.md. Resolve siempre
+// devuelve ok=false, así que, según la propia regla de
 // Detector.Observe, ninguna IP entra jamás a ninguna correlación: el
 // detector queda estructuralmente inerte (Triggered siempre false),
 // pero corriendo de verdad — Observe/Evaluate se siguen llamando en
@@ -62,7 +61,7 @@ func (UnavailableNetworkResolver) Resolve(netip.Addr) (string, bool) {
 // ScoreWeights son los pesos relativos de cada señal en el cálculo de
 // RiskScore (ver Detector.Evaluate). No hace falta que sumen 1 — se
 // normalizan por su suma en el momento de calcular el score, mismo
-// criterio que decision.ContributingSignal.Weight desde la tarea 0.3.
+// criterio que decision.ContributingSignal.Weight.
 type ScoreWeights struct {
 	IPs      float64
 	Accounts float64
@@ -73,8 +72,8 @@ type ScoreWeights struct {
 // Config configura el detector. Ningún valor tiene un default
 // "recomendado" en este archivo a propósito: los umbrales se calibran
 // en una tarea posterior contra un dataset separado del de reporte
-// (mismo criterio que internal/baseline, tarea 0.9) — no se eligen
-// mirando la semilla 42.
+// (mismo criterio que internal/baseline) — no se eligen mirando la
+// semilla 42.
 type Config struct {
 	// Window es la ventana de correlación por grupo de red.
 	Window time.Duration
@@ -101,8 +100,8 @@ type Config struct {
 
 	// AuthMatcher decide qué rutas cuentan como intentos de
 	// autenticación. Si es nil, se usa event.DefaultAuthPathMatcher().
-	// Reutilizado tal cual de la tarea 0.2, sin ninguna lógica nueva de
-	// reconocimiento de rutas.
+	// Reutilizado tal cual, sin ninguna lógica nueva de reconocimiento
+	// de rutas.
 	AuthMatcher *event.AuthPathMatcher
 
 	// Resolver resuelve el grupo de red de una IP. Obligatorio.
@@ -172,10 +171,10 @@ type observation struct {
 // groupState es el estado retenido de un grupo de red: su watermark
 // (el timestamp más reciente observado, que nunca retrocede) y las
 // observaciones todavía dentro de la ventana relativa a ese watermark
-// — mismo concepto de la tarea 1.2 (internal/profile), reimplementado
-// acá de forma autocontenida porque la agregación es distinta (por
-// grupo de red, no por IP/sesión) y para no modificar un componente ya
-// probado. Ver docs/decisiones.md, tarea 1.3.
+// — mismo concepto que internal/profile, reimplementado acá de forma
+// autocontenida porque la agregación es distinta (por grupo de red,
+// no por IP/sesión) y para no modificar un componente ya probado. Ver
+// docs/decisiones.md.
 type groupState struct {
 	watermark time.Time
 	queue     []observation
@@ -214,13 +213,13 @@ func NewDetector(cfg Config) (*Detector, error) {
 // cualquiera de las dos condiciones falla, Observe no hace nada — un
 // evento que no es de autenticación no le interesa a este detector, y
 // un IP no resoluble queda deliberadamente excluido de toda
-// correlación (ver docs/decisiones.md, tarea 1.3: agrupar direcciones
+// correlación (ver docs/decisiones.md: agrupar direcciones
 // "desconocidas" juntas sería mezclar tráfico no relacionado de todo
 // el mundo en una falsa campaña).
 //
 // No asume que los eventos llegan ordenados por timestamp — mismo
-// mecanismo de watermark que internal/profile (tarea 1.2): cada grupo
-// de red mantiene el máximo timestamp visto, que nunca retrocede, y la
+// mecanismo de watermark que internal/profile: cada grupo de red
+// mantiene el máximo timestamp visto, que nunca retrocede, y la
 // ventana se interpreta siempre respecto a ese watermark.
 func (d *Detector) Observe(e event.Event) {
 	if !d.matcher.IsAuthPath(e.Path) {
@@ -273,7 +272,7 @@ func (d *Detector) Observe(e event.Event) {
 // Se espera que quien llama haya llamado Observe(e) antes de
 // Evaluate(e) para el mismo evento, así el propio e ya está incluido
 // en el agregado que se evalúa — mismo contrato de dos pasos que
-// internal/profile.Store (tarea 1.2).
+// internal/profile.Store.
 func (d *Detector) Evaluate(e event.Event) finding.Finding {
 	if !d.matcher.IsAuthPath(e.Path) {
 		return finding.Finding{}
@@ -293,8 +292,8 @@ func (d *Detector) Evaluate(e event.Event) finding.Finding {
 }
 
 // GateMetrics es la evaluación diagnóstica de las cuatro condiciones
-// del gate para el grupo de red de una IP (tarea 1.9) — expone los
-// números crudos (DistinctIPs, DistinctAccounts, TotalAttempts,
+// del gate para el grupo de red de una IP — expone los números crudos
+// (DistinctIPs, DistinctAccounts, TotalAttempts,
 // FailedRatio) SIN IMPORTAR si dispararon o no. evaluateGroup los
 // descarta en el caso no disparado (devuelve finding.Finding{}).
 // Ningún código de producción usa esto — engine.BehavioralDecider
@@ -412,7 +411,7 @@ func (d *Detector) evaluateGroup(group string, obs []observation) finding.Findin
 			{Name: "failed_auth_ratio", Value: gate.FailedRatio, Weight: w.Ratio},
 		},
 		// El grupo de red ya queda identificado en EntityID — acá no se
-		// repite, Explanation se enfoca en el porqué (tarea 1.5).
+		// repite, Explanation se enfoca en el porqué.
 		Explanation: fmt.Sprintf(
 			"%d distinct IPs, %d distinct accounts, %d auth attempts, %.0f%% failed (401/403) within the window",
 			gate.DistinctIPs, gate.DistinctAccounts, gate.TotalAttempts, gate.FailedRatio*100,
@@ -422,8 +421,8 @@ func (d *Detector) evaluateGroup(group string, obs []observation) finding.Findin
 }
 
 // excessComponent es la misma heurística "cuánto se superó el umbral"
-// ya usada y justificada en internal/baseline (tarea 0.9):
-// 1 - umbral/valor, siempre en [0,1), 0 justo en el umbral, creciendo
+// ya usada y justificada en internal/baseline: 1 - umbral/valor,
+// siempre en [0,1), 0 justo en el umbral, creciendo
 // cada vez más despacio a medida que valor se aleja de threshold, sin
 // tocar nunca 1.
 func excessComponent(actual, threshold float64) float64 {
@@ -460,7 +459,7 @@ func ratioComponent(actual, min float64) float64 {
 // idleTTL de antigüedad respecto a now, y devuelve cuántos eliminó.
 // now se recibe como parámetro (nunca time.Now() internamente), así
 // que sigue siendo determinista y testeable — mismo criterio que
-// internal/profile.Store.Sweep (tarea 1.2). La cardinalidad de grupos
+// internal/profile.Store.Sweep. La cardinalidad de grupos
 // de red es naturalmente chica (a lo sumo unos pocos miles de ASN en
 // el mundo real), así que el riesgo de crecimiento sin límite acá es
 // mucho menor que en internal/profile; Sweep se ofrece igual, por

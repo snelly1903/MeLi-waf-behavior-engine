@@ -1,20 +1,17 @@
 // Command engine levanta el servicio HTTP de ingestión y decisión.
-// Desde la tarea 1.5, POST /v1/events ya no depende de
-// engine.AllowAllDecider: usa engine.BehavioralDecider, que combina
-// internal/credstuffing, internal/slowscan y (desde la tarea 1.6)
-// internal/anomaly detrás de una Policy configurable. Desde la tarea
-// 1.7, el resolver de ASN de credential stuffing es configurable vía
-// --asn-provider: "none" (default seguro, credstuffing.UnavailableNetworkResolver)
-// o "ripestat" (internal/asn, un enriquecimiento real). Desde la
-// tarea 1.8, el proceso puede exportar métricas por OpenTelemetry
-// (OTLP/gRPC) hacia un Collector, vía --otel-endpoint -- "fail-open"
-// por diseño: si el Collector no responde al arrancar, el motor cae
-// a instrumentación no-op y sirve tráfico igual. Desde la tarea 1.10,
-// la construcción del stack (detectores + BehavioralDecider +
-// httpapi.Server) vive en internal/wiring, para que cmd/loadtest y
-// los microbenchmarks de internal/engine la reutilicen sin duplicar
-// configuración. Ver docs/decisiones.md, tareas 1.5, 1.7, 1.8 y 1.10,
-// para el porqué de cada una.
+// POST /v1/events usa engine.BehavioralDecider, que combina
+// internal/credstuffing, internal/slowscan e internal/anomaly detrás
+// de una Policy configurable. El resolver de ASN de credential
+// stuffing es configurable vía --asn-provider: "none" (default
+// seguro, credstuffing.UnavailableNetworkResolver) o "ripestat"
+// (internal/asn, un enriquecimiento real). El proceso puede exportar
+// métricas por OpenTelemetry (OTLP/gRPC) hacia un Collector, vía
+// --otel-endpoint -- "fail-open" por diseño: si el Collector no
+// responde al arrancar, el motor cae a instrumentación no-op y sirve
+// tráfico igual. La construcción del stack (detectores +
+// BehavioralDecider + httpapi.Server) vive en internal/wiring, para
+// que cmd/loadtest y los microbenchmarks de internal/engine la
+// reutilicen sin duplicar configuración. Ver docs/decisiones.md.
 package main
 
 import (
@@ -36,11 +33,10 @@ import (
 func main() {
 	addr := flag.String("addr", ":8080", "dirección donde escuchar (host:puerto)")
 	// wiring.FinalPolicy() (Challenge=0.50/Block=0.75) — la Policy
-	// congelada tras el holdout (tarea 1.9), nunca
-	// engine.DefaultPolicy() (0.50/0.80, sin calibrar): cmd/engine y
-	// cmd/loadtest tienen que servir/medir exactamente la misma
-	// configuración (tarea 1.10, blocker). Los flags siguen
-	// permitiendo overridear en runtime si hiciera falta.
+	// congelada tras el holdout, nunca engine.DefaultPolicy()
+	// (0.50/0.80, sin calibrar): cmd/engine y cmd/loadtest tienen que
+	// servir/medir exactamente la misma configuración. Los flags
+	// siguen permitiendo overridear en runtime si hiciera falta.
 	finalPolicy := wiring.FinalPolicy()
 	challengeThreshold := flag.Float64("challenge-threshold", finalPolicy.ChallengeThreshold, "score mínimo (RiskScore) para CHALLENGE")
 	blockThreshold := flag.Float64("block-threshold", finalPolicy.BlockThreshold, "score mínimo (RiskScore) para BLOCK")
@@ -55,8 +51,7 @@ func main() {
 	// signal.NotifyContext (no un simple ListenAndServe bloqueante)
 	// para que SIGINT/SIGTERM disparen un apagado ordenado: sin esto,
 	// matar el proceso nunca le daría a telemetry.Init la oportunidad
-	// de hacer un último flush/Shutdown del MeterProvider (tarea 1.8,
-	// ajuste 8).
+	// de hacer un último flush/Shutdown del MeterProvider.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -76,8 +71,7 @@ func main() {
 
 	// otelhttp envuelve el *http.ServeMux con la métrica HTTP estándar
 	// de OpenTelemetry (http.server.request.duration) — recorders.Provider
-	// se pasa explícito, en vez de depender del MeterProvider global
-	// (tarea 1.8, ajuste 5).
+	// se pasa explícito, en vez de depender del MeterProvider global.
 	handler := otelhttp.NewHandler(server.Routes(), "waf-engine", otelhttp.WithMeterProvider(recorders.Provider))
 	httpServer := &http.Server{Addr: *addr, Handler: handler}
 
@@ -99,10 +93,9 @@ func main() {
 		log.Fatalf("engine: %v", err)
 	}
 
-	// Contexto nuevo y acotado para el Shutdown del MeterProvider
-	// (tarea 1.8, ajuste 8) — nunca el ctx ya cancelado por la señal
-	// de apagado, que dejaría a Shutdown sin ningún margen para el
-	// flush final.
+	// Contexto nuevo y acotado para el Shutdown del MeterProvider —
+	// nunca el ctx ya cancelado por la señal de apagado, que dejaría a
+	// Shutdown sin ningún margen para el flush final.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := shutdownTelemetry(shutdownCtx); err != nil {

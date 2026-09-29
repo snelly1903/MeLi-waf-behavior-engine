@@ -8,8 +8,7 @@ import (
 // Ratio es una métrica que puede no tener sentido calcular — por
 // ejemplo, la precisión cuando el motor nunca predijo positivo ni una
 // sola vez (división por cero). Defined=false significa "no aplica" y
-// nunca se disimula con un 0 ni con un 1 (ver docs/decisiones.md,
-// tarea 0.7).
+// nunca se disimula con un 0 ni con un 1 (ver docs/decisiones.md).
 type Ratio struct {
 	Value   float64
 	Defined bool
@@ -52,9 +51,9 @@ type Metrics struct {
 	Accuracy  Ratio
 	// F1 es la media armónica de Precision y Recall (2PR/(P+R)) — la
 	// métrica que resume ambas en un solo número cuando hace falta
-	// comparar configuraciones (tarea 1.9). Indefinida (N/A, nunca 0)
-	// si Precision o Recall lo son, o si ambas son exactamente 0 (2*0*0/0,
-	// otra división por cero).
+	// comparar configuraciones. Indefinida (N/A, nunca 0) si Precision
+	// o Recall lo son, o si ambas son exactamente 0 (2*0*0/0, otra
+	// división por cero).
 	F1 Ratio
 }
 
@@ -101,8 +100,8 @@ const (
 
 // IsPositive expone isPositive para paquetes fuera de internal/eval
 // que necesitan la misma regla "qué cuenta como predicción positiva"
-// — por ejemplo internal/tuning (tarea 1.9), para decidir cuándo una
-// campaña quedó detectada, sin duplicar esta lógica en otro lugar.
+// — por ejemplo internal/tuning, para decidir cuándo una campaña
+// quedó detectada, sin duplicar esta lógica en otro lugar.
 func (p Policy) IsPositive(a decision.Action) bool {
 	return p.isPositive(a)
 }

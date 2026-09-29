@@ -1,9 +1,9 @@
 package datagen
 
 // DefaultLoginPath es el endpoint de login que comparten los perfiles
-// legítimos (tarea 0.4) y el generador de credential stuffing (tarea
-// 0.5) — así el ataque apunta exactamente a la misma aplicación que
-// navegan los usuarios reales, no a una simulada aparte.
+// legítimos y el generador de credential stuffing — así el ataque
+// apunta exactamente a la misma aplicación que navegan los usuarios
+// reales, no a una simulada aparte.
 const DefaultLoginPath = "/login"
 
 // SensitivePaths es el vocabulario "tipo wordlist" que usa el generador

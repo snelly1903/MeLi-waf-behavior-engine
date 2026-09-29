@@ -1,15 +1,14 @@
-// Command diagnosecs es la pasada diagnóstica de credential_stuffing
-// (tarea 1.9): para cada campaña real de credential_stuffing en los
-// escenarios de tuning, compara la ventana real del detector (lo
-// máximo que llegó a ver en CUALQUIER momento dentro de su ventana de
-// correlación) contra el ground truth completo de la campaña —
-// motivado por el hallazgo del sweep combinado de que
-// credential_stuffing nunca aparece como "DetectorOnly" en la
-// mitigación. Corre con el candidato C2 (S3+A3) ya aprobado
-// provisionalmente — S3/A3 no se tocan, y las métricas de gate de
-// credential_stuffing son intrínsecas a su propia Config, no a la de
-// slow_scan/anomaly. No modifica ningún threshold. Ver
-// docs/decisiones.md, tarea 1.9.
+// Command diagnosecs es la pasada diagnóstica de credential_stuffing:
+// para cada campaña real de credential_stuffing en los escenarios de
+// tuning, compara la ventana real del detector (lo máximo que llegó a
+// ver en CUALQUIER momento dentro de su ventana de correlación)
+// contra el ground truth completo de la campaña — motivado por el
+// hallazgo del sweep combinado de que credential_stuffing nunca
+// aparece como "DetectorOnly" en la mitigación. Corre con el
+// candidato C2 (S3+A3) ya aprobado provisionalmente — S3/A3 no se
+// tocan, y las métricas de gate de credential_stuffing son
+// intrínsecas a su propia Config, no a la de slow_scan/anomaly. No
+// modifica ningún threshold. Ver docs/decisiones.md.
 package main
 
 import (
@@ -68,7 +67,7 @@ func main() {
 		log.Fatalf("diagnosecs: creando carpeta de salida: %v", err)
 	}
 
-	report := "# Diagnóstico de credential_stuffing: ventana real vs. ground truth (tarea 1.9)\n\n" +
+	report := "# Diagnóstico de credential_stuffing: ventana real vs. ground truth\n\n" +
 		"Candidato usado para la atribución cruzada con anomaly: C2 (S3+A3, ya aprobado provisionalmente — sin cambios). " +
 		"Los thresholds de credential_stuffing son los actuales, sin tocar.\n\n" +
 		tuning.RenderCredentialStuffingCampaigns(allCampaigns)

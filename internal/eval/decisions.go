@@ -14,7 +14,7 @@ import (
 // utilizables, más cualquier problema encontrado en el archivo. Ningún
 // problema se descarta en silencio ni convierte una decisión inválida
 // en un ALLOW — quedan anotados acá para que EvaluateDecisions los
-// incorpore a Issues (ver evaluate.go, tarea 0.8).
+// incorpore a Issues (ver evaluate.go).
 type LoadDecisionsResult struct {
 	Decisions []decision.Decision
 
@@ -31,9 +31,9 @@ type LoadDecisionsResult struct {
 }
 
 // LoadDecisions lee un archivo decisions.jsonl — un decision.Decision
-// por línea, serializado con el mismo contrato JSON de internal/decision
-// (tarea 0.3) — y separa las decisiones utilizables de las que tienen
-// algún problema.
+// por línea, serializado con el mismo contrato JSON de
+// internal/decision — y separa las decisiones utilizables de las que
+// tienen algún problema.
 //
 // Una línea con problemas nunca interrumpe la carga de las demás: el
 // objetivo es que un solo bug del motor (por ejemplo, olvidar la

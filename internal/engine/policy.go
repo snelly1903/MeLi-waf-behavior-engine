@@ -8,10 +8,9 @@ import (
 
 // Policy decide qué decision.Action corresponde a un puntaje de
 // riesgo combinado. Los umbrales viven acá, no en ningún detector
-// individual — ya documentado desde la tarea 0.3
-// (decision.Decision.ConfidenceScore) y reconfirmado en las tareas
-// 1.3/1.4: un detector solo entrega evidencia (Triggered + RiskScore),
-// nunca decide la acción final.
+// individual — ya documentado desde decision.Decision.ConfidenceScore
+// y reconfirmado más adelante: un detector solo entrega evidencia
+// (Triggered + RiskScore), nunca decide la acción final.
 type Policy struct {
 	// ChallengeThreshold es el puntaje mínimo (inclusive) a partir del
 	// cual la acción pasa de ALLOW a CHALLENGE.
@@ -51,8 +50,8 @@ func (p Policy) actionFor(score float64) decision.Action {
 
 // ActionFor expone actionFor para paquetes fuera de internal/engine
 // que necesitan reaplicar la misma regla score→acción sin duplicarla
-// — por ejemplo internal/tuning (tarea 1.9), para el sweep de Policy:
-// como principal.RiskScore (ConfidenceScore en la Decision final) no
+// — por ejemplo internal/tuning, para el sweep de Policy: como
+// principal.RiskScore (ConfidenceScore en la Decision final) no
 // depende de ChallengeThreshold/BlockThreshold, reaplicar distintas
 // Policy sobre el MISMO ConfidenceScore ya calculado permite comparar
 // candidatos de Policy sin volver a correr ningún detector. Mismo

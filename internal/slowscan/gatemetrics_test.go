@@ -11,7 +11,7 @@ import (
 // para el mismo escenario que TestEvaluate_ClearSlowScan_Triggers,
 // EvaluateGateMetrics reporta los mismos números crudos que ya
 // terminan en el Finding real de Evaluate — necesario para confiar en
-// el diagnóstico (tarea 1.9).
+// el diagnóstico.
 func TestEvaluateGateMetrics_MatchesEvaluate_WhenTriggered(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)

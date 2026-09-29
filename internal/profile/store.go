@@ -1,14 +1,13 @@
-// Package profile es el componente con estado (tarea 1.2) que le
-// permite al futuro motor "recordar" el comportamiento reciente de una
-// IP y, cuando exista, de una sesión, dentro de una ventana temporal
-// configurable. Todavía no es un detector: solo acumula observaciones
-// y expone métricas agregadas — ninguna acción (ALLOW/CHALLENGE/BLOCK)
-// se decide acá.
+// Package profile es el componente con estado que le permite al motor
+// "recordar" el comportamiento reciente de una IP y, cuando exista, de
+// una sesión, dentro de una ventana temporal configurable. Todavía no
+// es un detector: solo acumula observaciones y expone métricas
+// agregadas — ninguna acción (ALLOW/CHALLENGE/BLOCK) se decide acá.
 //
 // Todo el estado vive en memoria (map + slice, protegidos con
 // sync.Mutex). No hay Redis, DynamoDB ni ninguna base externa — ver
-// docs/decisiones.md, tarea 1.2, para las limitaciones que eso implica
-// y cómo se acotan.
+// docs/decisiones.md para las limitaciones que eso implica y cómo se
+// acotan.
 package profile
 
 import (
@@ -27,8 +26,8 @@ var ErrInvalidWindow = errors.New("profile: window must be greater than 0")
 // observation es lo mínimo que se retiene de cada event.Event — nunca
 // el Event completo, nunca su UserAgent, el contenido de su Referer ni
 // los valores de sus QueryParams. login_user_hash ya llega hasheado
-// desde la tarea 0.2 (nunca un username ni un email en claro), así que
-// retenerlo acá no agrega ningún riesgo nuevo de privacidad.
+// (nunca un username ni un email en claro), así que retenerlo acá no
+// agrega ningún riesgo nuevo de privacidad.
 type observation struct {
 	timestamp     time.Time
 	path          string
@@ -249,7 +248,7 @@ func (s *Store) SnapshotSession(sessionID string) Metrics {
 // respecto a now, y devuelve cuántas claves eliminó en total. Sin
 // llamar a Sweep periódicamente, el Store retiene una entrada por cada
 // IP/sesión distinta vista alguna vez en la vida del proceso, aunque
-// nunca vuelva a aparecer — ver docs/decisiones.md, tarea 1.2, para la
+// nunca vuelva a aparecer — ver docs/decisiones.md para la
 // limitación completa. Conectar esto a un scheduler real queda fuera
 // del alcance de esta tarea.
 func (s *Store) Sweep(now time.Time, idleTTL time.Duration) int {

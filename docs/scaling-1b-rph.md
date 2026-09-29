@@ -1,9 +1,9 @@
-# Escalado conceptual a 1.000 millones de requests/hora (tarea 1.11)
+# Escalado conceptual a 1.000 millones de requests/hora
 
 Este documento es una **propuesta conceptual**, sin implementación — describe cómo
 escalaríamos la arquitectura actual (`cmd/engine`, un único proceso) a un volumen de
 tráfico que un solo proceso no puede manejar. No cambia ninguna lógica de detección:
-las fórmulas, `ScoreFloor`, `Policy` y los umbrales ya calibrados (tareas 1.9/holdout)
+las fórmulas, `ScoreFloor`, `Policy` y los umbrales ya calibrados en el holdout
 se mantienen exactamente iguales. Lo que cambia es **dónde** corre esa lógica y **cómo**
 se reparte el tráfico para que cada instancia siga viendo lo que necesita ver.
 
@@ -190,8 +190,8 @@ flowchart LR
 - **Qué es**: el detector de hoy (`internal/anomaly`) — compara contra un baseline
   estadístico global (Welford), sin conocer el tipo de ataque de antemano.
 - **Qué problema tenemos hoy**: un solo baseline compartido por TODO el tráfico — ya
-  vimos en el holdout (tarea 1.9) que a mayor escala eso puede ver a una entidad
-  legítima como "rara" solo por azar.
+  vimos en el holdout que a mayor escala eso puede ver a una entidad legítima como
+  "rara" solo por azar.
 - **Qué cambiaríamos**: dividir el tráfico en "cohortes" (grupos con un perfil de
   comportamiento parecido) y mantener un baseline SEPARADO por cohorte, particionado
   igual que los otros detectores.
@@ -282,13 +282,13 @@ flowchart LR
   se entere — el sistema fallaría "en cámara lenta", invisible.
 - **Ejemplo aplicado**: un pico de tráfico real hace crecer la cola más rápido de lo
   que los detectores procesan — se mide ese atraso como una métrica más (junto a las
-  de OTel de la tarea 1.8) y dispara alerta/autoescalado antes de que el Risk State
+  ya existentes de OTel) y dispara alerta/autoescalado antes de que el Risk State
   Store quede desactualizado.
 
 ### Observability
 
 - **Qué es**: la capacidad de ver qué pasa adentro sin adivinar — ya existe una
-  versión (OTel + Prometheus + Grafana, tarea 1.8) para un solo proceso.
+  versión (OTel + Prometheus + Grafana) para un solo proceso.
 - **Qué problema tenemos hoy**: cubre UN proceso. Distribuido, "¿está todo bien?" pasa
   a ser una pregunta sobre el sistema completo — hace falta ver cosas nuevas: atraso
   por partición, particiones "calientes" vs "frías", latencia del Risk State Store.
@@ -320,8 +320,8 @@ acumula esa evidencia — no porque el sistema esté fallando, sino porque liter
 no hay nada que analizar todavía.
 
 Esto es exactamente el mismo fenómeno que ya medimos empíricamente como **detection
-delay** en las tareas 1.9 y 1.10 (`RequestsToDetection`/`TimeToDetection` en
-`internal/tuning`): en tuning/holdout, la detección eventual de una campaña de
+delay** (`RequestsToDetection`/`TimeToDetection` en `internal/tuning`): en
+tuning/holdout, la detección eventual de una campaña de
 Credential Stuffing tardó, en mediana, alrededor de 24-26 requests desde el primer
 evento de la campaña; Slow Scan detectó bastante más rápido, típicamente entre 3 y 10
 requests, según el candidato y el ratio. Ese delay no es un defecto de la
@@ -449,13 +449,13 @@ que decirlo explícitamente, no esconderlo.
 | ASN se resuelve por proceso, caché propio | Caché/base de datos IP→ASN compartida entre todas las máquinas | Resolver la misma IP en cada máquina por separado desperdicia trabajo |
 | Sin blocklist — cada request repite el análisis completo | Blocklist distribuida con TTL, consultada antes del análisis | No hay que volver a demostrar que alguien ya identificado es malicioso |
 | Sin backpressure — no puede atrasarse respecto a sí mismo | El Analytics Path puede atrasarse; se mide (consumer lag) y se gestiona explícitamente | Separar los caminos introduce la posibilidad de atraso; hay que verlo antes de que sea un problema |
-| Observabilidad de un solo proceso (tarea 1.8) | Observabilidad de sistema distribuido (lag, cache hit/miss, salud por partición) | "¿Está todo bien?" ahora es una pregunta sobre cientos de máquinas |
+| Observabilidad de un solo proceso | Observabilidad de sistema distribuido (lag, cache hit/miss, salud por partición) | "¿Está todo bien?" ahora es una pregunta sobre cientos de máquinas |
 | Sin alta disponibilidad — un solo punto de falla, sin política de falla definida | Cada componente redundado, con fail-open/fail-closed explícito por componente (sección 5) | A esta escala, algo se rompe todo el tiempo; tiene que ser normal y manejable, con el trade-off disponibilidad/seguridad decidido a propósito, no por accidente |
 | El cold-start ya existe, pero nunca se documentó como limitación explícita | Se documenta explícitamente (sección 4), conectado al detection delay ya medido en tuning/holdout | Distribuir no lo resuelve ni lo empeora — pero hay que decir que sigue existiendo |
 | **Policy, ScoreFloor, umbrales calibrados (tuning/holdout)** | **Se mantienen EXACTAMENTE igual** | Este documento es sobre escalar el *cómo*, nunca sobre cambiar el *qué* se decide |
 
 La lógica de cada detector (fórmulas, ScoreFloor, Policy, los umbrales ya calibrados
-en las tareas 1.9/holdout) no cambia en absoluto — lo que cambia es **dónde** corre
+en el holdout) no cambia en absoluto — lo que cambia es **dónde** corre
 esa lógica y **cómo** se reparte el tráfico para que cada instancia siga viendo lo que
 necesita ver.
 

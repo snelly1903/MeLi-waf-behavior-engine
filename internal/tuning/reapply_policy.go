@@ -24,8 +24,8 @@ import (
 // cero de decision.Decision), y policy.ActionFor(0) da ALLOW igual
 // que el camino real de Decide para ese caso (que fuerza ALLOW sin
 // llamar a actionFor). Con ChallengeThreshold=0 esto podría divergir
-// — ningún candidato del sweep de Policy de la tarea 1.9 usa 0, así
-// que la equivalencia se mantiene siempre en ese sweep.
+// — ningún candidato del sweep de Policy usa 0, así que la
+// equivalencia se mantiene siempre en ese sweep.
 func ReapplyPolicy(decisions []decision.Decision, policy engine.Policy) []decision.Decision {
 	out := make([]decision.Decision, len(decisions))
 	for i, d := range decisions {

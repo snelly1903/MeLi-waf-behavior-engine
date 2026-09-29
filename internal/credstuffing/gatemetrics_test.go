@@ -10,7 +10,7 @@ import (
 // TestEvaluateGateMetrics_MatchesEvaluate_WhenTriggered confirma que,
 // para el mismo escenario que TestEvaluate_DistributedCampaign_Triggers,
 // EvaluateGateMetrics reporta los mismos números crudos que ya
-// terminan en el Finding real de Evaluate (tarea 1.9).
+// terminan en el Finding real de Evaluate.
 func TestEvaluateGateMetrics_MatchesEvaluate_WhenTriggered(t *testing.T) {
 	resolver := fakeResolver{}
 	for i := 0; i < 20; i++ {

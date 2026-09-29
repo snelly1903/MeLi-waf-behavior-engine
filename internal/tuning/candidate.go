@@ -1,16 +1,16 @@
 // Package tuning implementa la evaluación offline y la calibración
-// del motor conductual (tarea 1.9): correr el *engine.BehavioralDecider
-// real sobre un escenario generado por internal/datagen, medir su
-// calidad con internal/eval, y comparar candidatos de configuración
-// de forma reproducible.
+// del motor conductual: correr el *engine.BehavioralDecider real
+// sobre un escenario generado por internal/datagen, medir su calidad
+// con internal/eval, y comparar candidatos de configuración de forma
+// reproducible.
 //
 // Este paquete nunca duplica infraestructura ya existente: reutiliza
 // internal/datagen (generación y el resolver determinista de ASN),
 // internal/baseline (LoadEvents/WriteDecisions, I/O genérico de
-// eventos/decisiones — nunca fue específico del rate limit de la
-// tarea 0.9), internal/eval (matriz de confusión, políticas
-// strict/broad, N/A real) e internal/engine (BehavioralDecider,
-// Policy, y los valores por defecto en defaults.go).
+// eventos/decisiones — nunca fue específico del rate limit),
+// internal/eval (matriz de confusión, políticas strict/broad, N/A
+// real) e internal/engine (BehavioralDecider, Policy, y los valores
+// por defecto en defaults.go).
 package tuning
 
 import (
@@ -22,7 +22,7 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/slowscan"
 )
 
-// Candidate agrupa los cuatro "knobs" que esta tarea calibra: la
+// Candidate agrupa los cuatro "knobs" que este paquete calibra: la
 // configuración de los tres detectores y la Policy. Deliberadamente
 // NO incluye el NetworkResolver de credential stuffing — el resolver
 // no es algo que se calibre, es fijo para toda la evaluación offline
@@ -43,11 +43,10 @@ type Candidate struct {
 // BaselineCandidate refleja EXACTAMENTE los valores por defecto de
 // cmd/engine — nunca los repite a mano. Los tres Config y la Policy
 // vienen de internal/engine.Default*Config()/DefaultPolicy(), el
-// mismo lugar de verdad que usa cmd/engine/main.go (tarea 1.9, ajuste
-// 2 del plan): si alguien cambia un default de producción,
-// BaselineCandidate lo refleja automáticamente, sin que nadie tenga
-// que acordarse de actualizar esta evaluación también. Ver
-// TestBaselineCandidate_MatchesEngineDefaults.
+// mismo lugar de verdad que usa cmd/engine/main.go: si alguien cambia
+// un default de producción, BaselineCandidate lo refleja
+// automáticamente, sin que nadie tenga que acordarse de actualizar
+// esta evaluación también. Ver TestBaselineCandidate_MatchesEngineDefaults.
 func BaselineCandidate() Candidate {
 	return Candidate{
 		Name:               "baseline",
@@ -65,7 +64,7 @@ func BaselineCandidate() Candidate {
 // con su propio internal/profile.Store y baseline vacíos — así cada
 // corrida de evaluación arranca con estado limpio (profiles vacíos,
 // baseline de anomaly vacío, sin necesitar ningún "reset" explícito;
-// ver docs/decisiones.md, tarea 1.9, sección "Estado").
+// ver docs/decisiones.md, sección "Estado").
 func (c Candidate) Build(resolver credstuffing.NetworkResolver) (*engine.BehavioralDecider, error) {
 	csCfg := c.CredentialStuffing
 	csCfg.Resolver = resolver
@@ -85,8 +84,8 @@ func (c Candidate) Build(resolver credstuffing.NetworkResolver) (*engine.Behavio
 	}
 
 	// recorder=nil: BehavioralDecider degrada sola a un
-	// FindingsRecorder no-op (tarea 1.8) — esta evaluación offline
-	// nunca necesita telemetría real.
+	// FindingsRecorder no-op — esta evaluación offline nunca necesita
+	// telemetría real.
 	decider, err := engine.NewBehavioralDecider(cs, ss, an, c.Policy, nil)
 	if err != nil {
 		return nil, fmt.Errorf("tuning: candidate %q: behavioral decider: %w", c.Name, err)
