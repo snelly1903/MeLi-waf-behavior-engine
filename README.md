@@ -56,27 +56,51 @@ describe una propuesta *sin implementar* para volúmenes mucho mayores; no la
 confundas con esto.)
 
 ```mermaid
-flowchart LR
-    Client[Cliente] -->|POST /v1/events| API[cmd/engine<br/>internal/httpapi]
-    API --> Validator[internal/event<br/>Validator]
-    Validator --> Decider[internal/engine<br/>BehavioralDecider]
+flowchart TD
+    Client[Cliente]
+    API["cmd/engine<br/>internal/httpapi"]
+    Validator["internal/event<br/>Validator"]
+    Decider["internal/engine<br/>BehavioralDecider"]
 
-    Decider --> CS[internal/credstuffing]
-    Decider --> SS[internal/slowscan]
-    Decider --> SA[internal/anomaly]
+    CS["internal/credstuffing"]
+    SS["internal/slowscan"]
+    SA["internal/anomaly"]
 
-    CS --> Profiles[(internal/profile<br/>perfiles por entidad, en memoria)]
+    Profiles[("internal/profile<br/>perfiles por entidad")]
+    ASN["internal/asn<br/>RIPEstat (opcional)"]
+
+    Policy["internal/engine.Policy"]
+
+    Client -->|"POST /v1/events"| API
+    API --> Validator
+    Validator --> Decider
+
+    Decider --> CS
+    Decider --> SS
+    Decider --> SA
+
+    CS --> Profiles
     SS --> Profiles
     SA --> Profiles
+    CS -.->|"resuelve ASN"| ASN
 
-    CS -.->|resuelve ASN| ASN[internal/asn<br/>RIPEstat, opcional]
+    Decider --> Policy
+    Policy -->|"ALLOW / CHALLENGE / BLOCK"| Client
 
-    Decider --> Policy[internal/engine.Policy]
-    Policy --> Decision{ALLOW / CHALLENGE / BLOCK}
-    Decision --> Client
+    classDef entrada fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+    classDef detector fill:#ffedd5,stroke:#f97316,color:#7c2d12
+    classDef estado fill:#f1f5f9,stroke:#64748b,color:#334155
+    classDef decision fill:#dcfce7,stroke:#22c55e,color:#14532d
 
-    API -.->|métricas OTLP/gRPC, opcional| OTel[OpenTelemetry Collector]
+    class Client,API,Validator entrada
+    class CS,SS,SA detector
+    class Profiles,ASN estado
+    class Decider,Policy decision
 ```
+
+*(El detalle de cómo se combinan los tres `Finding` en una sola `Decision`
+está en el diagrama de la sección [Modelo de decisión](#modelo-de-decisión);
+el pipeline de métricas está en [Observabilidad](#observabilidad).)*
 
 Todo el estado (perfiles de comportamiento por IP/sesión, baseline
 estadístico, caché de ASN) vive en memoria, dentro de un único proceso. No
@@ -101,6 +125,49 @@ hay base de datos ni cola de mensajes.
 5. `engine.Policy` convierte el score en `ALLOW` / `CHALLENGE` / `BLOCK`
    según dos umbrales (`ChallengeThreshold`, `BlockThreshold`).
 6. La respuesta HTTP incluye la decisión y una explicación en texto.
+
+```mermaid
+flowchart TD
+    Start(["Llega POST /v1/events"])
+    Validate["Validar evento<br/>(internal/event.Validator)"]
+    Observe["Observe en los 3 detectores"]
+    Evaluate["Evaluate en los 3 detectores"]
+    AnyTriggered{"¿Algún Finding<br/>disparó (Triggered)?"}
+
+    NoTrigger["Action = ALLOW<br/>AttackVector = unknown<br/>ConfidenceScore = 0"]
+
+    ScoreSelect["RiskScore = máximo entre<br/>los Finding disparados<br/>(empate: detector más específico gana)"]
+    AttrSelect["AttackVector / EntityID =<br/>detector MÁS ESPECÍFICO disparado<br/>(credential_stuffing/slow_scan sobre<br/>statistical_anomaly, aunque tenga<br/>menor score)"]
+
+    PolicyCheck{"Policy.actionFor(RiskScore)"}
+    Allow["ALLOW<br/>(score < ChallengeThreshold)"]
+    Challenge["CHALLENGE<br/>(ChallengeThreshold ≤ score < BlockThreshold)"]
+    Block["BLOCK<br/>(score ≥ BlockThreshold)"]
+
+    Response(["Decision al cliente"])
+
+    Start --> Validate --> Observe --> Evaluate --> AnyTriggered
+    AnyTriggered -->|No| NoTrigger --> Response
+    AnyTriggered -->|Sí| ScoreSelect
+    AnyTriggered -->|Sí| AttrSelect
+    ScoreSelect --> PolicyCheck
+    PolicyCheck --> Allow --> Response
+    PolicyCheck --> Challenge --> Response
+    PolicyCheck --> Block --> Response
+    AttrSelect --> Response
+
+    classDef entrada fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+    classDef detector fill:#ffedd5,stroke:#f97316,color:#7c2d12
+    classDef decision fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef challenge fill:#fef3c7,stroke:#f59e0b,color:#78350a
+    classDef block fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+
+    class Start,Response entrada
+    class Observe,Evaluate detector
+    class AnyTriggered,NoTrigger,ScoreSelect,AttrSelect,PolicyCheck,Allow decision
+    class Challenge challenge
+    class Block block
+```
 
 Como los tres detectores dependen del **historial** de la entidad, una sola
 request aislada casi nunca alcanza para disparar `CHALLENGE`/`BLOCK` — ver
@@ -136,6 +203,58 @@ Los tres detectores, sus umbrales y el porqué de cada decisión de diseño
 están documentados en detalle en [docs/decisiones.md](docs/decisiones.md).
 
 ## Modelo de decisión
+
+```mermaid
+flowchart TD
+    CS["credential_stuffing<br/>Finding (RiskScore, Triggered)"]
+    SS["slow_scan<br/>Finding (RiskScore, Triggered)"]
+    SA["statistical_anomaly<br/>Finding (RiskScore, Triggered)"]
+
+    ScoreSel["RiskScore = MÁXIMO<br/>entre todos los Finding disparados<br/>(nunca suma ni promedio)"]
+    AttrSel["AttackVector / EntityID =<br/>detector MÁS ESPECÍFICO disparado<br/>(credential_stuffing/slow_scan ganan<br/>SIEMPRE sobre statistical_anomaly,<br/>sin importar el score)"]
+
+    PolicyBox["Policy<br/>ChallengeThreshold / BlockThreshold"]
+
+    Allow["ALLOW"]
+    Challenge["CHALLENGE"]
+    Block["BLOCK"]
+
+    DecisionBox["Decision<br/>Action + ConfidenceScore + AttackVector"]
+
+    CS --> ScoreSel
+    SS --> ScoreSel
+    SA --> ScoreSel
+
+    CS --> AttrSel
+    SS --> AttrSel
+    SA --> AttrSel
+
+    ScoreSel -->|"RiskScore"| PolicyBox
+    PolicyBox --> Allow
+    PolicyBox --> Challenge
+    PolicyBox --> Block
+
+    Allow --> DecisionBox
+    Challenge --> DecisionBox
+    Block --> DecisionBox
+    AttrSel -->|"AttackVector / EntityID"| DecisionBox
+
+    classDef detector fill:#ffedd5,stroke:#f97316,color:#7c2d12
+    classDef decision fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef challenge fill:#fef3c7,stroke:#f59e0b,color:#78350a
+    classDef block fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
+
+    class CS,SS,SA detector
+    class ScoreSel,AttrSel,PolicyBox,Allow,DecisionBox decision
+    class Challenge challenge
+    class Block block
+```
+
+`RiskScore` y `AttackVector` se seleccionan por **criterios distintos**,
+nunca del mismo `Finding` por definición: el score siempre es el máximo,
+la atribución siempre prefiere el detector más específico — son dos
+preguntas independientes ("qué tan riesgoso" vs. "de qué ataque se
+trata").
 
 - **`ScoreFloor`** (por detector): sin este piso, las señales de un gate
   exactamente en su umbral darían componentes en 0, y un `Finding` disparado
@@ -372,6 +491,28 @@ docker compose up -d otel-collector prometheus grafana
 go run ./cmd/engine --addr :8080 --otel-endpoint localhost:4317 --otel-insecure
 ```
 
+```mermaid
+flowchart LR
+    Engine["cmd/engine"]
+    Collector["OpenTelemetry<br/>Collector"]
+    Prometheus["Prometheus"]
+    Grafana["Grafana"]
+
+    Engine -->|"OTLP/gRPC"| Collector
+    Collector -->|"scrape"| Prometheus
+    Prometheus -->|"query"| Grafana
+
+    classDef entrada fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+    classDef obs fill:#f3e8ff,stroke:#a855f7,color:#581c87
+
+    class Engine entrada
+    class Collector,Prometheus,Grafana obs
+```
+
+*Fail-open: sin `--otel-endpoint`, o si el Collector no responde al
+arrancar, `cmd/engine` usa instrumentación no-op y sirve tráfico
+exactamente igual — un Collector caído nunca impide que el motor responda.*
+
 - **Grafana**: [http://localhost:3000](http://localhost:3000) (login
   anónimo habilitado solo para esta demo local, con rol de solo lectura;
   dashboard `waf-engine` provisto automáticamente).
@@ -483,26 +624,39 @@ para que cada detector siga viendo todo el historial de una entidad aunque
 el tráfico se reparta entre cientos de máquinas.
 
 ```mermaid
-flowchart LR
-    Client[Cliente] --> CDN[CDN / WAF perimetral]
-    CDN --> API[Decision API<br/>sin estado]
-    API -->|lee| Store[(Risk State Store)]
-    Store --> Policy[Policy]
-    Policy --> Decision{ALLOW / CHALLENGE / BLOCK}
+flowchart TD
+    Banner["⚠️ PROPUESTA CONCEPTUAL — NO IMPLEMENTADA"]
 
-    API -.->|copia async del evento| Stream[[Event Stream]]
-    Stream --> SS[Slow Scan<br/>por IP/sesión]
-    Stream --> CS[Credential Stuffing<br/>por ASN]
-    Stream --> SA[Statistical Anomaly<br/>por cohorte]
-    SS -->|update| Store
-    CS -->|update| Store
-    SA -->|update| Store
+    Client[Cliente]
+    CDN["CDN / WAF perimetral"]
+    API["Decision API<br/>(sin estado)"]
+    Store[("Risk State Store")]
+    PolicyBox["Policy"]
+    DecisionBox{"ALLOW / CHALLENGE / BLOCK"}
+
+    Stream[["Event Stream"]]
+    SS["Slow Scan<br/>(IP/sesión)"]
+    CS["Credential Stuffing<br/>(ASN)"]
+    SA["Statistical Anomaly<br/>(cohorte)"]
+
+    Banner -.-> Client
+    Client --> CDN --> API
+    API -->|"lee"| Store
+    Store --> PolicyBox --> DecisionBox
+
+    API -.->|"copia async"| Stream
+    Stream --> SS
+    Stream --> CS
+    Stream --> SA
+    SS -->|"update"| Store
+    CS -->|"update"| Store
+    SA -->|"update"| Store
 
     subgraph FastPath["FAST PATH — síncrono"]
         API
         Store
-        Policy
-        Decision
+        PolicyBox
+        DecisionBox
     end
 
     subgraph AnalyticsPath["ANALYTICS PATH — asíncrono"]
@@ -511,6 +665,18 @@ flowchart LR
         CS
         SA
     end
+
+    classDef entrada fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+    classDef detector fill:#ffedd5,stroke:#f97316,color:#7c2d12
+    classDef estado fill:#f1f5f9,stroke:#64748b,color:#334155
+    classDef decision fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef banner fill:#fee2e2,stroke:#ef4444,color:#7f1d1d,font-weight:bold
+
+    class Client,CDN,API entrada
+    class SS,CS,SA detector
+    class Store estado
+    class PolicyBox,DecisionBox decision
+    class Banner banner
 ```
 
 Ninguna lógica de detección cambia (Policy/ScoreFloor/umbrales calibrados en

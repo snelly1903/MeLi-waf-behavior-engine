@@ -48,65 +48,64 @@ hace esperar en la puerta a que termine.
 
 Dos caminos, con trabajos distintos:
 
-```
-                         ┌───────────────────────────────────────────────────┐
-                         │                    FAST PATH                       │
-                         │            (síncrono — en cada request)           │
-                         │                                                     │
-  Cliente ──► CDN/WAF ──►│ Decision API ──► Risk State ──► Policy ──► ALLOW /  │
-              (borde)    │   (sin estado)     Store         (lee)   CHALLENGE │
-                         │                    (lee)                  / BLOCK  │
-                         └───────┼─────────────────────────────────────────────┘
-                                 │ copia del evento
-                                 │ (no bloquea la respuesta al cliente)
-                                 ▼
-                         ┌───────────────────────────────────────────────────┐
-                         │                 ANALYTICS PATH                     │
-                         │            (asíncrono — en background)            │
-                         │                                                     │
-                         │  Event Stream ──► Behavioral Detectors              │
-                         │                      ├─ Slow Scan (por IP/sesión)   │
-                         │                      ├─ Credential Stuffing (ASN)   │
-                         │                      └─ Statistical Anomaly        │
-                         │                         (por cohorte)              │
-                         │                              │                     │
-                         │                              ▼                     │
-                         │                     update Risk State Store        │
-                         └───────────────────────────────────────────────────┘
-```
-
-Versión Mermaid (la misma que se agrega al README):
-
 ```mermaid
-flowchart LR
-    Client[Cliente] --> CDN[CDN / WAF perimetral]
-    CDN --> API[Decision API<br/>sin estado]
-    API -->|lee| Store[(Risk State Store)]
-    Store --> Policy[Policy]
-    Policy --> Decision{ALLOW / CHALLENGE / BLOCK}
+flowchart TD
+    Banner["⚠️ PROPUESTA CONCEPTUAL — NO IMPLEMENTADA"]
 
-    API -.->|copia async del evento| Stream[[Event Stream]]
-    Stream --> SS[Slow Scan<br/>por IP/sesión]
-    Stream --> CS[Credential Stuffing<br/>por ASN]
-    Stream --> SA[Statistical Anomaly<br/>por cohorte]
-    SS -->|update| Store
-    CS -->|update| Store
-    SA -->|update| Store
+    Client[Cliente]
+    CDN["CDN / WAF perimetral<br/>(borde)"]
+    API["Decision API<br/>(sin estado)"]
+    Store[("Risk State Store<br/>(riesgo dinámico, nunca<br/>una decisión ALLOW cacheada)")]
+    PolicyBox["Policy<br/>(ChallengeThreshold / BlockThreshold)"]
+    DecisionBox{"ALLOW / CHALLENGE / BLOCK"}
 
-    subgraph FastPath["FAST PATH — síncrono"]
+    Stream[["Event Stream<br/>(copia async, no bloquea<br/>la respuesta al cliente)"]]
+    SS["Slow Scan<br/>partición por IP/sesión"]
+    CS["Credential Stuffing<br/>partición por ASN"]
+    SA["Statistical Anomaly<br/>partición por cohorte"]
+
+    Banner -.-> Client
+    Client --> CDN --> API
+    API -->|"lee"| Store
+    Store --> PolicyBox --> DecisionBox
+
+    API -.->|"copia async del evento"| Stream
+    Stream --> SS
+    Stream --> CS
+    Stream --> SA
+    SS -->|"update"| Store
+    CS -->|"update"| Store
+    SA -->|"update"| Store
+
+    subgraph FastPath["FAST PATH — síncrono, en cada request"]
         API
         Store
-        Policy
-        Decision
+        PolicyBox
+        DecisionBox
     end
 
-    subgraph AnalyticsPath["ANALYTICS PATH — asíncrono"]
+    subgraph AnalyticsPath["ANALYTICS PATH — asíncrono, en background"]
         Stream
         SS
         CS
         SA
     end
+
+    classDef entrada fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+    classDef detector fill:#ffedd5,stroke:#f97316,color:#7c2d12
+    classDef estado fill:#f1f5f9,stroke:#64748b,color:#334155
+    classDef decision fill:#dcfce7,stroke:#22c55e,color:#14532d
+    classDef banner fill:#fee2e2,stroke:#ef4444,color:#7f1d1d,font-weight:bold
+
+    class Client,CDN,API entrada
+    class SS,CS,SA detector
+    class Store estado
+    class PolicyBox,DecisionBox decision
+    class Banner banner
 ```
+
+Esta es la misma idea que se resume en el README, con más detalle sobre qué
+particiona cada detector y qué es exactamente el Risk State Store.
 
 ## 3. Cada componente
 
