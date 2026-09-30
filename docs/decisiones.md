@@ -599,3 +599,71 @@ Para la caída del Risk State Store en particular, se propone degradación
 controlada (CHALLENGE como default durante la caída, nunca ALLOW ni
 BLOCK, con alerta) en vez de un "default seguro" implícito — el trade-off
 disponibilidad vs. seguridad queda documentado, no escondido.
+
+## Apéndice A. Grillas de candidatos explorados (trazabilidad)
+
+Durante la calibración se corrieron sweeps sobre los escenarios de
+tuning (seeds 101/102/103, ratios 0/10/30%), nunca sobre holdout. Los
+comandos que los ejecutaban (`cmd/sweep*`, `cmd/diagnose*`,
+`cmd/validatelayer`) se retiraron de la entrega para dejar una
+superficie de comandos mínima; esta tabla conserva qué se probó, no los
+resultados intermedios. La configuración final está en
+`internal/wiring` y se mide con `cmd/holdout`.
+
+Valores por defecto originales (`internal/engine/defaults.go`):
+`credential_stuffing` Window=30m, MinDistinctIPs=20,
+MinDistinctAccounts=15, MinAttempts=25, MinFailedRatio=0.60; `slow_scan`
+MaxVisitorsForNovelPath=2, MinNovelPathRatio=0.50; `statistical_anomaly`
+ZSaturation=2.0, TriggerThreshold=0.15, peso de AccountDiversity=1;
+Policy Challenge=0.50 / Block=0.80. Cada candidato parte de esos
+valores y modifica solo lo que se indica.
+
+**`slow_scan`** (el resto igual al baseline)
+
+| Candidato | Parámetros modificados |
+|---|---|
+| S0-baseline | ninguno |
+| S1-maxvisitors-3 | MaxVisitorsForNovelPath=3 |
+| S2-novelratio-035 | MinNovelPathRatio=0.35 |
+| **S3** | MaxVisitorsForNovelPath=3, MinNovelPathRatio=0.35 (elegido) |
+
+**`statistical_anomaly`** (el resto igual al baseline)
+
+| Candidato | Parámetros modificados |
+|---|---|
+| A0-baseline | ninguno |
+| A1-anomaly-z3 | ZSaturation=3 |
+| A2-anomaly-trigger020 | TriggerThreshold=0.20 |
+| **A3-anomaly-account-weight05** | peso de AccountDiversity=0.5 (elegido) |
+| A4-anomaly-z3-account-weight05 | ZSaturation=3, peso de AccountDiversity=0.5 |
+| A5-anomaly-z3-trigger020 | ZSaturation=3, TriggerThreshold=0.20 |
+
+**Combinados** (`credential_stuffing`, ScoreFloor y Policy intactos)
+
+| Candidato | Composición |
+|---|---|
+| C0-baseline | S0 + A0 |
+| C1-slowscan-only | S3 + A0 |
+| **C2-slowscan-account-weight** | S3 + A3 (elegido como base) |
+| C3-slowscan-trigger020 | S3 + A2 |
+
+**`credential_stuffing`** (todos sobre C2 = S3 + A3)
+
+| Candidato | Parámetros modificados |
+|---|---|
+| CS0-baseline | ninguno |
+| CSw1-window90 | Window=90m (control) |
+| **CSw2-window90-ips16** | Window=90m, MinDistinctIPs=16 (elegido) |
+| CSw3-window90-ips16-attempts24 | Window=90m, MinDistinctIPs=16, MinAttempts=24 |
+| CSw4-conservative | Window=90m, MinDistinctIPs=18, MinAttempts=25 |
+
+MinDistinctAccounts y MinFailedRatio no cambiaron en ningún candidato.
+Como diagnóstico previo se midió la sensibilidad a Window con 30m, 60m y
+90m sobre las campañas reales del 10%.
+
+**Validación de la detector layer:** D0 = baseline completo; D1 = S3 +
+A3 + CSw2 (Window=90m, MinDistinctIPs=16), con la Policy por defecto.
+
+**Policy** (detector layer ya congelada en D1, ScoreFloor intacto):
+Challenge ∈ {0.50, 0.55, 0.60} × Block ∈ {0.70, 0.75, 0.80}, 9
+combinaciones. Elegido: Challenge=0.50, Block=0.75.

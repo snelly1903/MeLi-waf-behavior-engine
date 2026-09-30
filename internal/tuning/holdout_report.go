@@ -8,8 +8,7 @@ import (
 
 // DetectorLayerStability resume, para UN candidato/ratio, cuánto
 // varían las métricas centrales entre seeds — Range = max-min,
-// ignorando N/A (mismo criterio que PolicySweepStability, reutilizado
-// acá para el reporte de holdout).
+// ignorando N/A (nunca se tratan como 0).
 type DetectorLayerStability struct {
 	Candidate string
 	Ratio     int
@@ -128,4 +127,20 @@ func RenderHoldoutReport(tuningReport, holdoutReport HoldoutDatasetReport) strin
 	w(renderDetectorLayerSideBySide("Baseline — tuning vs. holdout", tuningReport.Baseline, holdoutReport.Baseline))
 
 	return string(b)
+}
+
+func rangeOf(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	min, max := values[0], values[0]
+	for _, v := range values[1:] {
+		if v < min {
+			min = v
+		}
+		if v > max {
+			max = v
+		}
+	}
+	return max - min
 }

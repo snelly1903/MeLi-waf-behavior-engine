@@ -1,4 +1,4 @@
-.PHONY: test fmt vet data-0 data-10 data-30 data-all eval baseline tune-baseline perf-bench perf-load perf-load-otel perf
+.PHONY: test fmt vet data-0 data-10 data-30 data-all eval baseline tune-baseline holdout run perf-bench perf-load perf-load-otel perf
 
 # Corre todos los tests del módulo con el detector de carreras (race) habilitado.
 test:
@@ -33,6 +33,7 @@ data-all: data-0 data-10 data-30
 SCENARIO ?= data/scenario-0
 OUT ?= reports/$(notdir $(SCENARIO)).md
 eval:
+	mkdir -p $(dir $(OUT))
 	go run ./cmd/eval --scenario $(SCENARIO) --out $(OUT)
 
 # Corre el baseline de rate limiting (internal/baseline) contra el
@@ -45,7 +46,7 @@ eval:
 # explicitly to produce the file cmd/eval expects.
 MODE ?= all
 MAX_REQUESTS ?= 100
-WINDOW ?= 60s
+WINDOW ?= 30m
 BASELINE_OUT ?=
 baseline:
 	go run ./cmd/baseline --scenario $(SCENARIO) --mode $(MODE) --max-requests $(MAX_REQUESTS) --window $(WINDOW) --out "$(BASELINE_OUT)"
@@ -61,6 +62,17 @@ TUNE_RATIOS ?= 0,10,30
 TUNE_OUT ?= reports/tuning/baseline
 tune-baseline:
 	go run ./cmd/tune --seeds $(TUNE_SEEDS) --ratios $(TUNE_RATIOS) --data-dir data/tuning --out $(TUNE_OUT)
+
+# Evaluación final: baseline original vs. configuración final congelada,
+# sobre seeds de holdout (201/202/203) y de tuning. Seeds y configuración
+# fijas en cmd/holdout — escribe reports/holdout/baseline-vs-final.md.
+holdout:
+	go run ./cmd/holdout
+
+# Levanta el servicio HTTP del Behavioral WAF (cmd/engine). Flags extra:
+#   go run ./cmd/engine --help
+run:
+	go run ./cmd/engine
 
 # Performance / load testing. Detector layer, Policy y ScoreFloor son
 # la configuración final congelada — estos targets solo MIDEN, nunca

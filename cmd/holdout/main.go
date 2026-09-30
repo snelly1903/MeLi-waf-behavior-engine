@@ -13,13 +13,12 @@ package main
 import (
 	"log"
 	"os"
-	"time"
 
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/credstuffing"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/datagen"
-	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/engine"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/eval"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/tuning"
+	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/wiring"
 )
 
 var tuningSeeds = []uint64{101, 102, 103}
@@ -36,19 +35,18 @@ func baselineCandidate() tuning.Candidate {
 
 // finalCandidate: FINAL TUNED CONFIG, la configuración congelada
 // completa — credential_stuffing CSw2, slow_scan S3,
-// statistical_anomaly A3, y la Policy aprobada
-// (Challenge=0.50/Block=0.75). ScoreFloor de los tres detectores
-// queda en su default, sin tocar.
+// statistical_anomaly A3 y la Policy aprobada
+// (Challenge=0.50/Block=0.75). Se toma de internal/wiring, la misma
+// fuente que usa cmd/engine: ningún valor se repite acá.
 func finalCandidate() tuning.Candidate {
-	c := tuning.BaselineCandidate()
-	c.Name = "Final-tuned-config"
-	c.SlowScan.MaxVisitorsForNovelPath = 3
-	c.SlowScan.MinNovelPathRatio = 0.35
-	c.Anomaly.Weights.AccountDiversity = 0.5
-	c.CredentialStuffing.Window = 90 * time.Minute
-	c.CredentialStuffing.MinDistinctIPs = 16
-	c.Policy = engine.Policy{ChallengeThreshold: 0.50, BlockThreshold: 0.75}
-	return c
+	cs, ss, an := wiring.FinalConfigs()
+	return tuning.Candidate{
+		Name:               "Final-tuned-config",
+		CredentialStuffing: cs,
+		SlowScan:           ss,
+		Anomaly:            an,
+		Policy:             wiring.FinalPolicy(),
+	}
 }
 
 func buildScenarios(seeds []uint64) map[uint64]map[int]datagen.Scenario {

@@ -157,7 +157,7 @@ func SumMitigationAttribution(items []MitigationAttribution) MitigationAttributi
 // candidato (D0 o D1): filas por seed y ratio, agregadas por ratio
 // (pooled entre los 3 seeds), atribución pooled por ratio, y la
 // distribución de RiskScore pooled sobre TODO el tráfico (los 3
-// seeds, los 3 ratios) — mismo criterio que cmd/diagnose.
+// seeds, los 3 ratios).
 type DetectorLayerCandidateReport struct {
 	Candidate string
 
@@ -289,4 +289,47 @@ func RenderDetectorLayerComparison(reports []DetectorLayerCandidateReport) strin
 		w(renderDetectorLayerSideBySide(fmt.Sprintf("%s vs. %s — resumen lado a lado", reports[0].Candidate, reports[1].Candidate), reports[0], reports[1]))
 	}
 	return string(b)
+}
+
+// credentialStuffingDetectorRecall calcula, sobre diagnostics de UNA
+// corrida, la fracción de eventos etiquetados credential_stuffing
+// cuyo CredentialStuffing.Triggered fue true — el recall
+// request-level del gate PROPIO, sin pasar por Policy ni por la
+// Decision final. Distinto a proposito de eval.ByAttackVectorRecall,
+// que es decision-based.
+func credentialStuffingDetectorRecall(diagnostics []EventDiagnostic) eval.Ratio {
+	var total, triggered int
+	for _, d := range diagnostics {
+		if d.Label != groundtruth.LabelCredentialStuffing {
+			continue
+		}
+		total++
+		if d.CredentialStuffing.Triggered {
+			triggered++
+		}
+	}
+	return ratioOf(triggered, total)
+}
+
+func meanRatio(ratios []eval.Ratio) eval.Ratio {
+	var sum float64
+	var n int
+	for _, r := range ratios {
+		if r.Defined {
+			sum += r.Value
+			n++
+		}
+	}
+	if n == 0 {
+		return eval.Ratio{Defined: false}
+	}
+	return eval.Ratio{Value: sum / float64(n), Defined: true}
+}
+
+func extract[T any](rows []T, f func(T) eval.Ratio) []eval.Ratio {
+	out := make([]eval.Ratio, len(rows))
+	for i, r := range rows {
+		out[i] = f(r)
+	}
+	return out
 }

@@ -11,15 +11,12 @@ import (
 // ScenarioConfig configura un escenario de prueba completo: una
 // combinación de tráfico legítimo y, opcionalmente, los dos ataques, en
 // las proporciones exigidas por el challenge (0%, 10%, 30% de tráfico
-// malicioso). Todos los valores son configurables y ninguno es un
-// umbral de detección — son parámetros de generación de datos de
-// prueba, documentados en docs/decisiones.md.
+// malicioso)
 type ScenarioConfig struct {
 	Seed   uint64
 	Start  time.Time
-	Window time.Duration // duración total simulada del escenario
+	Window time.Duration
 
-	// Composición del tráfico legítimo base.
 	NavegSessions             int
 	APIClientSessions         int
 	HostedTenantSessions      int
@@ -27,26 +24,11 @@ type ScenarioConfig struct {
 	OfficeEmployeesPerCluster int
 	OfficeStartJitter         time.Duration
 
-	// TargetMaliciousRatio es la fracción de eventos maliciosos deseada
-	// (0, 0.10, 0.30...). No se fuerza de forma exacta: se calcula un
-	// volumen de ataque que debería acercarse a este objetivo, se
-	// genera, y el resultado REAL queda en ScenarioStats — ver
-	// docs/decisiones.md para por qué no se fuerza el número exacto.
 	TargetMaliciousRatio float64
 
-	// StuffingShareOfMalicious es el tope de qué fracción del volumen
-	// malicioso objetivo puede aportar como máximo el credential
-	// stuffing — el resto lo cubre el escaneo lento. Refleja que el
-	// stuffing es, por diseño, de bajo volumen: no se infla
-	// artificialmente para "completar" el porcentaje pedido.
 	StuffingShareOfMalicious float64
 
-	// StuffingIPCap / ScanIPCap topan la cantidad de IPs atacantes de
-	// cada ataque, además del límite físico del pool (254 direcciones
-	// para un /24). Los valores por defecto están elegidos para que,
-	// junto con HostedTenantSessions, nunca se pueda superar esa
-	// capacidad física (ver DefaultScenarioConfig).
-	StuffingIPCap int
+	StuffingIPCap int //capacidad de ip, max 254
 	ScanIPCap     int
 
 	StuffingBase    CredentialStuffingCampaign
@@ -55,11 +37,6 @@ type ScenarioConfig struct {
 	ScanStartJitter time.Duration
 }
 
-// DefaultScenarioConfig son los valores acordados para el dataset
-// funcional de prueba del challenge (ver docs/decisiones.md): una
-// población pensada para generarse y evaluarse rápido, no para las
-// pruebas de carga — esas van a reutilizar estos mismos generadores
-// desde una herramienta distinta (k6), más adelante.
 func DefaultScenarioConfig(seed uint64, targetMaliciousRatio float64) ScenarioConfig {
 	return ScenarioConfig{
 		Seed:   seed,
@@ -85,11 +62,6 @@ func DefaultScenarioConfig(seed uint64, targetMaliciousRatio float64) ScenarioCo
 	}
 }
 
-// ScenarioStats resume cómo salió la generación: parámetros, semilla y
-// conteos reales. Se escribe tal cual en manifest.json (ver
-// WriteScenario, en write.go) — no lleva ninguna marca de tiempo real
-// de generación, así el propio manifiesto también es reproducible byte
-// a byte con la misma semilla.
 type ScenarioStats struct {
 	Seed                     uint64  `json:"seed"`
 	TargetMaliciousRatio     float64 `json:"target_malicious_ratio"`
@@ -102,30 +74,11 @@ type ScenarioStats struct {
 	SlowScanScanners         int     `json:"slow_scan_scanners"`
 }
 
-// Scenario es el resultado de BuildScenario: los eventos ya mezclados y
-// ordenados por Timestamp, junto con las estadísticas de la generación.
 type Scenario struct {
 	Events []groundtruth.LabeledEvent
 	Stats  ScenarioStats
 }
 
-// BuildScenario genera un escenario completo: tráfico legítimo
-// (incluido tráfico legítimo que comparte ASN simulado con los
-// atacantes, vía ProfileHostedTenant) y, si
-// cfg.TargetMaliciousRatio > 0, las dos campañas de ataque, con un
-// volumen calculado para acercarse al porcentaje objetivo. El
-// resultado queda ordenado por Timestamp.
-//
-// Las direcciones de ProfileHostedTenant y las de los dos ataques se
-// sortean de forma coordinada (DistinctAddrsExcluding, en ipspace.go)
-// para que sean SIEMPRE disjuntas dentro de un mismo escenario — así
-// ninguna dirección simulada tiene, en este dataset controlado, más de
-// una identidad a la vez. Es una simplificación deliberada para tener
-// un primer escenario limpio de evaluar; queda anotado en
-// docs/decisiones.md que una extensión natural, más adelante, es
-// generar a propósito IPs compartidas entre tráfico legítimo y
-// malicioso — la evaluación siempre se hace por request_id, nunca
-// asumiendo que una IP tiene una única etiqueta.
 func BuildScenario(cfg ScenarioConfig) Scenario {
 	rng := NewRNG(cfg.Seed)
 
@@ -146,9 +99,6 @@ func BuildScenario(cfg ScenarioConfig) Scenario {
 		legit = append(legit, GenerateOfficeCluster(rng, cfg.OfficeEmployeesPerCluster, clusterStart, cfg.OfficeStartJitter)...)
 	}
 
-	// Tenants legítimos sobre el mismo ASN simulado que los atacantes.
-	// Se sortean ahora, antes que las IPs atacantes, para poder
-	// excluirlas de ese sorteo más abajo.
 	tenantIPs := PoolHostingSim.DistinctAddrs(rng, cfg.HostedTenantSessions)
 	for _, ip := range tenantIPs {
 		start := cfg.Start.Add(rng.DurationRange(0, cfg.Window))
@@ -171,12 +121,6 @@ func BuildScenario(cfg ScenarioConfig) Scenario {
 		L := len(legit)
 		mTarget := int(math.Round(float64(L) * cfg.TargetMaliciousRatio / (1 - cfg.TargetMaliciousRatio)))
 
-		// Los dos volúmenes se estiman en paralelo a partir de
-		// promedios esperados (intentos por IP, requests por escáner),
-		// no midiendo el resultado real del stuffing antes de calcular
-		// el escaneo — es más simple, y la diferencia práctica es
-		// chica porque ambos promedios son razonablemente estables con
-		// estas cantidades (ver docs/decisiones.md).
 		avgAttempts := float64(cfg.StuffingBase.MinAttemptsPerIP+cfg.StuffingBase.MaxAttemptsPerIP) / 2
 		stuffBudget := int(math.Round(float64(mTarget) * cfg.StuffingShareOfMalicious))
 		ipCount := clampInt(int(math.Round(float64(stuffBudget)/avgAttempts)), 1, cfg.StuffingIPCap)

@@ -290,7 +290,7 @@ internal/       Paquetes de dominio — cada uno con responsabilidad única
   groundtruth/  Formato del ground truth (aislado del motor)
   eval/         Evaluador genérico (decisions.jsonl vs. ground truth)
   baseline/     Rate limiter tradicional (línea base de comparación)
-  tuning/       Framework de calibración y reportes (sweeps, holdout)
+  tuning/       Evaluación del motor real, reportes y holdout
   loadtest/     Cliente de carga para el load test HTTP
   wiring/       Ensamblado de la configuración final congelada
 docs/           Decisiones técnicas, contrato de eventos, escalado conceptual
@@ -336,9 +336,18 @@ curl localhost:8080/healthz
 # {"status":"ok"}
 
 # 5. Enviar un evento
-curl -X POST localhost:8080/v1/events \
-  -H "Content-Type: application/json" \
-  -d '{"request_id":"r-1","timestamp":"2026-09-29T10:00:00Z","client_ip":"203.0.113.7","method":"GET","path":"/","status_code":200}'
+NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+curl -s --location 'http://localhost:8080/v1/events' \
+  --header 'Content-Type: application/json' \
+  --data "{
+    \"request_id\": \"r-1\",
+    \"timestamp\": \"$NOW\",
+    \"client_ip\": \"203.0.113.7\",
+    \"method\": \"GET\",
+    \"path\": \"/\",
+    \"status_code\": 200
+  }" | jq
 ```
 
 No hace falta generar ningún archivo antes de este paso — `cmd/engine` no
@@ -359,17 +368,24 @@ Request (campos obligatorios: `request_id`, `timestamp`, `client_ip`,
 opcionales y las reglas de validación, en
 [docs/formato-eventos.md](docs/formato-eventos.md)):
 
+El `timestamp` tiene que estar dentro de la tolerancia de pasado del
+validator (un valor fijo viejo se rechaza con `timestamp is older than
+allowed past tolerance`), así que se genera al momento; `client_ip` debe
+ser una dirección pública (las privadas/loopback se rechazan):
+
 ```bash
+NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
 curl -X POST localhost:8080/v1/events \
   -H "Content-Type: application/json" \
-  -d '{
-    "request_id": "r-1",
-    "timestamp": "2026-09-29T10:00:00Z",
-    "client_ip": "203.0.113.7",
-    "method": "GET",
-    "path": "/",
-    "status_code": 200
-  }'
+  -d "{
+    \"request_id\": \"r-1\",
+    \"timestamp\": \"$NOW\",
+    \"client_ip\": \"203.0.113.7\",
+    \"method\": \"GET\",
+    \"path\": \"/\",
+    \"status_code\": 200
+  }"
 ```
 
 Respuesta (verificada contra el servicio real corriendo local):
@@ -386,19 +402,17 @@ Respuesta (verificada contra el servicio real corriendo local):
 }
 ```
 
-**Por qué no hay acá un ejemplo de `CHALLENGE`/`BLOCK` con tres requests
+**Por qué no hay acá un ejemplo de `CHALLENGE`/`BLOCK` con requests
 sueltas**: los tres detectores son conductuales — necesitan historial real
 de una entidad (docenas de requests correlacionadas en el tiempo, muchas
-veces entre varias IPs) para disparar. Tres `curl` aislados nunca van a
+veces entre varias IPs) para disparar. `curl` aislados nunca van a
 reproducir eso de forma representativa. Para ver `CHALLENGE`/`BLOCK` reales:
 
-1. Generá un escenario con tráfico malicioso: `make data-10` (10% malicioso)
+1. Genera un escenario con tráfico malicioso: `make data-10` (10% malicioso)
    o `make data-30` (30%).
 2. Los eventos de `data/scenario-10/events.jsonl` son exactamente lo que el
    motor recibiría, en el orden correcto — se pueden reproducir contra
-   `cmd/engine` uno por uno, o (más directo) usar el pipeline de evaluación
-   de la siguiente sección, que corre el motor real sobre todo el escenario
-   y reporta cuántos terminaron en cada acción.
+   `cmd/engine` uno por uno.
 
 ## Generación de tráfico sintético y ground truth
 
@@ -440,13 +454,13 @@ un reporte Markdown con Precision/Recall/F1/FPR. Hoy, el único productor de
 de comparación, no el motor conductual):
 
 ```bash
-make data-10                                              # si no existe todavía
-make baseline SCENARIO=data/scenario-10 BASELINE_OUT=data/scenario-10/decisions.jsonl
-make eval SCENARIO=data/scenario-10 OUT=reports/scenario-10.md
+make data-30                                              # si no existe todavía
+make baseline SCENARIO=data/scenario-30 BASELINE_OUT=data/scenario-30/decisions.jsonl
+make eval SCENARIO=data/scenario-30 OUT=reports/scenario-30.md
 ```
 
-**2. Evaluación del motor conductual real (`cmd/tune`, `cmd/holdout`, y el
-resto de las herramientas de calibración)**. Estas corren
+**2. Evaluación del motor conductual real (`cmd/holdout`, y `cmd/tune` para
+la línea base previa a la calibración)**. Estas corren
 `BehavioralDecider` de verdad sobre sus propios escenarios generados en
 memoria y calculan las métricas directamente (sin pasar por
 `decisions.jsonl`) — este es el camino que produjo los
@@ -455,34 +469,47 @@ siguiente sección.
 
 ## Reproducibilidad: herramientas disponibles
 
-Las 18 herramientas de `cmd/` agrupadas por propósito. Todas soportan
-`--help` para ver sus flags — excepto el grupo de calibración/diagnóstico/
-validación (filas marcadas *sin flags*), que corren siempre con las
-semillas y escenarios ya fijados en el código de cada una (así quedaron
-congeladas junto con la configuración que produjeron):
+Las 7 herramientas de `cmd/`, en el orden en que un evaluador las usaría.
+`cmd/engine`, `cmd/datagen`, `cmd/baseline`, `cmd/eval` y `cmd/loadtest`
+aceptan `--help`; `cmd/tune` y `cmd/holdout` corren siempre con las semillas
+y escenarios ya fijados en su código (así quedaron congelados junto con la
+configuración que produjeron):
 
-| Grupo | Herramientas | Qué hacen |
-|---|---|---|
-| **Runtime** | `cmd/engine` | El servicio HTTP real (`--help` para ver todos los flags) |
-| **Generación de datos** | `cmd/datagen` | Genera un escenario sintético con ground truth |
-| **Evaluación genérica** | `cmd/eval`, `cmd/baseline` | Comparan `decisions.jsonl` vs. ground truth; `cmd/baseline` corre el rate limiter tradicional |
-| **Calibración** *(sin flags)* | `cmd/tune`, `cmd/sweep`, `cmd/sweepcombined`, `cmd/sweepcs`, `cmd/sweeppolicy` | Corren el motor real sobre los escenarios de tuning (seeds 101/102/103) para explorar/comparar configuraciones — el rastro completo de cómo se llegó a CSw2/S3/A3/Policy 0.50-0.75 |
-| **Diagnóstico** *(sin flags)* | `cmd/diagnose`, `cmd/diagnosecs`, `cmd/diagnosecswindow` | Pasadas offline puntuales para explicar un resultado concreto antes de calibrar |
-| **Validación** *(sin flags)* | `cmd/validatelayer`, `cmd/holdout` | Comparación final baseline-vs-tuned; `cmd/holdout` es la corrida única e irrepetible sobre seeds 201/202/203 |
-| **Performance** | `cmd/loadtest` | Microbenchmark + load test HTTP (`--help` para ver todos los flags) |
+Flujo recomendado para un evaluador:
 
-Todas escriben sus reportes bajo `reports/` (Markdown, y algunas también
+```bash
+make test                                                  # tests con -race
+make data-all                                              # datagen: escenarios 0/10/30%
+make baseline SCENARIO=data/scenario-30 BASELINE_OUT=data/scenario-30/decisions.jsonl
+make eval SCENARIO=data/scenario-30                        # baseline vs. ground truth
+make holdout                                               # motor conductual final, seeds 201/202/203
+make perf                                                  # performance
+make run                                                   # servicio HTTP
+```
+
+| Paso | Herramienta | Qué hace | Comando |
+|---|---|---|---|
+| Datos | `cmd/datagen` | Genera escenarios sintéticos (0%, 10%, 30%) con `events.jsonl`, `labels.jsonl` y `manifest.json` | `make data-all` |
+| Baseline de rate limiting | `cmd/baseline` | Rate limiter tradicional por IP, para mostrar sus límites frente a credential stuffing distribuido y slow scan | `make baseline` |
+| Evaluación genérica | `cmd/eval` | Compara cualquier `decisions.jsonl` contra el ground truth (TP/FP/TN/FN, precision, recall, FPR) | `make eval` |
+| Línea base conductual *(secundaria)* | `cmd/tune` | Corre el motor con los defaults originales (previos a la calibración) sobre los escenarios de tuning (seeds 101/102/103). No calibra ni elige candidatos | `make tune-baseline` |
+| Evaluación final | `cmd/holdout` | Baseline original vs. configuración final congelada, sobre seeds separadas (201/202/203) y sobre tuning | `make holdout` |
+| Performance | `cmd/loadtest` | Microbenchmark + load test HTTP | `make perf` |
+| Runtime | `cmd/engine` | El servicio HTTP del Behavioral WAF | `make run` |
+
+Los reportes se escriben bajo `reports/` (Markdown, y algunos también
 CSV/JSON) — carpeta en `.gitignore`: **se regenera corriendo estas
 herramientas, nunca se versiona**. Los resultados finales que importan ya
 están resumidos en este README (sección
 [Resultados finales](#resultados-finales)) y en
 [docs/decisiones.md](docs/decisiones.md), así que no hace falta correr nada
-para leerlos.
+para leerlos. Las grillas de candidatos que se exploraron durante la
+calibración están en el Apéndice A de `docs/decisiones.md`.
 
-`cmd/holdout` corrió **una única vez**, después de que toda la
-configuración quedó congelada — no es parte del inicio rápido ni algo para
-volver a correr esperando un resultado distinto: sus números son
-históricos. Re-ejecutarlo no cambia ni debería cambiar ningún threshold.
+`cmd/holdout` usa semillas fijas y se corrió por primera vez una vez que
+toda la configuración quedó congelada: es determinista, así que volver a
+correrlo reproduce el mismo reporte. No se usa para ajustar thresholds —
+ninguno cambió ni debe cambiar en función de sus resultados.
 
 ## Observabilidad
 
@@ -696,6 +723,7 @@ go vet ./...
 gofmt -l .                   # debe no imprimir nada
 
 # Motor
+make run                     # go run ./cmd/engine
 go run ./cmd/engine --addr :8080
 go run ./cmd/engine --help   # ver todos los flags (ASN, OTel, thresholds)
 
@@ -706,9 +734,9 @@ make data-all                # los 3 escenarios: 0%, 10%, 30%
 make baseline SCENARIO=data/scenario-10 BASELINE_OUT=data/scenario-10/decisions.jsonl
 make eval SCENARIO=data/scenario-10
 
-# Calibración / diagnóstico / validación del motor real (sin flags)
-go run ./cmd/tune
-go run ./cmd/holdout
+# Evaluación del motor real (sin flags)
+make holdout                 # baseline original vs. configuración final (seeds 201/202/203)
+make tune-baseline           # opcional: línea base conductual previa a la calibración
 
 # Performance
 make perf-bench              # microbenchmark de Decide()

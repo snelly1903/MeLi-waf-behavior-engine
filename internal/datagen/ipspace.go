@@ -13,25 +13,6 @@ import (
 // por accidente con el ASN de un proveedor real.
 type SimulatedASN uint32
 
-// IPPool es un conjunto de direcciones IP simuladas que representan una
-// misma red, identificada por un ASN simulado. Todas las direcciones de
-// todo IPPool definido en este archivo salen de bloques reservados para
-// documentación por la IANA (RFC 5737: 192.0.2.0/24, 198.51.100.0/24 y
-// 203.0.113.0/24) — ninguna es una dirección pública real ni pertenece
-// a ningún proveedor de verdad. Se verificó (ver docs/decisiones.md)
-// que ninguno de estos tres bloques activa las reglas de "IP privada"
-// del Validator, así que no hizo falta modificarlo. El enriquecimiento
-// real de IP se integra más adelante mediante un adaptador
-// independiente que esta simulación no necesita conocer.
-//
-// Nota de alcance: RandomAddr y DistinctAddrs asumen que Prefix es
-// exactamente un /24 IPv4 (254 direcciones utilizables, .1 a .254) — es
-// lo único que necesita este generador (la campaña de credential
-// stuffing usa 150 de esas 254). Si más adelante hiciera falta más
-// espacio de direcciones, el candidato natural es el rango
-// 198.18.0.0/15, reservado por el RFC 2544 para benchmarking, que da
-// lugar a muchas más direcciones y tampoco activa las reglas de "IP
-// privada".
 type IPPool struct {
 	Name   string
 	ASN    SimulatedASN
@@ -40,21 +21,14 @@ type IPPool struct {
 
 var (
 	// PoolHostingSim simula una red "tipo hosting": poca diversidad de
-	// usuarios reales detrás de ella. La usa el generador de ataques;
-	// se define acá junto con las otras dos redes simuladas para que
-	// queden documentadas en un solo lugar.
+	// usuarios reales detrás de ella.
 	PoolHostingSim = IPPool{Name: "hosting-sim", ASN: 64512, Prefix: netip.MustParsePrefix("192.0.2.0/24")}
 
-	// PoolResidentialSimA y PoolResidentialSimB simulan dos redes "tipo
-	// residencial" distintas, usadas por el tráfico legítimo.
+	// dos redes "tipo residencial" distintas, usadas por el tráfico legítimo.
 	PoolResidentialSimA = IPPool{Name: "residential-sim-a", ASN: 64513, Prefix: netip.MustParsePrefix("198.51.100.0/24")}
 	PoolResidentialSimB = IPPool{Name: "residential-sim-b", ASN: 64514, Prefix: netip.MustParsePrefix("203.0.113.0/24")}
 )
 
-// RandomAddr sortea una dirección dentro del pool usando rng, evitando
-// los dos extremos del bloque (.0 y .255) por prolijidad — el Validator
-// de todas formas las aceptaría, pero no representan la IP de un
-// cliente real en ningún esquema de direccionamiento habitual.
 func (p IPPool) RandomAddr(rng *RNG) netip.Addr {
 	last := rng.IntRange(1, 254)
 	octets := p.Prefix.Addr().As4()
@@ -62,21 +36,8 @@ func (p IPPool) RandomAddr(rng *RNG) netip.Addr {
 	return netip.AddrFrom4(octets)
 }
 
-// poolCapacity es cuántas direcciones utilizables tiene un /24 (los
-// octetos .1 a .254; ver la nota de alcance más arriba).
 const poolCapacity = 254
 
-// DistinctAddrs sortea n direcciones DISTINTAS dentro del pool, sin
-// reemplazo — necesario para el credential stuffing distribuido, donde
-// cada IP atacante tiene que ser única. Mezcla el espacio de
-// direcciones utilizables (Fisher-Yates) y toma las primeras n, así la
-// selección es uniforme y sin un orden artificial (no son "las
-// primeras n direcciones del bloque").
-//
-// Entra en pánico si n supera la capacidad del pool: pedir más IPs
-// distintas de las que el bloque puede dar es un error de configuración
-// de la campaña que se generó, no algo a resolver en tiempo de
-// ejecución.
 func (p IPPool) DistinctAddrs(rng *RNG, n int) []netip.Addr {
 	if n > poolCapacity {
 		panic(fmt.Sprintf("datagen: DistinctAddrs requested %d addresses from pool %q, which only has %d", n, p.Name, poolCapacity))

@@ -13,73 +13,33 @@ import (
 // DefaultSlowScanProfile son un punto de partida razonable para el
 // dataset de prueba del challenge — NO son umbrales de detección.
 type SlowScanProfile struct {
-	// Pool es la red simulada de la que salen las IPs escaneadoras.
 	Pool IPPool
 
-	// MinRequests / MaxRequests acota cuántos requests hace una sesión
-	// de escaneo.
 	MinRequests, MaxRequests int
 
 	// MinGap / MaxGap acota el tiempo entre un request y el siguiente —
-	// deliberadamente largo, para representar delays aleatorios, no una
-	// ráfaga.
 	MinGap, MaxGap time.Duration
 
-	// SensitivePaths es el vocabulario "tipo wordlist" del que sale la
-	// mayoría de las rutas pedidas — rutas que ningún perfil legítimo
-	// visita jamás (ver paths.go y paths_test.go).
 	SensitivePaths []string
 
-	// ValidPaths es un pequeño subconjunto de rutas REALES de la
-	// aplicación (tomadas de los perfiles legítimos) que el escáner
-	// visita con probabilidad ValidPathProbability, en lugar de una
-	// ruta del wordlist — así el escáner no es "100% rutas
-	// desconocidas", que sería una señal artificialmente fácil.
 	ValidPaths []string
 
-	// ValidPathProbability es la probabilidad de que un request del
-	// escáner apunte a una ruta real en vez de una sensible.
 	ValidPathProbability float64
 
-	// FuzzParams son los nombres de parámetro (nunca valores — ver
-	// docs/formato-eventos.md) que se agregan a algunos requests contra
-	// rutas válidas.
 	FuzzParams []string
 
-	// FuzzParamProbability es la probabilidad de que un request contra
-	// una ruta válida lleve parámetros fuzzeados.
 	FuzzParamProbability float64
 
-	// UserAgents es el pool de User-Agent que rota entre requests —
-	// mezclado a propósito (alguno se hace pasar por navegador, otros
-	// claramente son herramientas de script).
 	UserAgents []string
 
-	// Methods son los métodos HTTP posibles cuando se activa la
-	// diversidad de métodos (ver MethodDiversityProbability); casi
-	// siempre el método es GET.
 	Methods                    []string
 	MethodDiversityProbability float64
 
-	// IPs, si no es nil, reemplaza el sorteo interno de direcciones que
-	// hace GenerateSlowScanCampaign (Pool.DistinctAddrs) — usa
-	// exactamente estas IPs, una por escáner, en lugar de sortearlas.
-	// GenerateSlowScanSession, en cambio, ya recibe su IP explícita por
-	// parámetro y nunca lee este campo. Cumple el mismo propósito que
-	// el campo homónimo de CredentialStuffingCampaign: que el
-	// mezclador de escenarios pueda coordinar de antemano direcciones
-	// disjuntas entre generadores. Si es nil, se sortean del Pool.
 	IPs []netip.Addr
 }
 
-// DefaultValidScanPaths reutiliza las rutas reales de ProfileNavegante,
-// más el login, para que el escáner a veces "pise" rutas legítimas de
-// la misma aplicación que navegan los usuarios reales, en lugar de un
-// catálogo de rutas válidas inventado aparte.
 var DefaultValidScanPaths = append([]string{DefaultLoginPath}, ProfileNavegante.Paths...)
 
-// DefaultSlowScanProfile son los valores acordados para el dataset de
-// prueba del challenge (ver docs/decisiones.md).
 var DefaultSlowScanProfile = SlowScanProfile{
 	Pool:                 PoolHostingSim,
 	MinRequests:          20,
@@ -92,7 +52,7 @@ var DefaultSlowScanProfile = SlowScanProfile{
 	FuzzParams:           FuzzParams,
 	FuzzParamProbability: 0.20,
 	UserAgents: []string{
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", // se hace pasar por navegador
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 		"python-requests/2.31.0",
 		"Go-http-client/1.1",
 		"Mozilla/5.0 (compatible; scanner/1.0)",
@@ -101,12 +61,6 @@ var DefaultSlowScanProfile = SlowScanProfile{
 	MethodDiversityProbability: 0.08,
 }
 
-// GenerateSlowScanSession genera la secuencia de eventos de un único
-// escáner, empezando en start, reutilizando el mismo patrón de sesión
-// continua con event.ManualClock que GenerateLegitSession: acá sí hace
-// falta un reloj que avance paso a paso, porque, a diferencia del
-// credential stuffing, esto es una única entidad explorando de forma
-// continua a lo largo del tiempo, no sondas aisladas.
 func GenerateSlowScanSession(rng *RNG, profile SlowScanProfile, start time.Time, clientIP netip.Addr) []groundtruth.LabeledEvent {
 	clock := event.NewManualClock(start)
 	requestCount := rng.IntRange(profile.MinRequests, profile.MaxRequests)
@@ -154,12 +108,6 @@ func GenerateSlowScanSession(rng *RNG, profile SlowScanProfile, start time.Time,
 	return events
 }
 
-// GenerateSlowScanCampaign genera scanners escáneres independientes
-// (IPs distintas, sin correlación entre sí — a diferencia del
-// credential stuffing, la señal del escaneo lento es por entidad
-// individual, no agregada entre IPs), cada uno con su propio horario de
-// inicio dentro de startJitter respecto de campaignStart. El resultado
-// queda ordenado por Timestamp.
 func GenerateSlowScanCampaign(rng *RNG, profile SlowScanProfile, scanners int, campaignStart time.Time, startJitter time.Duration) []groundtruth.LabeledEvent {
 	ips := profile.IPs
 	if ips == nil {

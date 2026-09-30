@@ -76,3 +76,35 @@ func TestSumMitigationAttribution_SumsIntFieldsAcrossSeeds(t *testing.T) {
 		t.Errorf("sum = %+v, want %+v", sum, want)
 	}
 }
+
+func csDiagWithTrigger(triggered bool) EventDiagnostic {
+	return EventDiagnostic{
+		Label:              groundtruth.LabelCredentialStuffing,
+		CredentialStuffing: finding.Finding{Triggered: triggered},
+	}
+}
+
+// TestCredentialStuffingDetectorRecall_RequestLevel_NeverUsesDecision
+// confirma que la métrica es puramente request-level sobre
+// CredentialStuffing.Triggered — nunca sobre la Decision final
+// (acá ni siquiera se rellena Decision, y el resultado tiene que ser
+// el mismo igual).
+func TestCredentialStuffingDetectorRecall_RequestLevel_NeverUsesDecision(t *testing.T) {
+	diagnostics := []EventDiagnostic{
+		csDiagWithTrigger(true),
+		csDiagWithTrigger(true),
+		csDiagWithTrigger(false),
+		{Label: groundtruth.LabelLegit, CredentialStuffing: finding.Finding{Triggered: true}}, // no cuenta: no es CS
+	}
+	got := credentialStuffingDetectorRecall(diagnostics)
+	if !got.Defined || got.Value != 2.0/3.0 {
+		t.Errorf("credentialStuffingDetectorRecall = %+v, want {0.667, true} (2 de 3 eventos CS con gate disparado)", got)
+	}
+}
+
+func TestCredentialStuffingDetectorRecall_NoCSEvents_Undefined(t *testing.T) {
+	got := credentialStuffingDetectorRecall([]EventDiagnostic{{Label: groundtruth.LabelLegit}})
+	if got.Defined {
+		t.Errorf("Defined = true, want false (0 eventos CS, división por cero evitada)")
+	}
+}

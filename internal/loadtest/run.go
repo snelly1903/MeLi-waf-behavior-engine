@@ -29,7 +29,7 @@ import (
 // internal/engine/decide_bench_test.go (no se puede importar un
 // paquete de test externo desde acá) — mismo criterio ya usado en el
 // proyecto para constantes compartidas entre binarios/paquetes de
-// test independientes (ver cmd/diagnosecs).
+// test independientes.
 const PerfSeed uint64 = 901
 
 // DefaultMaxIdleConnsPerHost es el mínimo recomendado para

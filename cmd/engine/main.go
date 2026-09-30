@@ -1,17 +1,5 @@
 // Command engine levanta el servicio HTTP de ingestión y decisión.
-// POST /v1/events usa engine.BehavioralDecider, que combina
-// internal/credstuffing, internal/slowscan e internal/anomaly detrás
-// de una Policy configurable. El resolver de ASN de credential
-// stuffing es configurable vía --asn-provider: "none" (default
-// seguro, credstuffing.UnavailableNetworkResolver) o "ripestat"
-// (internal/asn, un enriquecimiento real). El proceso puede exportar
-// métricas por OpenTelemetry (OTLP/gRPC) hacia un Collector, vía
-// --otel-endpoint -- "fail-open" por diseño: si el Collector no
-// responde al arrancar, el motor cae a instrumentación no-op y sirve
-// tráfico igual. La construcción del stack (detectores +
-// BehavioralDecider + httpapi.Server) vive en internal/wiring, para
-// que cmd/loadtest y los microbenchmarks de internal/engine la
-// reutilicen sin duplicar configuración. Ver docs/decisiones.md.
+// POST /v1/events usa engine.BehavioralDecider
 package main
 
 import (
@@ -32,11 +20,6 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8080", "dirección donde escuchar (host:puerto)")
-	// wiring.FinalPolicy() (Challenge=0.50/Block=0.75) — la Policy
-	// congelada tras el holdout, nunca engine.DefaultPolicy()
-	// (0.50/0.80, sin calibrar): cmd/engine y cmd/loadtest tienen que
-	// servir/medir exactamente la misma configuración. Los flags
-	// siguen permitiendo overridear en runtime si hiciera falta.
 	finalPolicy := wiring.FinalPolicy()
 	challengeThreshold := flag.Float64("challenge-threshold", finalPolicy.ChallengeThreshold, "score mínimo (RiskScore) para CHALLENGE")
 	blockThreshold := flag.Float64("block-threshold", finalPolicy.BlockThreshold, "score mínimo (RiskScore) para BLOCK")
@@ -69,9 +52,6 @@ func main() {
 		log.Fatalf("engine: %v", err)
 	}
 
-	// otelhttp envuelve el *http.ServeMux con la métrica HTTP estándar
-	// de OpenTelemetry (http.server.request.duration) — recorders.Provider
-	// se pasa explícito, en vez de depender del MeterProvider global.
 	handler := otelhttp.NewHandler(server.Routes(), "waf-engine", otelhttp.WithMeterProvider(recorders.Provider))
 	httpServer := &http.Server{Addr: *addr, Handler: handler}
 

@@ -9,78 +9,34 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// LegitProfile describe cómo se comporta un tipo de usuario legítimo.
-// Los tres perfiles predefinidos más abajo (ProfileNavegante,
-// ProfileAPIClient, ProfileOffice) son instancias de este mismo struct
-// con valores distintos — no hay una implementación de código separada
-// por perfil, para no repetir tres veces la misma lógica de
-// generación.
 type LegitProfile struct {
-	// Name identifica el perfil en los tests y en los reportes.
 	Name string
 
-	// Pool es de dónde sale la IP del usuario cuando quien llama a
-	// GenerateLegitSession le pide a este pool una dirección nueva.
 	Pool IPPool
 
-	// UserAgents es el conjunto de User-Agent posibles para una sesión
-	// de este perfil. Se elige uno solo al empezar la sesión y se
-	// mantiene fijo durante toda ella — a diferencia de un atacante, un
-	// usuario real no rota de navegador a mitad de sesión.
 	UserAgents []string
 
-	// HasSession indica si el usuario manda session_id.
 	HasSession bool
 
-	// SendsReferer indica si el usuario manda el header Referer al
-	// navegar entre páginas.
 	SendsReferer bool
 
-	// FetchesStaticAssets indica si, además de las páginas, el usuario
-	// pide recursos estáticos (CSS, JS, imágenes) — algo que hace un
-	// navegador real y normalmente no hace un cliente de API.
 	FetchesStaticAssets bool
 
-	// Paths son las páginas que este perfil navega. StaticAssets, si no
-	// está vacío, son los recursos estáticos que pide después de cada
-	// página (solo si FetchesStaticAssets es true).
 	Paths        []string
 	StaticAssets []string
 
-	// LoginPath, si no es "", es la ruta de login que este perfil
-	// visita ocasionalmente (ver LoginRetryProbability).
 	LoginPath string
 
-	// LoginRetryProbability es la probabilidad de que la sesión incluya
-	// un intento de login fallido (401) seguido de un reintento
-	// exitoso con la MISMA cuenta — un typo humano, no un ataque. La
-	// diferencia clave con el credential stuffing es exactamente esa:
-	// acá se reintenta la misma cuenta; en el ataque, cada intento
-	// prueba una cuenta distinta.
 	LoginRetryProbability float64
 
-	// BrokenLinkProbability es la probabilidad de que una visita a una
-	// página cualquiera devuelva 404 en lugar de 200 — un link roto
-	// legítimo. Es a propósito uno de los "casos difíciles" que pediste
-	// cubrir: un ratio de 404 mayor a cero en tráfico legítimo es lo
-	// que impide que la regla del detector de escaneo lento sea
-	// simplemente "cualquier 404 es sospechoso".
 	BrokenLinkProbability float64
 
-	// MinRequests / MaxRequests acota cuántas páginas visita una sesión
-	// de este perfil (sin contar los assets estáticos ni el login).
 	MinRequests, MaxRequests int
 
-	// MinGap / MaxGap acota el tiempo entre el fin de un request y el
-	// comienzo del siguiente.
 	MinGap, MaxGap time.Duration
 }
 
 var (
-	// ProfileNavegante es el caso "normal": navega con referer, pide
-	// assets estáticos, tiene sesión, y a veces se equivoca de
-	// contraseña y reintenta con la misma cuenta, o llega a un link
-	// roto.
 	ProfileNavegante = LegitProfile{
 		Name: "navegante",
 		Pool: PoolResidentialSimA,
@@ -102,10 +58,6 @@ var (
 		MaxGap:                40 * time.Second,
 	}
 
-	// ProfileAPIClient es la "trampa" del escaneo lento: nunca manda
-	// referer ni pide assets estáticos — lo mismo que haría un bot de
-	// fuzzing — pero es tráfico completamente legítimo de una app móvil
-	// o de un cliente de API.
 	ProfileAPIClient = LegitProfile{
 		Name: "api_client",
 		Pool: PoolResidentialSimB,
@@ -126,15 +78,6 @@ var (
 		MaxGap:                5 * time.Second,
 	}
 
-	// ProfileHostedTenant es tráfico legítimo que comparte la misma red
-	// simulada (el ASN "tipo hosting") que usan los dos ataques —
-	// piensa en una pyme que aloja su propia API en el mismo proveedor
-	// de hosting que un atacante usa para lanzar sus campañas. Mismo
-	// comportamiento que ProfileAPIClient (se construye a partir de él,
-	// así que hereda cualquier ajuste futuro), cambiando solo el pool
-	// de IP. Existe para que "esta IP pertenece al ASN de hosting"
-	// nunca sea, por sí sola, una señal suficiente — se usa al mezclar
-	// tráfico legítimo y malicioso dentro del mismo ASN simulado.
 	ProfileHostedTenant = func() LegitProfile {
 		p := ProfileAPIClient
 		p.Name = "hosted_tenant"
@@ -142,12 +85,6 @@ var (
 		return p
 	}()
 
-	// ProfileOffice es la "trampa" de cualquier regla ingenua basada
-	// solo en volumen por IP: varios empleados navegan normalmente,
-	// cada uno con su propia sesión, pero todos salen a Internet por la
-	// misma IP (un NAT corporativo). Este struct describe el
-	// comportamiento de un único empleado; GenerateOfficeCluster es
-	// quien arma el agrupamiento completo.
 	ProfileOffice = LegitProfile{
 		Name: "office_employee",
 		Pool: PoolResidentialSimA,
@@ -170,24 +107,6 @@ var (
 	}
 )
 
-// GenerateLegitSession genera la secuencia de eventos de una sesión de
-// un usuario legítimo según profile, empezando en start. clientIP es
-// explícito (esta función no lo sortea) para que quien la llame decida
-// si cada sesión tiene su propia IP o si varias sesiones comparten
-// una — ese es exactamente el mecanismo que usa GenerateOfficeCluster.
-//
-// Coherencia de tiempo al mezclar sesiones: esta función usa un
-// event.ManualClock propio e interno que solo avanza hacia adelante
-// dentro de esta sesión — no hace falta esperar tiempo real, y no se
-// crea un tipo de reloj nuevo (se reutiliza el existente). Los eventos
-// de una misma sesión quedan en orden por construcción. Al mezclar
-// muchas sesiones —de distintos perfiles y con distintos horarios de
-// inicio— en un único dataset, la forma correcta de lograr que el
-// archivo final quede coherente en el tiempo es generar cada sesión
-// por separado (con su propio start) y después ordenar todos los
-// eventos por Timestamp al juntarlos, en vez de compartir un único
-// reloj entre sesiones. GenerateOfficeCluster, más abajo, ya hace ese
-// ordenamiento para las sesiones que junta.
 func GenerateLegitSession(rng *RNG, profile LegitProfile, start time.Time, clientIP netip.Addr) []groundtruth.LabeledEvent {
 	clock := event.NewManualClock(start)
 	userAgent := Pick(rng, profile.UserAgents)
@@ -218,9 +137,6 @@ func GenerateLegitSession(rng *RNG, profile LegitProfile, start time.Time, clien
 		clock.Advance(rng.DurationRange(profile.MinGap, profile.MaxGap))
 	}
 
-	// Intento de login ocasional, con la MISMA cuenta en el reintento —
-	// a diferencia del credential stuffing, que prueba una cuenta
-	// distinta en cada intento.
 	if profile.LoginPath != "" && rng.Bool(profile.LoginRetryProbability) {
 		accountHash := rng.HexHash(64)
 		emit("POST", profile.LoginPath, 401, lastPath, accountHash)
@@ -256,14 +172,6 @@ func GenerateLegitSession(rng *RNG, profile LegitProfile, start time.Time, clien
 	return events
 }
 
-// GenerateOfficeCluster genera employees sesiones de ProfileOffice que
-// comparten una única IP (sorteada una sola vez), simulando un NAT
-// corporativo. Cada empleado tiene su propia sesión (su propio
-// session_id) y su propio horario de inicio dentro de una ventana de
-// startJitter respecto de clusterStart. El resultado queda ordenado por
-// Timestamp antes de devolverse — es, en sí misma, una mezcla de varias
-// sesiones, así que aplica acá el mismo principio de ordenar al final
-// documentado más arriba.
 func GenerateOfficeCluster(rng *RNG, employees int, clusterStart time.Time, startJitter time.Duration) []groundtruth.LabeledEvent {
 	sharedIP := ProfileOffice.Pool.RandomAddr(rng)
 
