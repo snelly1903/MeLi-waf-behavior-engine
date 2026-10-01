@@ -18,15 +18,16 @@ estadístico de anomalías, combinados en una única decisión `ALLOW` /
 7. [Requisitos](#requisitos)
 8. [Inicio rápido](#inicio-rápido)
 9. [API HTTP](#api-http)
-10. [Generación de tráfico sintético y ground truth](#generación-de-tráfico-sintético-y-ground-truth)
-11. [Evaluación y métricas](#evaluación-y-métricas)
-12. [Reproducibilidad: herramientas disponibles](#reproducibilidad-herramientas-disponibles)
-13. [Observabilidad](#observabilidad)
-14. [Performance](#performance)
-15. [Resultados finales](#resultados-finales)
-16. [Limitaciones conocidas](#limitaciones-conocidas)
-17. [Escalado conceptual a 1.000 millones de requests/hora](#escalado-conceptual-a-1000-millones-de-requestshora)
-18. [Comandos útiles](#comandos-útiles)
+10. [Demo local reproducible con curl](#demo-local-reproducible-con-curl)
+11. [Generación de tráfico sintético y ground truth](#generación-de-tráfico-sintético-y-ground-truth)
+12. [Evaluación y métricas](#evaluación-y-métricas)
+13. [Reproducibilidad: herramientas disponibles](#reproducibilidad-herramientas-disponibles)
+14. [Observabilidad](#observabilidad)
+15. [Performance](#performance)
+16. [Resultados finales](#resultados-finales)
+17. [Limitaciones conocidas](#limitaciones-conocidas)
+18. [Escalado conceptual a 1.000 millones de requests/hora](#escalado-conceptual-a-1000-millones-de-requestshora)
+19. [Comandos útiles](#comandos-útiles)
 
 ## El problema que resuelve
 
@@ -420,17 +421,150 @@ Respuesta (verificada contra el servicio real corriendo local):
 }
 ```
 
-**Por qué no hay acá un ejemplo de `CHALLENGE`/`BLOCK` con requests
-sueltas**: los tres detectores son conductuales — necesitan historial real
-de una entidad (docenas de requests correlacionadas en el tiempo, muchas
-veces entre varias IPs) para disparar. `curl` aislados nunca van a
-reproducir eso de forma representativa. Para ver `CHALLENGE`/`BLOCK` reales:
+## Demo local reproducible con curl
 
-1. Genera un escenario con tráfico malicioso: `make data-10` (10% malicioso)
-   o `make data-30` (30%).
-2. Los eventos de `data/scenario-10/events.jsonl` son exactamente lo que el
-   motor recibiría, en el orden correcto — se pueden reproducir contra
-   `cmd/engine` uno por uno.
+Cuatro escenarios contra el motor real (`go run ./cmd/engine`), usando solo
+la terminal y `curl`: un request normal (`ALLOW`), un escaneo lento, una
+anomalía estadística y credential stuffing distribuido.
+Los scripts funcionan pegados en `zsh` (macOS) o en `bash`.
+
+### Paso 0 — Arranque limpio
+
+```bash
+go run ./cmd/engine
+```
+
+Log de arranque real:
+
+```text
+engine: escuchando en :8080 (POST /v1/events, GET /healthz) — decider=BehavioralDecider (credential_stuffing+slow_scan+statistical_anomaly; asn-provider=none; challenge=0.50 block=0.75; otel-endpoint="")
+```
+
+| Parámetro | Valor por defecto | Flag |
+|---|---|---|
+| Puerto | `:8080` | `--addr` |
+| Endpoints | `POST /v1/events`, `GET /healthz` | — |
+| Proveedor de ASN | `none` (sin tráfico de salida; credential stuffing queda inerte) | `--asn-provider ripestat` |
+| OpenTelemetry | deshabilitado (no exporta nada) | `--otel-endpoint host:4317` |
+| `ChallengeThreshold` | `0.50` (`wiring.FinalPolicy()`) | `--challenge-threshold` |
+| `BlockThreshold` | `0.75` (`wiring.FinalPolicy()`) | `--block-threshold` |
+
+**Reiniciar el motor entre escenarios** (Ctrl+C y volver a ejecutar
+`go run ./cmd/engine`). Los detectores son stateful: acumulan el
+comportamiento de cada IP, sesión y ASN dentro de su ventana temporal, y
+`statistical_anomaly` mantiene un baseline global. Ese estado vive solo en
+memoria, así que reiniciar es la forma de empezar cada escenario desde cero.
+Los conteos de esta sección suponen un motor recién iniciado.
+
+Reglas del validator que los comandos ya respetan:
+
+- `timestamp` se genera al momento con `date -u`: el validator acepta hasta
+  5 minutos en el pasado y 1 minuto en el futuro.
+- `client_ip` debe ser pública (se rechazan privadas, loopback, unspecified
+  y link-local). Se usan rangos de documentación (RFC 5737) y, para
+  credential stuffing, IPs públicas reales.
+- `login_user_hash`, si se envía, debe ser hexadecimal en minúsculas de 32 a
+  128 caracteres (`printf 'c%063x' N` genera uno de 64).
+- `request_id` es único en cada corrida (lleva `date +%s`).
+
+Health check:
+
+```bash
+curl -s localhost:8080/healthz
+```
+
+```json
+{"status":"ok"}
+```
+
+### Paso 1 — Un request normal: `ALLOW`
+
+```bash
+NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+curl -s -X POST localhost:8080/v1/events \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"request_id\": \"demo-allow-$(date +%s)\",
+    \"timestamp\": \"$NOW\",
+    \"client_ip\": \"203.0.113.7\",
+    \"method\": \"GET\",
+    \"path\": \"/\",
+    \"status_code\": 200
+  }"
+```
+
+### Paso 2 — Slow Scan: de `ALLOW` a `BLOCK`
+
+Motor recién iniciado. Una misma IP (`198.51.100.23`) recorre 20 rutas
+distintas — 17 rutas sensibles que no existen (404) y 3 que sí (200) — sin
+`Referer`. Cada línea muestra `n ruta (status) -> acción vector score`:
+
+```bash
+RUN=$(date +%s)
+i=0
+
+for route in /.env /.git/config /.git/HEAD / /.htaccess /.htpasswd /wp-admin /wp-login.php /products \
+             /admin /phpmyadmin /backup.zip /backup.sql /config.php /help /config.json /docker-compose.yml \
+             /actuator/env /server-status /shell.php; do
+
+  i=$((i + 1))
+
+  case "$route" in
+    /|/products|/help) code=200 ;;
+    *)                 code=404 ;;
+  esac
+
+  NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+  RESPONSE=$(curl -s -X POST http://localhost:8080/v1/events \
+    -H "Content-Type: application/json" \
+    -d "{\"request_id\":\"ss-$RUN-$i\",\"timestamp\":\"$NOW\",\"client_ip\":\"198.51.100.23\",\"method\":\"GET\",\"path\":\"$route\",\"status_code\":$code,\"user_agent\":\"python-requests/2.31.0\"}")
+
+  echo "$i $route [$code] -> $RESPONSE"
+done
+```
+
+### Paso 3 — Statistical Anomaly
+
+
+```bash
+RUN=$(date +%s)
+for n in $(seq 1 50); do
+  NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  if [ "$n" -le 2 ]; then
+    BODY="{\"request_id\":\"an-$RUN-w$n\",\"timestamp\":\"$NOW\",\"client_ip\":\"198.51.100.$((100 + n))\",\"method\":\"POST\",\"path\":\"/login\",\"status_code\":401,\"login_user_hash\":\"$(printf 'a%063x' "$n")\"}"
+  else
+    BODY="{\"request_id\":\"an-$RUN-w$n\",\"timestamp\":\"$NOW\",\"client_ip\":\"198.51.100.$((100 + n))\",\"method\":\"GET\",\"path\":\"/products\",\"status_code\":200,\"referer\":\"/\"}"
+  fi
+  curl -s -X POST localhost:8080/v1/events -H "Content-Type: application/json" -d "$BODY" \
+    | grep -q '"action"' || echo "warm-up $n rechazado"
+done
+echo "warm-up: 50 eventos enviados"
+for k in 1 2 3; do
+  NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  curl -s -X POST localhost:8080/v1/events -H "Content-Type: application/json" \
+    -d "{\"request_id\":\"an-$RUN-a$k\",\"timestamp\":\"$NOW\",\"client_ip\":\"203.0.113.66\",\"method\":\"POST\",\"path\":\"/login\",\"status_code\":401,\"login_user_hash\":\"$(printf 'b%063x' "$k")\"}"
+  echo
+done
+```
+
+### Paso 4 — Credential Stuffing distribuido (requiere Internet)
+
+```bash
+go run ./cmd/engine --asn-provider ripestat --asn-timeout 5s
+```
+
+```bash
+RUN=$(date +%s)
+for k in $(seq 1 30); do
+  IP="1.1.1.$(( (k - 1) % 20 + 1 ))"
+  NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  curl -s -X POST localhost:8080/v1/events \
+    -H "Content-Type: application/json" \
+    -d "{\"request_id\":\"cs-$RUN-$k\",\"timestamp\":\"$NOW\",\"client_ip\":\"$IP\",\"method\":\"POST\",\"path\":\"/login\",\"status_code\":401,\"login_user_hash\":\"$(printf 'c%063x' "$k")\"}" \
+  | sed -E "s|.*\"entity_id\":\"([^\"]+)\",\"action\":\"([A-Z]+)\",\"confidence_score\":([0-9.e-]+),\"attack_vector\":\"([a-z_]+)\".*|$k $IP -> \2 \4 \3 (\1)|"
+done
+```
 
 ## Generación de tráfico sintético y ground truth
 
