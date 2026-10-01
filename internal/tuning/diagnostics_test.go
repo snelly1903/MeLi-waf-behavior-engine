@@ -1,3 +1,4 @@
+// Prueba el diagnóstico por evento y su consistencia con RunScenario.
 package tuning
 
 import (
@@ -60,15 +61,6 @@ func TestWinningAnomalyEval_Empty_ReturnsFalse(t *testing.T) {
 	}
 }
 
-// TestRunDiagnostics_ConsistentWithRunScenario corre ambos sobre el
-// mismo escenario y candidate, y confirma que: (a) RunDiagnostics
-// exige la misma cantidad de decisiones que eventos, (b) cuando la
-// Decision real fue de statistical_anomaly (AttackVector=unknown y
-// Triggered), el ganador de anomaly en el diagnóstico reproduce
-// exactamente el mismo RiskScore que ConfidenceScore de esa Decision
-// — la prueba de que la corrida paralela de diagnóstico ve
-// EXACTAMENTE lo mismo que vería el detector real dentro de
-// BehavioralDecider.
 func TestRunDiagnostics_ConsistentWithRunScenario(t *testing.T) {
 	scenario := datagen.BuildScenario(datagen.DefaultScenarioConfig(999, 0.10))
 	resolver := datagen.NewSimulatedASNResolver()

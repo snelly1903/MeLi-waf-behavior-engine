@@ -1,3 +1,4 @@
+// Prueba el recall por detector y la agregación por capa entre seeds.
 package tuning
 
 import (
@@ -13,7 +14,7 @@ func TestSlowScanDetectorRecall_RequestLevel(t *testing.T) {
 	diagnostics := []EventDiagnostic{
 		{Label: groundtruth.LabelSlowScan, SlowScan: finding.Finding{Triggered: true}},
 		{Label: groundtruth.LabelSlowScan, SlowScan: finding.Finding{Triggered: false}},
-		{Label: groundtruth.LabelCredentialStuffing, SlowScan: finding.Finding{Triggered: true}}, // no cuenta: no es slow_scan
+		{Label: groundtruth.LabelCredentialStuffing, SlowScan: finding.Finding{Triggered: true}},
 	}
 	got := slowScanDetectorRecall(diagnostics)
 	if !got.Defined || got.Value != 0.5 {
@@ -21,15 +22,10 @@ func TestSlowScanDetectorRecall_RequestLevel(t *testing.T) {
 	}
 }
 
-// TestAggregateDetectorLayerRows_PoolsRawMatricesNotRatios confirma
-// que la matriz de confusión agregada es la SUMA cruda de los 3
-// seeds (nunca un promedio de Precision/Recall ya calculados por
-// separado) — dos seeds de tamaño MUY distinto tienen que pesar según
-// su propio volumen, no 50/50.
 func TestAggregateDetectorLayerRows_PoolsRawMatricesNotRatios(t *testing.T) {
 	rows := []DetectorLayerRow{
-		{Candidate: "D0", Ratio: 10, Broad: eval.ConfusionMatrix{TP: 9, FP: 1, FN: 1, TN: 89}}, // seed grande: precision 0.9
-		{Candidate: "D0", Ratio: 10, Broad: eval.ConfusionMatrix{TP: 1, FP: 1, FN: 0, TN: 8}},  // seed chico: precision 0.5
+		{Candidate: "D0", Ratio: 10, Broad: eval.ConfusionMatrix{TP: 9, FP: 1, FN: 1, TN: 89}},
+		{Candidate: "D0", Ratio: 10, Broad: eval.ConfusionMatrix{TP: 1, FP: 1, FN: 0, TN: 8}},
 	}
 	agg := AggregateDetectorLayerRows(rows, nil)
 
@@ -37,9 +33,6 @@ func TestAggregateDetectorLayerRows_PoolsRawMatricesNotRatios(t *testing.T) {
 	if agg.Broad != wantMatrix {
 		t.Fatalf("Broad pooled = %+v, want %+v", agg.Broad, wantMatrix)
 	}
-	// Precision pooled = 10/(10+2) = 0.8333 -- DISTINTO del promedio
-	// simple (0.9+0.5)/2 = 0.7, que sería engañoso porque ignora que
-	// el primer seed pesa casi 10x más eventos que el segundo.
 	wantPrecision := 10.0 / 12.0
 	if !agg.PrecisionBroad.Defined {
 		t.Fatal("PrecisionBroad no definida")
@@ -84,17 +77,12 @@ func csDiagWithTrigger(triggered bool) EventDiagnostic {
 	}
 }
 
-// TestCredentialStuffingDetectorRecall_RequestLevel_NeverUsesDecision
-// confirma que la métrica es puramente request-level sobre
-// CredentialStuffing.Triggered — nunca sobre la Decision final
-// (acá ni siquiera se rellena Decision, y el resultado tiene que ser
-// el mismo igual).
 func TestCredentialStuffingDetectorRecall_RequestLevel_NeverUsesDecision(t *testing.T) {
 	diagnostics := []EventDiagnostic{
 		csDiagWithTrigger(true),
 		csDiagWithTrigger(true),
 		csDiagWithTrigger(false),
-		{Label: groundtruth.LabelLegit, CredentialStuffing: finding.Finding{Triggered: true}}, // no cuenta: no es CS
+		{Label: groundtruth.LabelLegit, CredentialStuffing: finding.Finding{Triggered: true}},
 	}
 	got := credentialStuffingDetectorRecall(diagnostics)
 	if !got.Defined || got.Value != 2.0/3.0 {

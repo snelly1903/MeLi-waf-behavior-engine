@@ -1,3 +1,4 @@
+// Prueba la carga de decisiones desde archivos JSONL.
 package eval
 
 import (
@@ -7,13 +8,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/decision"
 )
 
-// testdata/eval/decisions_sample.jsonl contiene, a propósito:
-//
-//	r-d1  ALLOW válida
-//	r-d2  BLOCK válida (con explanation y contributing_signals)
-//	línea 3  JSON corrupto
-//	línea 4  JSON válido pero request_id vacío
-//	r-d5  BLOCK sin explanation ni contributing_signals (inválida para decision.Validate)
 func TestLoadDecisions_SampleFile(t *testing.T) {
 	result, err := LoadDecisions("../../testdata/eval/decisions_sample.jsonl")
 	if err != nil {
@@ -34,8 +28,6 @@ func TestLoadDecisions_SampleFile(t *testing.T) {
 		t.Errorf("InvalidIDs = %v, want [r-d5]", result.InvalidIDs)
 	}
 
-	// Línea 3 (JSON corrupto) y línea 4 (request_id vacío) van a
-	// CorruptLines, en ese orden.
 	if len(result.CorruptLines) != 2 || result.CorruptLines[0] != 3 || result.CorruptLines[1] != 4 {
 		t.Errorf("CorruptLines = %v, want [3 4]", result.CorruptLines)
 	}

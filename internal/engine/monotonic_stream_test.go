@@ -1,3 +1,4 @@
+// Verifica que el stream de eventos del benchmark mantenga timestamps estrictamente crecientes.
 package engine_test
 
 import (
@@ -5,11 +6,6 @@ import (
 	"time"
 )
 
-// TestMonotonicEventStream_StrictlyIncreasing_AcrossManyLaps confirma
-// el requisito central: recorriendo el mismo escenario chico varias
-// veces más de una vuelta completa, el Timestamp devuelto por at()
-// nunca deja de crecer, ni siquiera en el borde entre una vuelta y la
-// siguiente.
 func TestMonotonicEventStream_StrictlyIncreasing_AcrossManyLaps(t *testing.T) {
 	scenario := benchScenario(0.10)
 	stream := newMonotonicEventStream(scenario)
@@ -20,7 +16,7 @@ func TestMonotonicEventStream_StrictlyIncreasing_AcrossManyLaps(t *testing.T) {
 
 	var cursor time.Time
 	var prev time.Time
-	for i := 0; i < n*3+7; i++ { // más de 3 vueltas completas, con resto
+	for i := 0; i < n*3+7; i++ {
 		e := stream.at(i, &cursor)
 		if i > 0 && !e.Timestamp.After(prev) {
 			t.Fatalf("i=%d: Timestamp = %v, no es estrictamente posterior a %v (rompe monotonía)", i, e.Timestamp, prev)
@@ -29,11 +25,6 @@ func TestMonotonicEventStream_StrictlyIncreasing_AcrossManyLaps(t *testing.T) {
 	}
 }
 
-// TestMonotonicEventStream_PreservesDeltaPattern_WithinOneLap
-// confirma que, DENTRO de una misma vuelta (sin cruzar el borde), el
-// delta entre eventos consecutivos es EXACTAMENTE el del escenario
-// original — la corrección de monotonía solo debe actuar en el
-// borde de vuelta, nunca alterar la cadencia real dentro de ella.
 func TestMonotonicEventStream_PreservesDeltaPattern_WithinOneLap(t *testing.T) {
 	scenario := benchScenario(0.10)
 	stream := newMonotonicEventStream(scenario)
@@ -44,14 +35,14 @@ func TestMonotonicEventStream_PreservesDeltaPattern_WithinOneLap(t *testing.T) {
 
 	var cursor time.Time
 	var got []time.Time
-	for i := 0; i < n; i++ { // una sola vuelta, nunca cruza el borde
+	for i := 0; i < n; i++ {
 		got = append(got, stream.at(i, &cursor).Timestamp)
 	}
 
 	for i := 1; i < n; i++ {
 		wantDelta := stream.events[i].Timestamp.Sub(stream.events[i-1].Timestamp)
 		if wantDelta <= 0 {
-			continue // el propio escenario tenía un delta no positivo acá, no hay nada que preservar
+			continue
 		}
 		gotDelta := got[i].Sub(got[i-1])
 		if gotDelta != wantDelta {
@@ -60,9 +51,6 @@ func TestMonotonicEventStream_PreservesDeltaPattern_WithinOneLap(t *testing.T) {
 	}
 }
 
-// TestMonotonicEventStream_ReusesEventBodies_AcrossLaps confirma que
-// el CONTENIDO del evento (IP, path, etc.) en la posición i sigue
-// siendo events[i % n] — solo el Timestamp cambia entre vueltas.
 func TestMonotonicEventStream_ReusesEventBodies_AcrossLaps(t *testing.T) {
 	scenario := benchScenario(0.10)
 	stream := newMonotonicEventStream(scenario)

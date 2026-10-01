@@ -1,3 +1,4 @@
+// Prueba el cálculo y el resumen del retraso de detección por campaña.
 package tuning
 
 import (
@@ -19,12 +20,6 @@ func decisionFor(le groundtruth.LabeledEvent, action decision.Action) decision.D
 	}
 }
 
-// TestComputeDetectionDelay_CredentialStuffing_GroupsByASNNotByIP
-// confirma que dos IPs DISTINTAS, del mismo grupo de red simulado,
-// participan de la MISMA campaña de credential stuffing distribuido —
-// igual que hace el detector real, nunca una campaña por IP. La
-// primera decisión positiva de CUALQUIERA de las dos IPs cuenta como
-// la detección de la campaña completa.
 func TestComputeDetectionDelay_CredentialStuffing_GroupsByASNNotByIP(t *testing.T) {
 	ipA := netip.MustParseAddr("192.0.2.10")
 	ipB := netip.MustParseAddr("192.0.2.20")
@@ -37,7 +32,7 @@ func TestComputeDetectionDelay_CredentialStuffing_GroupsByASNNotByIP(t *testing.
 	}
 	decisions := []decision.Decision{
 		decisionFor(events[0], decision.ActionAllow),
-		decisionFor(events[1], decision.ActionBlock), // la 2da IP es la que dispara
+		decisionFor(events[1], decision.ActionBlock),
 		decisionFor(events[2], decision.ActionAllow),
 	}
 
@@ -56,8 +51,6 @@ func TestComputeDetectionDelay_CredentialStuffing_GroupsByASNNotByIP(t *testing.
 	if !d.Detected {
 		t.Fatal("Detected = false, want true")
 	}
-	// La detección fue el 2do request de la campaña (r-2), sin
-	// importar que viniera de una IP distinta a la del primero.
 	if d.RequestsToDetection != 2 {
 		t.Errorf("RequestsToDetection = %d, want 2", d.RequestsToDetection)
 	}
@@ -66,10 +59,6 @@ func TestComputeDetectionDelay_CredentialStuffing_GroupsByASNNotByIP(t *testing.
 	}
 }
 
-// TestComputeDetectionDelay_SlowScan_OneCampaignPerIP confirma que,
-// para slow_scan, dos IPs escaneando por separado son DOS campañas
-// distintas (nunca se agrupan como en credential stuffing) — cada
-// escáner es su propia entidad, igual que ve internal/slowscan.Detector.
 func TestComputeDetectionDelay_SlowScan_OneCampaignPerIP(t *testing.T) {
 	ipA := netip.MustParseAddr("192.0.2.30")
 	ipB := netip.MustParseAddr("192.0.2.40")
@@ -99,11 +88,6 @@ func TestComputeDetectionDelay_SlowScan_OneCampaignPerIP(t *testing.T) {
 	}
 }
 
-// TestComputeDetectionDelay_NeverDetected_ReportsFalseNotZero
-// confirma que una campaña nunca detectada queda con Detected=false y
-// que RequestsToDetection/TimeToDetection nunca se leen como si fueran
-// datos válidos (0 request, 0 tiempo) — el objetivo explícito de no
-// usar esta métrica para esconder falsos negativos iniciales.
 func TestComputeDetectionDelay_NeverDetected_ReportsFalseNotZero(t *testing.T) {
 	ip := netip.MustParseAddr("203.0.113.5")
 	resolver := fakeCampaignResolver{}
@@ -130,9 +114,6 @@ func TestComputeDetectionDelay_NeverDetected_ReportsFalseNotZero(t *testing.T) {
 	}
 }
 
-// TestComputeDetectionDelay_LegitTraffic_NeverFormsACampaign confirma
-// que el tráfico legítimo nunca aparece en el resultado, aunque
-// comparta IP/grupo con tráfico malicioso.
 func TestComputeDetectionDelay_LegitTraffic_NeverFormsACampaign(t *testing.T) {
 	ip := netip.MustParseAddr("192.0.2.50")
 	resolver := fakeCampaignResolver{ip: "asn:64512"}
@@ -148,12 +129,9 @@ func TestComputeDetectionDelay_LegitTraffic_NeverFormsACampaign(t *testing.T) {
 	}
 }
 
-// TestComputeDetectionDelay_UnresolvedIP_ExcludedNeverGuessed cubre
-// una IP de credential stuffing que el resolver no puede resolver a
-// ningún grupo — nunca se inventa una campaña para ella.
 func TestComputeDetectionDelay_UnresolvedIP_ExcludedNeverGuessed(t *testing.T) {
 	ip := netip.MustParseAddr("198.51.100.9")
-	resolver := fakeCampaignResolver{} // deliberadamente vacío
+	resolver := fakeCampaignResolver{}
 
 	events := []groundtruth.LabeledEvent{
 		labeledEvent(groundtruth.LabelCredentialStuffing, "r-1", 0, ip, "/login", 401),
@@ -166,10 +144,6 @@ func TestComputeDetectionDelay_UnresolvedIP_ExcludedNeverGuessed(t *testing.T) {
 	}
 }
 
-// TestSummarizeDelay_EventualDetectionRate_NeverHidesZeroDetections
-// confirma que la tasa de detección eventual sí baja a 0% (no queda
-// N/A) cuando hay campañas pero ninguna fue detectada — distinto del
-// caso "cero campañas", que sí es N/A (ver el siguiente test).
 func TestSummarizeDelay_EventualDetectionRate_NeverHidesZeroDetections(t *testing.T) {
 	delays := []CampaignDelay{
 		{Vector: groundtruth.LabelSlowScan, CampaignKey: "ip:1", TotalRequests: 5, Detected: false},
@@ -188,9 +162,6 @@ func TestSummarizeDelay_EventualDetectionRate_NeverHidesZeroDetections(t *testin
 	}
 }
 
-// TestSummarizeDelay_NoCampaigns_ReturnsNoSummary confirma que un
-// vector sin ninguna campaña en absoluto simplemente no aparece en el
-// resultado — nunca un summary con 0/0 disimulado.
 func TestSummarizeDelay_NoCampaigns_ReturnsNoSummary(t *testing.T) {
 	summaries := SummarizeDelay(nil)
 	if len(summaries) != 0 {

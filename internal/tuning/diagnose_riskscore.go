@@ -1,3 +1,4 @@
+// Analiza la distribución de risk scores por detector y tipo de tráfico.
 package tuning
 
 import (
@@ -6,16 +7,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// RiskScoreBucket resume la distribución de RiskScore de UN detector
-// para UN grupo de ground truth ("malicious": el tipo de ataque que
-// ese detector target — credential_stuffing o slow_scan; para
-// statistical_anomaly, "malicious" es cualquier ataque, porque no
-// tiene un tipo propio; "legit": tráfico legítimo; "other_attack":
-// el otro tipo de ataque, incluido por transparencia aunque no sea
-// el foco de ese detector). RiskScore es 0 en cualquier evento donde
-// el detector no disparó — la misma convención que finding.Finding
-// usa en todo el proyecto: sin Triggered, no hay ningún riesgo que
-// reportar.
 type RiskScoreBucket struct {
 	Detector string
 	Group    string
@@ -40,11 +31,6 @@ func genericGroupFor(label groundtruth.Label) string {
 	return "malicious"
 }
 
-// AnalyzeRiskScoreDistributions calcula, para los tres detectores, la
-// distribución de RiskScore por evento (0 si no disparó) separada por
-// grupo de ground truth — diagnóstico previo a calibrar Policy:
-// entender por qué BlockThreshold=0.80 produce tan pocos BLOCK
-// requiere ver contra qué RiskScores reales se lo está comparando.
 func AnalyzeRiskScoreDistributions(diagnostics []EventDiagnostic) []RiskScoreBucket {
 	type key struct{ detector, group string }
 	samples := make(map[key][]float64)
@@ -73,8 +59,6 @@ func AnalyzeRiskScoreDistributions(diagnostics []EventDiagnostic) []RiskScoreBuc
 	return result
 }
 
-// RenderRiskScoreDistributions arma un resumen legible en Markdown de
-// buckets.
 func RenderRiskScoreDistributions(buckets []RiskScoreBucket) string {
 	var b []byte
 	w := func(format string, args ...any) { b = append(b, []byte(fmt.Sprintf(format, args...))...) }

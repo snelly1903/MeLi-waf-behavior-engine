@@ -1,3 +1,4 @@
+// Ejecuta un candidato sobre un escenario y calcula sus métricas.
 package tuning
 
 import (
@@ -11,14 +12,10 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// RunResult es el resultado de correr UN candidato sobre UN escenario
-// (una combinación seed×ratio) — la unidad atómica que después se
-// agrega entre seeds ("estabilidad", ver aggregate.go) y se compara
-// entre candidatos (ver report.go).
 type RunResult struct {
 	Candidate string
 	Seed      uint64
-	Ratio     int // 0, 10 o 30 — el TargetMaliciousRatio del escenario, en porcentaje
+	Ratio     int
 
 	Decisions    []decision.Decision
 	Eval         eval.Result
@@ -26,17 +23,6 @@ type RunResult struct {
 	DelaySummary []DelaySummary
 }
 
-// RunScenario corre candidate sobre scenario (ya generado en memoria
-// por datagen.BuildScenario) y calcula tanto las métricas de
-// internal/eval como el detection delay — todo en memoria, sin leer
-// ni escribir ningún archivo. resolver es el MISMO NetworkResolver
-// que usa candidate.Build y ComputeDetectionDelay: la agrupación de
-// campañas de credential stuffing tiene que ser exactamente la que el
-// detector ve, nunca una tabla derivada por separado.
-//
-// Cada llamada arranca con estado limpio (ver Candidate.Build) — así
-// que correr el mismo candidate sobre varios escenarios (distintos
-// seeds/ratios) nunca contamina un run con el anterior.
 func RunScenario(scenario datagen.Scenario, candidate Candidate, resolver credstuffing.NetworkResolver) (RunResult, error) {
 	decider, err := candidate.Build(resolver)
 	if err != nil {

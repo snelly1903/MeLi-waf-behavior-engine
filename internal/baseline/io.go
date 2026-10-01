@@ -1,3 +1,4 @@
+// Lee eventos y escribe decisiones en formato JSONL para la línea base.
 package baseline
 
 import (
@@ -35,9 +36,6 @@ func LoadEvents(path string) ([]event.Event, error) {
 	return events, nil
 }
 
-// WriteDecisions escribe decisions en path, un decision.Decision por
-// línea — el mismo formato decisions.jsonl que ya consume cmd/eval.
-// No agrega nada que Detect no haya puesto ya en cada Decision.
 func WriteDecisions(path string, decisions []decision.Decision) error {
 	f, err := os.Create(path)
 	if err != nil {

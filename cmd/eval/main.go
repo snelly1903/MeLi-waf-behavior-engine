@@ -1,5 +1,4 @@
-// Command eval compara las decisiones de un motor contra el ground
-// truth de un escenario generado
+// Compara las decisiones de un motor contra el ground truth de un escenario y genera el reporte de métricas.
 package main
 
 import (

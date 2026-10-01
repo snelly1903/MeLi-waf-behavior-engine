@@ -1,3 +1,4 @@
+// Prueba la reproducibilidad y las métricas de RunScenario.
 package tuning
 
 import (
@@ -7,24 +8,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/datagen"
 )
 
-// TestRunScenario_Reproducible_SameSeedSameResult es el test de
-// reproducibilidad: la MISMA semilla, con el MISMO candidato, tiene
-// que dar exactamente la misma CLASIFICACIÓN (Action, AttackVector,
-// EntityID) y exactamente las mismas MÉTRICAS (eval.Result, delay) —
-// nunca "aproximadamente igual" en lo que de verdad importa para
-// calibrar.
-//
-// Deliberadamente NO exige bit-a-bit ConfidenceScore: se verificó
-// (ver docs/decisiones.md) que internal/slowscan acumula
-// entropía iterando profile.Metrics.PathCounts, un map — Go
-// aleatoriza el orden de iteración de un map entre corridas por
-// diseño del lenguaje, así que la SUMA en coma flotante de esos
-// términos puede diferir en el último bit (~1e-16, un ULP) entre dos
-// corridas con la misma semilla, aunque la lógica sea 100%
-// determinista. Nunca cambia Action ni AttackVector (los umbrales de
-// Policy están a 0.5/0.8, muy lejos de un ULP), y eval.Result/Delay
-// —que se calculan a partir de Action, nunca de ConfidenceScore— sí
-// son bit-a-bit idénticos, como confirma este mismo test.
 func TestRunScenario_Reproducible_SameSeedSameResult(t *testing.T) {
 	cfg := datagen.DefaultScenarioConfig(555, 0.10)
 	scenario1 := datagen.BuildScenario(cfg)
@@ -51,8 +34,6 @@ func TestRunScenario_Reproducible_SameSeedSameResult(t *testing.T) {
 		}
 	}
 
-	// Eval y Delay se derivan solo de Action (nunca de
-	// ConfidenceScore) — estos sí tienen que ser bit-a-bit idénticos.
 	if !reflect.DeepEqual(got1.Eval, got2.Eval) {
 		t.Error("Eval no fue reproducible entre dos corridas con la misma semilla")
 	}
@@ -61,11 +42,6 @@ func TestRunScenario_Reproducible_SameSeedSameResult(t *testing.T) {
 	}
 }
 
-// TestRunScenario_DifferentSeed_TypicallyDiffersInVolume confirma lo
-// contrario: dos semillas distintas producen escenarios distintos
-// (el generador realmente usa la semilla, no la ignora) — no compara
-// métricas exactas, solo que el propio escenario generado no sea
-// idéntico.
 func TestRunScenario_DifferentSeed_TypicallyDiffersInVolume(t *testing.T) {
 	scenario1 := datagen.BuildScenario(datagen.DefaultScenarioConfig(101, 0.10))
 	scenario2 := datagen.BuildScenario(datagen.DefaultScenarioConfig(102, 0.10))
@@ -75,10 +51,6 @@ func TestRunScenario_DifferentSeed_TypicallyDiffersInVolume(t *testing.T) {
 	}
 }
 
-// TestRunScenario_ZeroPercentMalicious_RecallIsNA cubre el caso de 0%
-// de tráfico malicioso: Recall (y el recall por vector) tienen que
-// quedar N/A — nunca 0% — porque no hay ningún positivo real contra
-// el que medir. Ratio.Defined es la única señal correcta acá.
 func TestRunScenario_ZeroPercentMalicious_RecallIsNA(t *testing.T) {
 	scenario := datagen.BuildScenario(datagen.DefaultScenarioConfig(42, 0))
 	resolver := datagen.NewSimulatedASNResolver()
@@ -99,25 +71,15 @@ func TestRunScenario_ZeroPercentMalicious_RecallIsNA(t *testing.T) {
 			t.Errorf("recall de %s .Defined = true, want false (0%% malicious)", v.Vector)
 		}
 	}
-	// FPR sí debe estar definida si hubo algún negativo real
-	// (siempre hay, con 0% malicious todo el tráfico es negativo
-	// real) — no debería ser N/A.
 	if !got.Eval.Strict.Metrics.FPR.Defined {
 		t.Error("Strict.FPR.Defined = false, want true (siempre hay negativos reales en un escenario de 0%)")
 	}
 
-	// Sin tráfico malicioso, no debería haber ninguna campaña de
-	// ningún vector.
 	if len(got.Delay) != 0 {
 		t.Errorf("Delay = %d campañas, want 0 (0%% malicious)", len(got.Delay))
 	}
 }
 
-// TestRunScenario_StrictAndBroad_AreConsistentlyComputed confirma que
-// ambas políticas se calculan sobre el mismo TotalJoined y que Broad
-// nunca puede tener menos verdaderos positivos que Strict (CHALLENGE
-// suma a Broad y nunca resta) — una propiedad estructural simple,
-// independiente de qué tan bien calibrado esté el motor.
 func TestRunScenario_StrictAndBroad_AreConsistentlyComputed(t *testing.T) {
 	scenario := datagen.BuildScenario(datagen.DefaultScenarioConfig(777, 0.30))
 	resolver := datagen.NewSimulatedASNResolver()

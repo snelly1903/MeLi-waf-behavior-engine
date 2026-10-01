@@ -1,3 +1,4 @@
+// Detecta información del entorno (SO, CPU, RAM) para documentar el load test.
 package main
 
 import (

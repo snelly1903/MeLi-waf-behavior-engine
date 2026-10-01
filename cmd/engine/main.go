@@ -1,5 +1,4 @@
-// Command engine levanta el servicio HTTP de ingestión y decisión.
-// POST /v1/events usa engine.BehavioralDecider
+// Levanta la API HTTP del motor conductual y coordina su apagado ordenado.
 package main
 
 import (

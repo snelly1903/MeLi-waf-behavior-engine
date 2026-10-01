@@ -1,3 +1,4 @@
+// Prueba la reproducibilidad y los rangos del RNG determinista.
 package datagen
 
 import (

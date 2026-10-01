@@ -1,6 +1,4 @@
-// Command holdout es la corrida de holdout — PRIMERA Y ÚNICA vez que
-// se usan los seeds 201/202/203, después de que toda la
-// configuración quedó congelada
+// Ejecuta el motor conductual sobre los escenarios de holdout y genera el reporte final.
 package main
 
 import (

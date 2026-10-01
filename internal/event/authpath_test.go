@@ -1,3 +1,4 @@
+// Prueba el matcher de rutas de autenticación.
 package event
 
 import "testing"
@@ -7,14 +8,14 @@ func TestDefaultAuthPathMatcher(t *testing.T) {
 
 	authPaths := []string{
 		"/login",
-		"/LOGIN",  // case-insensitive
-		"/login/", // trailing slash tolerated
+		"/LOGIN",
+		"/login/",
 		"/signin",
 		"/api/login",
 		"/oauth/token",
-		"/auth/session", // under the "/auth/" prefix
-		"/api/auth/mfa", // under the "/api/auth/" prefix
-		"/sso/saml/acs", // under the "/sso/" prefix
+		"/auth/session",
+		"/api/auth/mfa",
+		"/sso/saml/acs",
 	}
 	for _, p := range authPaths {
 		if !m.IsAuthPath(p) {
@@ -26,7 +27,7 @@ func TestDefaultAuthPathMatcher(t *testing.T) {
 		"/",
 		"/dashboard",
 		"/api/products/123",
-		"/authors", // must not match "/auth/" as a naive substring
+		"/authors",
 		"/static/app.js",
 	}
 	for _, p := range nonAuthPaths {

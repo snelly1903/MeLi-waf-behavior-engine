@@ -1,3 +1,4 @@
+// Prueba la evaluación con motores de referencia (allow-all, block-all y oráculo).
 package eval
 
 import (
@@ -14,13 +15,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// --- "Motores" ficticios, solo para probar el evaluador -------------
-//
-// Nada de esto es el motor real (que no existe todavía): son reglas de
-// juguete que existen ÚNICAMENTE en este archivo de test, para
-// confirmar que Evaluate calcula bien las métricas antes de usarlo
-// contra nada real.
-
 func sortedIDs(labels map[string]groundtruth.Label) []string {
 	ids := make([]string, 0, len(labels))
 	for id := range labels {
@@ -30,7 +24,6 @@ func sortedIDs(labels map[string]groundtruth.Label) []string {
 	return ids
 }
 
-// decideAllowAll deja pasar todo — recall 0% garantizado.
 func decideAllowAll(labels map[string]groundtruth.Label) []decision.Decision {
 	var out []decision.Decision
 	for _, id := range sortedIDs(labels) {
@@ -39,8 +32,6 @@ func decideAllowAll(labels map[string]groundtruth.Label) []decision.Decision {
 	return out
 }
 
-// decideBlockAll bloquea todo, sin saber nunca de qué se trata — FPR
-// 100% garantizado, y atribución de vector siempre "unknown".
 func decideBlockAll(labels map[string]groundtruth.Label) []decision.Decision {
 	var out []decision.Decision
 	for _, id := range sortedIDs(labels) {
@@ -49,10 +40,6 @@ func decideBlockAll(labels map[string]groundtruth.Label) []decision.Decision {
 	return out
 }
 
-// decidePerfectOracle "adivina" la etiqueta real — sirve solo para
-// confirmar que el evaluador, en el mejor caso posible, da 100% en
-// todo. Ningún motor real puede hacer esto (necesitaría el ground
-// truth, que nunca ve) — es exclusivamente una herramienta de test.
 func decidePerfectOracle(labels map[string]groundtruth.Label) []decision.Decision {
 	var out []decision.Decision
 	for _, id := range sortedIDs(labels) {
@@ -85,9 +72,6 @@ func TestEvaluate_AllowAllEngine(t *testing.T) {
 	if !result.Issues.Clean() {
 		t.Fatalf("Issues not clean: %+v", result.Issues)
 	}
-	// 3 legit, 4 maliciosos (2 stuffing + 2 scan); "permitir todo"
-	// nunca predice positivo: TP=0, FP=0, FN=4, TN=3 — en las dos
-	// políticas, porque nunca hay ni BLOCK ni CHALLENGE.
 	want := ConfusionMatrix{TP: 0, FP: 0, FN: 4, TN: 3}
 	if result.Strict.Matrix != want {
 		t.Errorf("strict matrix = %+v, want %+v", result.Strict.Matrix, want)
@@ -106,8 +90,6 @@ func TestEvaluate_BlockAllEngine(t *testing.T) {
 	if !result.Issues.Clean() {
 		t.Fatalf("Issues not clean: %+v", result.Issues)
 	}
-	// "Bloquear todo": TP=4, FP=3, FN=0, TN=0 en ambas políticas
-	// (BLOCK ya es positivo en las dos).
 	want := ConfusionMatrix{TP: 4, FP: 3, FN: 0, TN: 0}
 	if result.Strict.Matrix != want {
 		t.Errorf("strict matrix = %+v, want %+v", result.Strict.Matrix, want)
@@ -116,9 +98,6 @@ func TestEvaluate_BlockAllEngine(t *testing.T) {
 	checkRatio(t, "Recall", result.Strict.Metrics.Recall, true, 1)
 	checkRatio(t, "FPR", result.Strict.Metrics.FPR, true, 1)
 
-	// Como decideBlockAll siempre responde "unknown", la atribución de
-	// vector no tiene ningún acierto ni ningún error — todo es
-	// "desconocido", y la precisión de atribución es N/A.
 	if result.VectorAttribution.Correct != 0 || result.VectorAttribution.Incorrect != 0 {
 		t.Errorf("VectorAttribution = %+v, want Correct=0 Incorrect=0", result.VectorAttribution)
 	}
@@ -149,16 +128,9 @@ func TestEvaluate_PerfectOracleEngine(t *testing.T) {
 	}
 }
 
-// TestEvaluate_DirtyDataset_StillReportsPartialMetricsButNotClean
-// comprueba el requisito de integridad: con decisiones faltantes, el
-// resultado sigue calculándose (para diagnóstico), pero
-// Issues.Clean() tiene que dar false — la señal de que este resultado
-// NO debe leerse como definitivo.
 func TestEvaluate_DirtyDataset_StillReportsPartialMetricsButNotClean(t *testing.T) {
 	labels := sampleLabels()
 	decisions := decideAllowAll(labels)
-	// Se descarta la decisión de r-4: ahora tiene etiqueta pero
-	// ninguna decisión.
 	var incomplete []decision.Decision
 	for _, d := range decisions {
 		if d.RequestID != "r-4" {
@@ -174,8 +146,6 @@ func TestEvaluate_DirtyDataset_StillReportsPartialMetricsButNotClean(t *testing.
 	if len(result.Issues.MissingDecisionIDs) != 1 || result.Issues.MissingDecisionIDs[0] != "r-4" {
 		t.Errorf("MissingDecisionIDs = %v, want [r-4]", result.Issues.MissingDecisionIDs)
 	}
-	// El total evaluado tiene que ser 6, no 7 — r-4 queda excluido del
-	// cálculo, no contado como si hubiera sido un ALLOW implícito.
 	if result.TotalJoined != 6 {
 		t.Errorf("TotalJoined = %d, want 6", result.TotalJoined)
 	}
@@ -184,15 +154,8 @@ func TestEvaluate_DirtyDataset_StillReportsPartialMetricsButNotClean(t *testing.
 	}
 }
 
-// --- Prueba de extremo a extremo contra un dataset con forma real ----
-
 func fakeEntityID(ip string) string { return "ip:" + ip }
 
-// decideNaiveRule es una regla de juguete de una sola línea, construida
-// ÚNICAMENTE a partir de los campos de event.Event — nunca mira ninguna
-// etiqueta. Existe solo para ejercitar la tubería completa del
-// evaluador (leer, cruzar, calcular) sobre datos con forma real, no
-// para medir si la regla en sí es buena.
 func decideNaiveRule(e event.Event) decision.Decision {
 	action := decision.ActionAllow
 	vector := decision.AttackVectorUnknown

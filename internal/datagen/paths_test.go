@@ -1,10 +1,8 @@
+// Verifica que las rutas sensibles y las rutas legítimas no se solapen.
 package datagen
 
 import "testing"
 
-// allLegitPaths reúne todas las rutas que puede visitar cualquiera de
-// los tres perfiles legítimos: páginas, assets estáticos y endpoints
-// de login.
 func allLegitPaths() map[string]bool {
 	paths := make(map[string]bool)
 	for _, profile := range []LegitProfile{ProfileNavegante, ProfileAPIClient, ProfileOffice} {
@@ -21,11 +19,6 @@ func allLegitPaths() map[string]bool {
 	return paths
 }
 
-// TestSensitivePaths_NeverOverlapWithLegitPaths es la comprobación
-// explícita (no supuesta) de que el vocabulario "tipo wordlist" del
-// escaneo lento nunca coincide con una ruta que algún perfil legítimo
-// visite — si coincidiera, "ruta nunca vista en usuarios legítimos"
-// dejaría de ser una señal válida.
 func TestSensitivePaths_NeverOverlapWithLegitPaths(t *testing.T) {
 	legit := allLegitPaths()
 	for _, p := range SensitivePaths {
@@ -35,9 +28,6 @@ func TestSensitivePaths_NeverOverlapWithLegitPaths(t *testing.T) {
 	}
 }
 
-// TestDefaultValidScanPaths_AreAllLegitPaths confirma lo contrario: las
-// rutas "válidas" que a veces visita el escáner son todas rutas reales
-// de la aplicación, no inventadas aparte.
 func TestDefaultValidScanPaths_AreAllLegitPaths(t *testing.T) {
 	legit := allLegitPaths()
 	for _, p := range DefaultValidScanPaths {
@@ -47,10 +37,6 @@ func TestDefaultValidScanPaths_AreAllLegitPaths(t *testing.T) {
 	}
 }
 
-// TestSensitivePathsAndValidPaths_AreDisjoint confirma que las dos
-// listas no se superponen entre sí — cada ruta que genera el escáner es
-// o bien "sensible" (404 esperado) o bien "válida" (200 esperado),
-// nunca ambas cosas.
 func TestSensitivePathsAndValidPaths_AreDisjoint(t *testing.T) {
 	valid := make(map[string]bool)
 	for _, p := range DefaultValidScanPaths {

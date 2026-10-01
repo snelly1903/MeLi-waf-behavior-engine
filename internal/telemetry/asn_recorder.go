@@ -1,3 +1,4 @@
+// Registra métricas OpenTelemetry del resolver de ASN.
 package telemetry
 
 import (
@@ -9,17 +10,6 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 )
 
-// asnRecorder implementa asn.MetricsRecorder registrando tres
-// métricas, todas con atributos de baja cardinalidad (nunca un
-// número de ASN individual -- ver docs/decisiones.md):
-//
-//   - waf.asn.cache: Counter, atributo "result" (hit/miss).
-//   - waf.asn.resolve: Counter, atributo "result"
-//     (success/failure/capacity_timeout).
-//   - waf.asn.provider.duration: Histogram en segundos, atributo
-//     "result" (success/failure) -- mide específicamente la llamada
-//     HTTP real al proveedor (ver asn.Resolver.Resolve), nunca la
-//     espera de capacidad ni el tiempo de caché.
 type asnRecorder struct {
 	cache            metric.Int64Counter
 	resolve          metric.Int64Counter
@@ -57,7 +47,6 @@ func newASNRecorder(meter metric.Meter) asnRecorder {
 	return asnRecorder{cache: cache, resolve: resolve, providerDuration: providerDuration}
 }
 
-// RecordCacheResult implementa asn.MetricsRecorder.
 func (r asnRecorder) RecordCacheResult(hit bool) {
 	result := "miss"
 	if hit {
@@ -66,12 +55,10 @@ func (r asnRecorder) RecordCacheResult(hit bool) {
 	r.cache.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", result)))
 }
 
-// RecordResolveResult implementa asn.MetricsRecorder.
 func (r asnRecorder) RecordResolveResult(result string) {
 	r.resolve.Add(context.Background(), 1, metric.WithAttributes(attribute.String("result", result)))
 }
 
-// RecordProviderDuration implementa asn.MetricsRecorder.
 func (r asnRecorder) RecordProviderDuration(result string, d time.Duration) {
 	r.providerDuration.Record(context.Background(), d.Seconds(), metric.WithAttributes(attribute.String("result", result)))
 }

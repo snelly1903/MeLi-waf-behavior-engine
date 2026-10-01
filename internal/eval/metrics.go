@@ -1,9 +1,11 @@
+// Calcula la matriz de confusión y las métricas de precisión, recall y F1.
 package eval
 
 import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/decision"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
+
 type Ratio struct {
 	Value   float64
 	Defined bool
@@ -28,12 +30,9 @@ type Metrics struct {
 	FPR       Ratio
 	FNR       Ratio
 	Accuracy  Ratio
-	F1 Ratio
+	F1        Ratio
 }
 
-// f1 calcula la media armónica de precision y recall, propagando
-// "indefinido" (nunca disimulado como 0) desde cualquiera de sus dos
-// entradas o desde su propia división por cero.
 func f1(precision, recall Ratio) Ratio {
 	if !precision.Defined || !recall.Defined {
 		return Ratio{Defined: false}
@@ -45,7 +44,6 @@ func f1(precision, recall Ratio) Ratio {
 	return Ratio{Value: 2 * precision.Value * recall.Value / denom, Defined: true}
 }
 
-// Metrics calcula las métricas derivadas de m.
 func (m ConfusionMatrix) Metrics() Metrics {
 	precision := ratio(m.TP, m.TP+m.FP)
 	recall := ratio(m.TP, m.TP+m.FN)

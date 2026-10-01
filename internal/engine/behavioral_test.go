@@ -1,3 +1,4 @@
+// Prueba la combinación de detectores, la selección del finding principal y la política del BehavioralDecider.
 package engine
 
 import (
@@ -21,9 +22,6 @@ import (
 
 var testBase = time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
 
-// fakeResolver es un NetworkResolver determinista, exclusivamente
-// para estos tests — nunca código de producción (ver
-// credstuffing.UnavailableNetworkResolver para el equivalente real).
 type fakeResolver map[netip.Addr]string
 
 func (r fakeResolver) Resolve(ip netip.Addr) (string, bool) {
@@ -65,9 +63,6 @@ func scanEvent(ip netip.Addr, offset time.Duration, path string, status int, has
 	}
 }
 
-// csConfig son los umbrales de credential stuffing usados en la
-// mayoría de estos tests — valores de prueba para poder calcularlos a
-// mano, nunca umbrales finales de calibración.
 func csConfig(resolver credstuffing.NetworkResolver) credstuffing.Config {
 	return credstuffing.Config{
 		Window:              time.Hour,
@@ -81,12 +76,6 @@ func csConfig(resolver credstuffing.NetworkResolver) credstuffing.Config {
 	}
 }
 
-// ssConfig son los umbrales de slow scan usados en la mayoría de
-// estos tests — deliberadamente laxos (MinRouteEntropy=0.6, no 1.0)
-// para que agregar tráfico extra a una IP (por ejemplo, sus propios
-// intentos de login) no rompa el gate. El test de empate exacto usa
-// su propia configuración más estricta (ver
-// TestDecide_ExactTie_CredentialStuffingWins).
 func ssConfig() slowscan.Config {
 	return slowscan.Config{
 		Window:                  time.Hour,
@@ -105,13 +94,6 @@ func testPolicy() Policy {
 	return Policy{ChallengeThreshold: 0.5, BlockThreshold: 0.8}
 }
 
-// inertAnomalyConfig tiene un MinSamples tan alto que el detector
-// estadístico nunca termina de calentar (nunca dispara) dentro de
-// estos tests — usado por defecto en newTestDecider para que los
-// escenarios de credential_stuffing/slow_scan ya probados sigan
-// funcionando exactamente igual con un tercer detector agregado. Los
-// tests que sí ejercitan el detector estadístico usan
-// newTestDeciderFull con su propia anomaly.Config activa.
 func inertAnomalyConfig() anomaly.Config {
 	return anomaly.Config{
 		Window:           time.Hour,
@@ -149,11 +131,6 @@ func newTestDeciderFull(t *testing.T, resolver credstuffing.NetworkResolver, ss 
 	return d
 }
 
-// fakeFindingsRecorder captura cada llamada a RecordFinding y
-// RecordAnomalyScore — usado para verificar que Decide reporta cada
-// detector que dispara (incluso el que pierde el desempate y queda
-// como secundario) y el score de statistical_anomaly en cada
-// evaluación, sin necesitar OpenTelemetry en este test.
 type fakeFindingsRecorder struct {
 	calls         []string
 	anomalyScores []float64
@@ -168,8 +145,6 @@ func (r *fakeFindingsRecorder) RecordAnomalyScore(score float64) {
 }
 
 func sensitivePath(i int) string { return fmt.Sprintf("/sensitive-%d", i) }
-
-// --- Policy -----------------------------------------------------------
 
 func TestPolicy_Validate_InvalidConfigurations(t *testing.T) {
 	tests := []struct {
@@ -190,11 +165,6 @@ func TestPolicy_Validate_InvalidConfigurations(t *testing.T) {
 	}
 }
 
-// TestPolicy_ActionFor_Boundaries cubre directamente los dos bordes
-// exactos pedidos: score exactamente en ChallengeThreshold y
-// exactamente en BlockThreshold — probado sobre la función pura, sin
-// necesidad de construir un escenario de detector que dé ese score
-// exacto.
 func TestPolicy_ActionFor_Boundaries(t *testing.T) {
 	p := Policy{ChallengeThreshold: 0.5, BlockThreshold: 0.8}
 	tests := []struct {
@@ -203,9 +173,9 @@ func TestPolicy_ActionFor_Boundaries(t *testing.T) {
 	}{
 		{0.0, decision.ActionAllow},
 		{0.49, decision.ActionAllow},
-		{0.5, decision.ActionChallenge}, // exactamente en ChallengeThreshold
+		{0.5, decision.ActionChallenge},
 		{0.65, decision.ActionChallenge},
-		{0.8, decision.ActionBlock}, // exactamente en BlockThreshold
+		{0.8, decision.ActionBlock},
 		{0.95, decision.ActionBlock},
 	}
 	for _, tc := range tests {
@@ -215,11 +185,6 @@ func TestPolicy_ActionFor_Boundaries(t *testing.T) {
 	}
 }
 
-// TestPolicy_ActionFor_MatchesInternalRule confirma que el wrapper
-// exportado ActionFor (usado por internal/tuning para el sweep de
-// Policy sin volver a correr detectores) nunca diverge de la regla
-// privada actionFor — mismo criterio que
-// TestPolicy_IsPositive_MatchesInternalRule en internal/eval.
 func TestPolicy_ActionFor_MatchesInternalRule(t *testing.T) {
 	p := Policy{ChallengeThreshold: 0.5, BlockThreshold: 0.8}
 	for _, score := range []float64{0.0, 0.49, 0.5, 0.65, 0.8, 0.95} {
@@ -228,8 +193,6 @@ func TestPolicy_ActionFor_MatchesInternalRule(t *testing.T) {
 		}
 	}
 }
-
-// --- NewBehavioralDecider ----------------------------------------------
 
 func TestNewBehavioralDecider_InvalidInputs(t *testing.T) {
 	cs, err := credstuffing.NewDetector(csConfig(fakeResolver{}))
@@ -259,8 +222,6 @@ func TestNewBehavioralDecider_InvalidInputs(t *testing.T) {
 	}
 }
 
-// --- Caso base: nadie dispara --------------------------------------------
-
 func TestDecide_NoDetectorTriggers_ReturnsAllow(t *testing.T) {
 	d := newTestDecider(t, fakeResolver{}, ssConfig(), testPolicy())
 	ip := ipFor(0)
@@ -286,14 +247,6 @@ func TestDecide_NoDetectorTriggers_ReturnsAllow(t *testing.T) {
 	}
 }
 
-// --- Finding disparado pero bajo ChallengeThreshold: sigue en ALLOW -----
-
-// TestDecide_FindingBelowChallengeThreshold_StaysAllowButPreservesEvidence
-// construye la campaña de credential stuffing EXACTAMENTE en su
-// umbral (RiskScore = ScoreFloor = 0.2, por debajo de
-// ChallengeThreshold = 0.5) y confirma que, aunque Action quede en
-// ALLOW, la Decision preserva AttackVector, ConfidenceScore, EntityID,
-// señales y explicación — nunca los tira porque no se actuó.
 func TestDecide_FindingBelowChallengeThreshold_StaysAllowButPreservesEvidence(t *testing.T) {
 	resolver := fakeResolver{}
 	d := newTestDecider(t, resolver, ssConfig(), testPolicy())
@@ -305,7 +258,7 @@ func TestDecide_FindingBelowChallengeThreshold_StaysAllowButPreservesEvidence(t 
 	}
 	accounts := []string{"acct-A", "acct-B", "acct-C", "acct-D", "acct-D", "acct-A"}
 	statuses := []int{401, 200, 401, 200, 403, 200}
-	attemptIPs := []netip.Addr{ips[0], ips[0], ips[1], ips[2], ips[3], ips[4]} // ips[0] hace 2 intentos
+	attemptIPs := []netip.Addr{ips[0], ips[0], ips[1], ips[2], ips[3], ips[4]}
 
 	var last decision.Decision
 	for i := range accounts {
@@ -336,15 +289,11 @@ func TestDecide_FindingBelowChallengeThreshold_StaysAllowButPreservesEvidence(t 
 	}
 }
 
-// --- Finding sobre ChallengeThreshold: CHALLENGE --------------------------
-
 func TestDecide_FindingAboveChallengeThreshold_ReturnsChallenge(t *testing.T) {
 	resolver := fakeResolver{}
 	d := newTestDecider(t, resolver, ssConfig(), testPolicy())
 
 	group := "asn:moderate"
-	// 15 IPs distintas (5 con 2 intentos, 10 con 1 = 20 intentos
-	// totales), 10 cuentas distintas, 14/20 fallos (ratio 0.7).
 	var last decision.Decision
 	attemptIdx := 0
 	sendAttempt := func(ip netip.Addr) {
@@ -361,7 +310,7 @@ func TestDecide_FindingAboveChallengeThreshold_ReturnsChallenge(t *testing.T) {
 	for i := 0; i < 15; i++ {
 		sendAttempt(ipFor(i))
 	}
-	for i := 0; i < 5; i++ { // 5 IPs repiten
+	for i := 0; i < 5; i++ {
 		sendAttempt(ipFor(i))
 	}
 
@@ -378,8 +327,6 @@ func TestDecide_FindingAboveChallengeThreshold_ReturnsChallenge(t *testing.T) {
 		t.Errorf("decision.Validate(%+v) = %v, want nil", last, err)
 	}
 }
-
-// --- Finding sobre BlockThreshold: BLOCK (y slow scan como principal) ----
 
 func TestDecide_FindingAboveBlockThreshold_ReturnsBlock(t *testing.T) {
 	d := newTestDecider(t, fakeResolver{}, ssConfig(), testPolicy())
@@ -409,8 +356,6 @@ func TestDecide_FindingAboveBlockThreshold_ReturnsBlock(t *testing.T) {
 	}
 }
 
-// --- EntityID correcto para sesión -----------------------------------------
-
 func TestDecide_EntityID_ForSession(t *testing.T) {
 	d := newTestDecider(t, fakeResolver{}, ssConfig(), testPolicy())
 	ip := ipFor(0)
@@ -430,8 +375,6 @@ func TestDecide_EntityID_ForSession(t *testing.T) {
 		t.Errorf("EntityID = %q, want %q (the whole IP belongs to one session, session wins)", last.EntityID, wantEntityID)
 	}
 }
-
-// --- credential_stuffing como principal (aislado) -------------------------
 
 func TestDecide_CredentialStuffingIsPrincipal(t *testing.T) {
 	resolver := fakeResolver{}
@@ -458,8 +401,6 @@ func TestDecide_CredentialStuffingIsPrincipal(t *testing.T) {
 	}
 }
 
-// --- slow_scan como principal (aislado) ------------------------------------
-
 func TestDecide_SlowScanIsPrincipal(t *testing.T) {
 	d := newTestDecider(t, fakeResolver{}, ssConfig(), testPolicy())
 	ip := ipFor(0)
@@ -477,13 +418,6 @@ func TestDecide_SlowScanIsPrincipal(t *testing.T) {
 	}
 }
 
-// --- Ambos disparan, gana el mayor score ----------------------------------
-
-// TestDecide_BothTrigger_HigherScoreWins hace que credential_stuffing
-// dispare apenas (score exacto en su umbral, 0.2) mientras la MISMA
-// IP también corre un escaneo lento claro (score muy por encima de
-// 0.8) — el resultado final tiene que reflejar slow_scan, con score
-// mucho mayor que 0.2.
 func TestDecide_BothTrigger_HigherScoreWins(t *testing.T) {
 	resolver := fakeResolver{}
 	d := newTestDecider(t, resolver, ssConfig(), testPolicy())
@@ -495,8 +429,6 @@ func TestDecide_BothTrigger_HigherScoreWins(t *testing.T) {
 		resolver[ip] = group
 	}
 
-	// Campaña de credential stuffing exactamente en su umbral: 6
-	// intentos, 5 IPs (ip0 hace 2), 4 cuentas, 3/6 fallos.
 	accounts := []string{"acct-A", "acct-C", "acct-D", "acct-D", "acct-A", "acct-B"}
 	statuses := []int{401, 401, 200, 403, 200, 200}
 	ips := []netip.Addr{other[0], other[1], other[2], other[3], ip0}
@@ -505,15 +437,10 @@ func TestDecide_BothTrigger_HigherScoreWins(t *testing.T) {
 	}
 	d.Decide(context.Background(), loginEvent(ip0, 4*time.Second, accounts[4], statuses[4]))
 
-	// ip0 también corre un escaneo lento claro, con 50 rutas
-	// sensibles distintas.
 	for i := 0; i < 50; i++ {
 		d.Decide(context.Background(), scanEvent(ip0, time.Duration(10+i)*time.Second, sensitivePath(i), 404, false, ""))
 	}
 
-	// Probe final: el segundo intento de login de ip0 — necesario
-	// para que credstuffing.Evaluate tenga algo que evaluar (solo
-	// mira rutas de autenticación).
 	final := d.Decide(context.Background(), loginEvent(ip0, 5*time.Second, accounts[5], statuses[5]))
 
 	if final.AttackVector != decision.AttackVectorSlowScan {
@@ -527,13 +454,6 @@ func TestDecide_BothTrigger_HigherScoreWins(t *testing.T) {
 	}
 }
 
-// TestDecide_RecordsFindingForEveryTriggeredDetector_NotJustPrincipal
-// reusa el escenario de TestDecide_BothTrigger_HigherScoreWins (ambos
-// detectores disparan, pero solo slow_scan queda como principal) para
-// confirmar que RecordFinding se llama por CADA detector que
-// disparó, no solo por el que ganó el desempate — la métrica
-// waf.detector.findings existe justamente para ver esto, que la
-// Decision final por sí sola no muestra.
 func TestDecide_RecordsFindingForEveryTriggeredDetector_NotJustPrincipal(t *testing.T) {
 	resolver := fakeResolver{}
 	recorder := &fakeFindingsRecorder{}
@@ -574,7 +494,7 @@ func TestDecide_RecordsFindingForEveryTriggeredDetector_NotJustPrincipal(t *test
 		d.Decide(context.Background(), scanEvent(ip0, time.Duration(10+i)*time.Second, sensitivePath(i), 404, false, ""))
 	}
 
-	recorder.calls = nil // solo nos importa el evento final, donde disparan los dos a la vez
+	recorder.calls = nil
 	final := d.Decide(context.Background(), loginEvent(ip0, 5*time.Second, accounts[5], statuses[5]))
 
 	if final.AttackVector != decision.AttackVectorSlowScan {
@@ -587,13 +507,6 @@ func TestDecide_RecordsFindingForEveryTriggeredDetector_NotJustPrincipal(t *test
 	}
 }
 
-// TestDecide_RecordsAnomalyScoreOnEveryEvaluation_EvenWhenNotTriggered
-// confirma que RecordAnomalyScore se llama en CADA Decide, no solo
-// cuando statistical_anomaly dispara — a diferencia de RecordFinding.
-// Con anomaly inerte (nunca dispara), cada score registrado debe ser
-// 0 (el valor cero de un Finding no disparado), pero la llamada en sí
-// tiene que existir igual: es lo que permite observar la distribución
-// completa del score, no solo la cola que llegó a disparar.
 func TestDecide_RecordsAnomalyScoreOnEveryEvaluation_EvenWhenNotTriggered(t *testing.T) {
 	recorder := &fakeFindingsRecorder{}
 	cs, err := credstuffing.NewDetector(csConfig(fakeResolver{}))
@@ -627,17 +540,10 @@ func TestDecide_RecordsAnomalyScoreOnEveryEvaluation_EvenWhenNotTriggered(t *tes
 	}
 }
 
-// TestDecide_RecordsAnomalyScore_MatchesTriggeredFindingRiskScore
-// reusa el patrón de warm-up + IP anómala ya probado en
-// TestDecide_AttributionPrefersSpecific_ButConfidenceScoreStaysMax
-// (con slow_scan y credential_stuffing inertes para este escenario)
-// para confirmar que, cuando statistical_anomaly SÍ dispara, el score
-// registrado coincide exactamente con el RiskScore/ConfidenceScore de
-// la Decision resultante — nunca un valor recalculado aparte.
 func TestDecide_RecordsAnomalyScore_MatchesTriggeredFindingRiskScore(t *testing.T) {
 	recorder := &fakeFindingsRecorder{}
 	ssInert := ssConfig()
-	ssInert.MinRequests = 1000 // slow_scan nunca dispara en este test
+	ssInert.MinRequests = 1000
 
 	an := anomaly.Config{
 		Window:           time.Hour,
@@ -664,7 +570,6 @@ func TestDecide_RecordsAnomalyScore_MatchesTriggeredFindingRiskScore(t *testing.
 		t.Fatalf("NewBehavioralDecider: %v", err)
 	}
 
-	// Calienta el baseline con tráfico normal de varias IPs.
 	for i := 10; i < 15; i++ {
 		ip := ipFor(i)
 		for j := 0; j < 20; j++ {
@@ -676,7 +581,6 @@ func TestDecide_RecordsAnomalyScore_MatchesTriggeredFindingRiskScore(t *testing.
 		}
 	}
 
-	// IP anómala: mayoría 404 contra un baseline ya calentado en ~10%.
 	anomalousIP := ipFor(4)
 	var last decision.Decision
 	for j := 0; j < 20; j++ {
@@ -687,10 +591,6 @@ func TestDecide_RecordsAnomalyScore_MatchesTriggeredFindingRiskScore(t *testing.
 		last = d.Decide(context.Background(), scanEvent(anomalousIP, time.Duration(1000+j)*time.Second, "/normal", status, true, ""))
 	}
 
-	// statistical_anomaly es el único que dispara acá (credential_stuffing
-	// y slow_scan quedan inertes) — attack_vector se mantiene "unknown"
-	// por diseño (anomaly nunca es un vector específico, ver
-	// selectAttribution), pero ConfidenceScore sí refleja su RiskScore.
 	if last.AttackVector != decision.AttackVectorUnknown {
 		t.Fatalf("setup inválido: AttackVector = %v, want unknown (solo statistical_anomaly dispara, nunca es un vector específico)", last.AttackVector)
 	}
@@ -709,18 +609,8 @@ func TestDecide_RecordsAnomalyScore_MatchesTriggeredFindingRiskScore(t *testing.
 	}
 }
 
-// --- Empate exacto: gana credential_stuffing ------------------------------
-
-// TestDecide_ExactTie_CredentialStuffingWins es el test más delicado:
-// arma, a mano, un evento tal que credential_stuffing y slow_scan
-// disparan con EXACTAMENTE el mismo RiskScore (0.2, el ScoreFloor de
-// los dos, con las cinco/cuatro señales de cada gate exactamente en su
-// umbral) — y confirma que gana credential_stuffing, la regla de
-// desempate documentada.
 func TestDecide_ExactTie_CredentialStuffingWins(t *testing.T) {
 	resolver := fakeResolver{}
-	// slow scan necesita, acá sí, la configuración estricta
-	// (MinRouteEntropy=1.0) para que el ejemplo dé un empate exacto.
 	strictSlowScan := slowscan.Config{
 		Window:                  time.Hour,
 		MinRequests:             10,
@@ -740,18 +630,12 @@ func TestDecide_ExactTie_CredentialStuffingWins(t *testing.T) {
 		resolver[ip] = group
 	}
 
-	// credential stuffing: 6 intentos, 5 IPs (ip0 hace 2), 4 cuentas,
-	// ratio de fallo exacto 0.5.
 	d.Decide(context.Background(), loginEvent(ip0, 0, "acct-A", 401))
 	d.Decide(context.Background(), loginEvent(ip1, 1*time.Second, "acct-C", 401))
 	d.Decide(context.Background(), loginEvent(ip2, 2*time.Second, "acct-D", 200))
 	d.Decide(context.Background(), loginEvent(ip3, 3*time.Second, "acct-D", 403))
 	d.Decide(context.Background(), loginEvent(ip4, 4*time.Second, "acct-A", 200))
 
-	// slow scan de ip0: además de sus 2 logins (path "/login", ya
-	// contados arriba), 8 requests más sobre 4 rutas nuevas — 5 rutas
-	// distintas en total (login,p2,p3,p4,p5), 2 visitas cada una,
-	// entropía exacta 1.0.
 	d.Decide(context.Background(), scanEvent(ip0, 5*time.Second, "/p2", 404, true, ""))
 	d.Decide(context.Background(), scanEvent(ip0, 6*time.Second, "/p2", 200, true, ""))
 	d.Decide(context.Background(), scanEvent(ip0, 7*time.Second, "/p3", 404, true, ""))
@@ -760,11 +644,8 @@ func TestDecide_ExactTie_CredentialStuffingWins(t *testing.T) {
 	d.Decide(context.Background(), scanEvent(ip0, 10*time.Second, "/p4", 200, true, ""))
 	d.Decide(context.Background(), scanEvent(ip0, 11*time.Second, "/p5", 404, true, ""))
 	d.Decide(context.Background(), scanEvent(ip0, 12*time.Second, "/p5", 404, true, ""))
-	// "other" visita /p2 también, para que quede 3 rutas "novel"
-	// (p3,p4,p5) de 5 -> NovelPathRatio exacto 0.6.
 	d.Decide(context.Background(), scanEvent(other, 13*time.Second, "/p2", 200, true, ""))
 
-	// Probe final: la segunda petición de login de ip0.
 	final := d.Decide(context.Background(), loginEvent(ip0, 14*time.Second, "acct-B", 200))
 
 	if final.AttackVector != decision.AttackVectorCredentialStuffing {
@@ -784,19 +665,9 @@ func TestDecide_ExactTie_CredentialStuffingWins(t *testing.T) {
 	}
 }
 
-// --- El detector estadístico como tercera fuente de Finding ---------------
-
-// TestDecide_AnomalyFindingCanBePrincipal_WhenHigherScore confirma que
-// el Finding del detector estadístico puede llegar a ser el principal
-// de la Decision — no solo credential_stuffing/slow_scan. Usa un
-// resolver vacío (credential stuffing nunca resuelve ningún grupo,
-// estructuralmente inerte) y un slowscan.Config con MinRequests muy
-// alto (nunca se alcanza con estos lotes, estructuralmente inerte
-// también), así que la única fuente de evidencia posible es
-// internal/anomaly.
 func TestDecide_AnomalyFindingCanBePrincipal_WhenHigherScore(t *testing.T) {
 	ss := ssConfig()
-	ss.MinRequests = 1000 // nunca se alcanza acá: slow_scan queda inerte
+	ss.MinRequests = 1000
 
 	an := anomaly.Config{
 		Window:           time.Hour,
@@ -808,14 +679,12 @@ func TestDecide_AnomalyFindingCanBePrincipal_WhenHigherScore(t *testing.T) {
 	}
 	d := newTestDeciderFull(t, fakeResolver{}, ss, an, testPolicy())
 
-	// Tráfico "normal" de cinco entidades: mayormente 200, un puñado
-	// de 404 ocasionales — calienta el baseline estadístico.
 	var last decision.Decision
 	for i := 0; i < 5; i++ {
 		ip := ipFor(i)
 		for j := 0; j < 20; j++ {
 			status := 200
-			if j%10 == 0 { // ~10% not-found
+			if j%10 == 0 {
 				status = 404
 			}
 			e := scanEvent(ip, time.Duration(i*30+j)*time.Second, "/normal", status, true, "")
@@ -823,7 +692,6 @@ func TestDecide_AnomalyFindingCanBePrincipal_WhenHigherScore(t *testing.T) {
 		}
 	}
 
-	// Una entidad claramente anómala: 90% not-found.
 	anomalousIP := ipFor(50)
 	for j := 0; j < 20; j++ {
 		status := 200
@@ -848,11 +716,6 @@ func TestDecide_AnomalyFindingCanBePrincipal_WhenHigherScore(t *testing.T) {
 	}
 }
 
-// TestDecide_OtherDetectorStaysPrincipal_OverAnomaly confirma lo
-// contrario: aunque el detector estadístico también dispare, un
-// detector con un score claramente mayor (acá, slow_scan, con un
-// escaneo lento evidente) sigue siendo el principal — el estadístico
-// no "gana" solo por existir.
 func TestDecide_OtherDetectorStaysPrincipal_OverAnomaly(t *testing.T) {
 	an := anomaly.Config{
 		Window:           time.Hour,
@@ -864,8 +727,6 @@ func TestDecide_OtherDetectorStaysPrincipal_OverAnomaly(t *testing.T) {
 	}
 	d := newTestDeciderFull(t, fakeResolver{}, ssConfig(), an, testPolicy())
 
-	// Calienta el baseline estadístico con tráfico modesto de otras
-	// entidades, antes del escaneo lento real.
 	for i := 0; i < 5; i++ {
 		ip := ipFor(i)
 		for j := 0; j < 20; j++ {
@@ -877,8 +738,6 @@ func TestDecide_OtherDetectorStaysPrincipal_OverAnomaly(t *testing.T) {
 		}
 	}
 
-	// Escaneo lento real y evidente — score muy por encima de lo que
-	// puede dar el detector estadístico con una sola señal dominante.
 	ip := ipFor(0)
 	var last decision.Decision
 	for i := 0; i < 50; i++ {
@@ -893,12 +752,6 @@ func TestDecide_OtherDetectorStaysPrincipal_OverAnomaly(t *testing.T) {
 	}
 }
 
-// --- Attribution vs. decision score -----------------------------------
-
-// specificFinding/anomalyFinding son helpers mínimos para construir
-// triggeredFinding sintéticos en los tests de selectAttribution/
-// bestIndexByScore de abajo — nunca corren ningún detector real, solo
-// prueban la lógica de selección en aislamiento.
 func specificFinding(vector decision.AttackVector, riskScore float64, priority int) triggeredFinding {
 	return triggeredFinding{finding: finding.Finding{Triggered: true, AttackVector: vector, RiskScore: riskScore}, priority: priority}
 }
@@ -907,11 +760,6 @@ func anomalyFinding(riskScore float64) triggeredFinding {
 	return specificFinding(decision.AttackVectorUnknown, riskScore, anomalyPriority)
 }
 
-// TestSelectAttribution_PrefersSpecific_EvenWithLowerScore es el caso
-// central del cambio: credential_stuffing dispara con un score BAJO
-// (0.3) y statistical_anomaly con uno claramente MAYOR (0.9) — la
-// attribution tiene que quedar en credential_stuffing igual, algo que
-// selectPrincipal (usado para Action/ConfidenceScore) NUNCA haría.
 func TestSelectAttribution_PrefersSpecific_EvenWithLowerScore(t *testing.T) {
 	triggered := []triggeredFinding{
 		specificFinding(decision.AttackVectorCredentialStuffing, 0.3, 0),
@@ -929,19 +777,12 @@ func TestSelectAttribution_PrefersSpecific_EvenWithLowerScore(t *testing.T) {
 		t.Errorf("secondaries = %+v, want [statistical_anomaly]", secondaries)
 	}
 
-	// selectPrincipal, en cambio, tiene que seguir eligiendo el mayor
-	// score sin importar qué detector lo produjo — nunca cambia.
 	principal, _ := selectPrincipal(triggered)
 	if principal == nil || principal.RiskScore != 0.9 {
 		t.Fatalf("selectPrincipal = %+v, want RiskScore 0.9 (el mayor score entre TODOS, sin preferencia por específico)", principal)
 	}
 }
 
-// TestSelectAttribution_BothSpecific_HighestScoreWins confirma que,
-// cuando SOLO hay detectores específicos disparados (sin anomaly), la
-// attribution sigue siendo por mayor score entre ellos — igual que
-// selectPrincipal, porque ahí no hay ninguna preferencia especial que
-// aplicar.
 func TestSelectAttribution_BothSpecific_HighestScoreWins(t *testing.T) {
 	triggered := []triggeredFinding{
 		specificFinding(decision.AttackVectorCredentialStuffing, 0.3, 0),
@@ -953,10 +794,6 @@ func TestSelectAttribution_BothSpecific_HighestScoreWins(t *testing.T) {
 	}
 }
 
-// TestSelectAttribution_ExactTie_SpecificPriorityBreaksTie confirma
-// que el desempate determinista existente (credential_stuffing gana
-// un empate exacto contra slow_scan) se mantiene sin cambios dentro
-// del grupo de específicos.
 func TestSelectAttribution_ExactTie_SpecificPriorityBreaksTie(t *testing.T) {
 	triggered := []triggeredFinding{
 		specificFinding(decision.AttackVectorSlowScan, 0.5, 1),
@@ -968,11 +805,6 @@ func TestSelectAttribution_ExactTie_SpecificPriorityBreaksTie(t *testing.T) {
 	}
 }
 
-// TestSelectAttribution_AnomalyOnly_ReturnsUnknown cubre el otro
-// extremo explícitamente pedido: sin ningún específico disparado, la
-// attribution cae en statistical_anomaly — cuyo propio AttackVector
-// ya es "unknown" (ver internal/anomaly), no una regla especial de
-// selectAttribution.
 func TestSelectAttribution_AnomalyOnly_ReturnsUnknown(t *testing.T) {
 	triggered := []triggeredFinding{anomalyFinding(0.6)}
 	attribution, secondaries := selectAttribution(triggered)
@@ -991,22 +823,6 @@ func TestSelectAttribution_Empty_ReturnsNil(t *testing.T) {
 	}
 }
 
-// TestDecide_AttributionPrefersSpecific_ButConfidenceScoreStaysMax es
-// el test de integración de extremo a extremo pedido explícitamente
-// ("antes vs después"): con detectores REALES (no sintéticos),
-// credential_stuffing dispara con su score de siempre (0.2, exacto en
-// su ScoreFloor — mismo escenario ya usado y verificado en
-// TestDecide_FindingBelowChallengeThreshold_StaysAllowButPreservesEvidence)
-// mientras statistical_anomaly, con un baseline ya calentado, dispara
-// con un score CLARAMENTE mayor para la MISMA IP que cierra la
-// campaña. Se compara contra una corrida IDÉNTICA de
-// credential_stuffing con anomaly inerte (el comportamiento previo a
-// separar Action/ConfidenceScore de AttackVector/EntityID) para
-// probar, sin calcular ningún z-score a mano, que:
-//   - Action/ConfidenceScore siguen viniendo del score MÁS ALTO
-//     (el de anomaly, mayor al 0.2 de referencia) — sin cambios.
-//   - AttackVector/EntityID quedan atribuidos a credential_stuffing —
-//     el cambio central de esta separación.
 func TestDecide_AttributionPrefersSpecific_ButConfidenceScoreStaysMax(t *testing.T) {
 	buildCredentialStuffingSequence := func(d *BehavioralDecider, resolver fakeResolver, group string) decision.Decision {
 		ips := []netip.Addr{ipFor(0), ipFor(1), ipFor(2), ipFor(3), ipFor(4)}
@@ -1023,8 +839,6 @@ func TestDecide_AttributionPrefersSpecific_ButConfidenceScoreStaysMax(t *testing
 		return last
 	}
 
-	// Corrida de referencia: solo credential_stuffing (anomaly
-	// inerte, newTestDecider) — el comportamiento de siempre.
 	csOnlyResolver := fakeResolver{}
 	csOnly := newTestDecider(t, csOnlyResolver, ssConfig(), testPolicy())
 	csOnlyFinal := buildCredentialStuffingSequence(csOnly, csOnlyResolver, "asn:cs-only")
@@ -1032,12 +846,8 @@ func TestDecide_AttributionPrefersSpecific_ButConfidenceScoreStaysMax(t *testing
 		t.Fatalf("setup inválido (csOnly): AttackVector=%v ConfidenceScore=%v, want credential_stuffing/0.2", csOnlyFinal.AttackVector, csOnlyFinal.ConfidenceScore)
 	}
 
-	// Corrida mixta: MISMA secuencia de credential_stuffing, pero con
-	// statistical_anomaly activo y un baseline ya calentado que hace
-	// que ipFor(4) — la IP que cierra la campaña — resulte claramente
-	// anómala (90% not-found, vs. ~10% del baseline).
 	ss := ssConfig()
-	ss.MinRequests = 1000 // slow_scan inerte: solo compiten credential_stuffing y anomaly
+	ss.MinRequests = 1000
 
 	an := anomaly.Config{
 		Window:           time.Hour,
@@ -1085,8 +895,6 @@ func TestDecide_AttributionPrefersSpecific_ButConfidenceScoreStaysMax(t *testing
 		t.Errorf("decision.Validate(%+v) = %v, want nil", final, err)
 	}
 }
-
-// --- Concurrencia ------------------------------------------------------------
 
 func TestDecide_Concurrent_NoRaces(t *testing.T) {
 	const n = 50

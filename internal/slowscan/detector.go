@@ -1,12 +1,4 @@
-// Package slowscan busca escaneo/enumeración lenta de rutas HTTP — un
-// atacante que mantiene una tasa baja de requests, precisamente para
-// evitar cualquier rate limiter, pero deja un patrón de exploración
-// acumulado a lo largo de una ventana. A diferencia de
-// internal/credstuffing, esta señal es por entidad individual (IP
-// y/o sesión), nunca correlacionada entre IPs — mismo criterio que
-// usa internal/datagen para generar el tráfico de escaneo lento.
-//
-// Este paquete nunca importa internal/groundtruth ni internal/datagen.
+// Detecta escaneos lentos usando diversidad, entropía, errores 404 y novedad de rutas.
 package slowscan
 
 import (
@@ -23,9 +15,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/profile"
 )
 
-// ScoreWeights son los pesos relativos de cada señal en el cálculo de
-// RiskScore (ver evaluateMetrics). No hace falta que sumen 1 — se
-// normalizan por su suma, mismo criterio que internal/credstuffing.
 type ScoreWeights struct {
 	Requests float64
 	Paths    float64
@@ -35,51 +24,22 @@ type ScoreWeights struct {
 	Referer  float64
 }
 
-// Config configura el detector. Igual que internal/baseline e
-// internal/credstuffing, ningún valor tiene acá un default
-// "recomendado": los umbrales se calibran en una tarea posterior
-// contra un dataset separado del de reporte, nunca mirando la
-// semilla 42.
 type Config struct {
-	// Window es la ventana de acumulación por entidad (IP o sesión) Y
-	// la ventana del índice de popularidad de rutas (ver
-	// NovelPathRatio) — una sola ventana para las dos cosas, mismo
-	// criterio de simplicidad que profile.Store.
 	Window time.Duration
 
-	// MinRequests, MinDistinctPaths, MinNotFoundRatio, MinRouteEntropy
-	// y MinNovelPathRatio son las cinco condiciones del gate — TODAS
-	// deben cumplirse a la vez para que una entidad dispare (ver
-	// evaluateMetrics). MinRequests y MinDistinctPaths deben ser
-	// mayores que 0. Los tres ratios deben estar en [0,1].
 	MinRequests       int
 	MinDistinctPaths  int
 	MinNotFoundRatio  float64
 	MinRouteEntropy   float64
 	MinNovelPathRatio float64
 
-	// MaxVisitorsForNovelPath es el umbral de popularidad: una ruta se
-	// considera "novel" (poco habitual) si, dentro de la ventana, la
-	// vieron como máximo esta cantidad de IPs distintas en todo el
-	// tráfico observado por este detector. Debe ser al menos 1.
 	MaxVisitorsForNovelPath int
 
-	// Weights pondera las seis señales al combinar el RiskScore.
-	// Referer nunca participa del gate — solo del score (ver
-	// evaluateMetrics).
 	Weights ScoreWeights
 
-	// ScoreFloor es el piso de RiskScore cuando Triggered es true.
-	// Debe estar estrictamente entre 0 y 1 — mismo mecanismo y misma
-	// razón que internal/credstuffing: en el borde exacto del gate,
-	// los componentes normalizados de las cinco señales del
-	// gate dan 0, y un detector que disparó no puede reportar riesgo
-	// cero.
 	ScoreFloor float64
 }
 
-// Errores centinela de configuración, comprobables individualmente
-// con errors.Is.
 var (
 	ErrInvalidWindow                  = errors.New("slowscan: window must be greater than 0")
 	ErrInvalidMinRequests             = errors.New("slowscan: min_requests must be greater than 0")
@@ -92,8 +52,6 @@ var (
 	ErrInvalidWeights                 = errors.New("slowscan: weights must be finite, non-negative, and sum to more than 0")
 )
 
-// Validate comprueba que cfg tenga valores utilizables, y devuelve
-// todos los problemas encontrados unidos con errors.Join.
 func (cfg Config) Validate() error {
 	var errs []error
 	if cfg.Window <= 0 {
@@ -135,30 +93,16 @@ func isFiniteNonNegative(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
 }
 
-// pathVisit es lo mínimo retenido en el índice de popularidad de
-// rutas: cuándo y desde qué IP se pidió una ruta.
 type pathVisit struct {
 	timestamp time.Time
 	ip        netip.Addr
 }
 
-// pathState es el estado retenido de una ruta: su watermark (nunca
-// retrocede — mismo mecanismo que internal/profile e
-// internal/credstuffing) y las visitas todavía dentro de la ventana
-// relativa a ese watermark.
 type pathState struct {
 	watermark time.Time
 	visits    []pathVisit
 }
 
-// pathPopularity es el único estado nuevo de este paquete: cuántas IPs
-// distintas, en todo el tráfico observado, pidieron cada ruta dentro
-// de la ventana — la pieza que internal/profile.Store no puede dar,
-// necesaria para NovelPathRatio (ver Detector.novelPathRatio).
-// Reimplementado de forma autocontenida con el mismo mecanismo de
-// watermark, por la misma razón que internal/credstuffing: la
-// agregación acá es por ruta, no por IP/sesión, así que no hay nada
-// que reutilizar de profile.Store para esto específicamente.
 type pathPopularity struct {
 	mu     sync.Mutex
 	window time.Duration
@@ -194,8 +138,6 @@ func (p *pathPopularity) observe(path string, ip netip.Addr, timestamp time.Time
 	p.data[path] = state
 }
 
-// distinctVisitors devuelve cuántas IPs distintas visitaron path
-// dentro de la ventana retenida.
 func (p *pathPopularity) distinctVisitors(path string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -221,25 +163,18 @@ func (p *pathPopularity) sweep(now time.Time, idleTTL time.Duration) int {
 	return removed
 }
 
-// Detector es el detector de escaneo/enumeración lenta. Es seguro
-// para uso concurrente.
 type Detector struct {
 	cfg      Config
-	profiles *profile.Store // reutilizado tal cual — ver docs/decisiones.md
+	profiles *profile.Store
 	paths    *pathPopularity
 }
 
-// NewDetector construye un Detector. Devuelve error si cfg no es
-// utilizable.
 func NewDetector(cfg Config) (*Detector, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	profiles, err := profile.NewStore(cfg.Window)
 	if err != nil {
-		// No debería pasar nunca — Validate ya exige Window > 0 — pero
-		// se propaga en vez de asumirlo, por si profile.NewStore agrega
-		// alguna otra regla en el futuro.
 		return nil, err
 	}
 	return &Detector{
@@ -249,36 +184,16 @@ func NewDetector(cfg Config) (*Detector, error) {
 	}, nil
 }
 
-// Observe registra e tanto en los perfiles de comportamiento (IP y,
-// si corresponde, sesión — internal/profile) como en el índice de
-// popularidad de rutas.
 func (d *Detector) Observe(e event.Event) {
 	d.profiles.Observe(e)
 	d.paths.observe(e.Path, e.ClientIP, e.Timestamp)
 }
 
-// scope identifica si un candidato de Finding salió de la perspectiva
-// de IP o de sesión, y se usa para construir Finding.EntityID
-// (formato "ip:<addr>" o "session:<id>", ver evaluateMetrics).
 type scope struct {
-	label string // "ip" o "session"
+	label string
 	key   string
 }
 
-// Evaluate decide si, a partir del estado actual de la IP de e y,
-// si existe, de su sesión, hay evidencia de escaneo lento — evaluando
-// SIEMPRE la IP y, cuando e.SessionID no está vacío, TAMBIÉN la
-// sesión, y devolviendo como máximo un único Finding (ver
-// docs/decisiones.md para por qué evaluar siempre la IP —incluso
-// habiendo sesión— es necesario para atrapar a un atacante
-// que rota session_id para quedar bajo los umbrales por sesión, sin
-// por eso reintroducir falsos positivos de un NAT legítimo: el mismo
-// gate completo de cinco condiciones se le aplica a la IP).
-//
-// Regla de desempate cuando las dos perspectivas disparan: gana la de
-// mayor RiskScore; en caso de empate exacto, gana sesión, por ser la
-// entidad más específica — evita atribuir el hallazgo a todo el NAT
-// cuando alcanza con señalar la sesión concreta.
 func (d *Detector) Evaluate(e event.Event) finding.Finding {
 	ipFinding := d.evaluateMetrics(d.profiles.SnapshotIP(e.ClientIP), scope{label: "ip", key: e.ClientIP.String()})
 
@@ -293,7 +208,7 @@ func (d *Detector) Evaluate(e event.Event) finding.Finding {
 		if ipFinding.RiskScore > sessionFinding.RiskScore {
 			return ipFinding
 		}
-		return sessionFinding // empate o sesión mayor: gana sesión
+		return sessionFinding
 	case haveSession && sessionFinding.Triggered:
 		return sessionFinding
 	case ipFinding.Triggered:
@@ -303,9 +218,6 @@ func (d *Detector) Evaluate(e event.Event) finding.Finding {
 	}
 }
 
-// evaluateMetrics aplica el gate y, si dispara, calcula RiskScore y
-// las señales, a partir de un profile.Metrics ya calculado (por IP o
-// por sesión — evaluateMetrics no distingue, solo usa los números).
 func (d *Detector) evaluateMetrics(m profile.Metrics, sc scope) finding.Finding {
 	gate := d.gateMetricsFor(m, sc.label+":"+sc.key)
 	if !gate.Triggered {
@@ -323,17 +235,13 @@ func (d *Detector) evaluateMetrics(m profile.Metrics, sc scope) finding.Finding 
 	cNotFound := ratioComponent(gate.NotFoundRatio, d.cfg.MinNotFoundRatio)
 	cEntropy := ratioComponent(gate.RouteEntropy, d.cfg.MinRouteEntropy)
 	cNovelty := ratioComponent(gate.NovelPathRatio, d.cfg.MinNovelPathRatio)
-	cReferer := withoutRefererRatio // sin umbral: aporta al score tal cual, nunca al gate
+	cReferer := withoutRefererRatio
 
 	w := d.cfg.Weights
 	weightSum := w.Requests + w.Paths + w.NotFound + w.Entropy + w.Novelty + w.Referer
 	avg := (cRequests*w.Requests + cPaths*w.Paths + cNotFound*w.NotFound +
 		cEntropy*w.Entropy + cNovelty*w.Novelty + cReferer*w.Referer) / weightSum
 
-	// Mismo mecanismo de piso que internal/credstuffing: sin él, las
-	// cinco señales del gate exactamente en su umbral darían
-	// componentes en 0, y un Finding disparado no puede reportar
-	// riesgo cero.
 	riskScore := d.cfg.ScoreFloor + (1-d.cfg.ScoreFloor)*avg
 
 	return finding.Finding{
@@ -348,8 +256,6 @@ func (d *Detector) evaluateMetrics(m profile.Metrics, sc scope) finding.Finding 
 			{Name: "novel_path_ratio", Value: gate.NovelPathRatio, Weight: w.Novelty},
 			{Name: "without_referer_ratio", Value: withoutRefererRatio, Weight: w.Referer},
 		},
-		// El scope (IP o sesión) ya queda identificado en EntityID —
-		// acá no se repite, Explanation se enfoca en el porqué.
 		Explanation: fmt.Sprintf(
 			"%d requests across %d distinct paths, %.0f%% not-found, entropy=%.2f, %.0f%% novel paths within the window",
 			total, gate.DistinctPaths, gate.NotFoundRatio*100, gate.RouteEntropy, gate.NovelPathRatio*100,
@@ -358,17 +264,7 @@ func (d *Detector) evaluateMetrics(m profile.Metrics, sc scope) finding.Finding 
 	}
 }
 
-// GateMetrics es la evaluación diagnóstica de las cinco condiciones
-// del gate para UN scope (IP o sesión): expone los números crudos
-// (TotalRequests, DistinctPaths, NotFoundRatio,
-// RouteEntropy, NovelPathRatio) SIN IMPORTAR si dispararon o no.
-// evaluateMetrics los descarta en el caso no disparado (devuelve
-// finding.Finding{}) — GateMetrics es la forma de ver, para una
-// campaña que nunca disparó o que disparó tarde, cuál de las cinco
-// condiciones seguía sin cumplirse. Ningún código de producción usa
-// esto — engine.BehavioralDecider solo conoce Evaluate.
 type GateMetrics struct {
-	// Scope es "ip:<dirección>" o "session:<id>".
 	Scope string
 
 	TotalRequests  int
@@ -377,22 +273,9 @@ type GateMetrics struct {
 	RouteEntropy   float64
 	NovelPathRatio float64
 
-	// Triggered es el mismo booleano de gate que ya calcula
-	// evaluateMetrics — se repite acá para no obligar a quien lee este
-	// reporte a comparar los cinco números contra los Min* de Config
-	// a mano.
 	Triggered bool
 }
 
-// EvaluateGateMetrics es el equivalente diagnóstico de evaluateMetrics
-// para AMBOS scopes (IP, y sesión si e.SessionID no está vacío) —
-// nunca muta ningún estado (a diferencia de Observe, el único lugar
-// donde este detector escribe): es una lectura pura sobre
-// profiles/paths, tal como quedaron tras el último Observe. Se puede
-// llamar tantas veces como se quiera, incluso junto con Evaluate para
-// el mismo evento, sin ningún efecto secundario ni riesgo de
-// duplicar ninguna actualización (a diferencia de
-// anomaly.Detector.EvaluateDebug, que sí actualiza un baseline).
 func (d *Detector) EvaluateGateMetrics(e event.Event) []GateMetrics {
 	result := []GateMetrics{d.gateMetricsFor(d.profiles.SnapshotIP(e.ClientIP), "ip:"+e.ClientIP.String())}
 	if e.SessionID != "" {
@@ -429,12 +312,6 @@ func (d *Detector) gateMetricsFor(m profile.Metrics, scopeLabel string) GateMetr
 	}
 }
 
-// novelPathRatio es la fracción de las rutas distintas de m que son
-// "novel" según el índice global de popularidad — ver el tipo
-// pathPopularity y docs/decisiones.md para la definición completa y
-// por qué esta es la opción mínima técnicamente correcta dado lo que
-// el motor puede observar hoy (sin catálogo externo de rutas reales,
-// sin ground truth).
 func (d *Detector) novelPathRatio(pathCounts map[string]int, distinctPaths int) float64 {
 	if distinctPaths == 0 {
 		return 0
@@ -448,13 +325,6 @@ func (d *Detector) novelPathRatio(pathCounts map[string]int, distinctPaths int) 
 	return float64(novel) / float64(distinctPaths)
 }
 
-// normalizedEntropy es la entropía de Shannon de la distribución de
-// rutas de pathCounts, normalizada a [0,1] dividiendo por
-// log2(distinctPaths) — así perfiles con distinta cantidad de rutas
-// distintas siguen siendo comparables con el mismo umbral (ver
-// docs/decisiones.md, con dos ejemplos calculados a mano). Da 0 si
-// hay una sola ruta distinta o ninguna — sin diversidad que medir,
-// por definición.
 func normalizedEntropy(pathCounts map[string]int, total, distinctPaths int) float64 {
 	if distinctPaths <= 1 || total == 0 {
 		return 0
@@ -474,9 +344,6 @@ func normalizedEntropy(pathCounts map[string]int, total, distinctPaths int) floa
 	return h / max
 }
 
-// excessComponent es la misma heurística "cuánto se superó el umbral"
-// ya usada y justificada en internal/baseline e internal/credstuffing:
-// 1 - umbral/valor, siempre en [0,1), 0 justo en el umbral.
 func excessComponent(actual, threshold float64) float64 {
 	if actual <= 0 {
 		return 0
@@ -491,8 +358,6 @@ func excessComponent(actual, threshold float64) float64 {
 	return score
 }
 
-// ratioComponent normaliza un ratio ya acotado en [0,1] contra su
-// mínimo: 0 justo en el mínimo, 1 cuando el ratio llega a 1.
 func ratioComponent(actual, min float64) float64 {
 	if min >= 1 {
 		return 0
@@ -507,12 +372,6 @@ func ratioComponent(actual, min float64) float64 {
 	return score
 }
 
-// Sweep elimina, tanto de los perfiles de comportamiento como del
-// índice de popularidad de rutas, cualquier clave inactiva por más de
-// idleTTL respecto a now, y devuelve cuántas eliminó en total. now se
-// recibe como parámetro (nunca time.Now() internamente), así que
-// sigue siendo determinista y testeable — mismo criterio que
-// internal/profile.Store.Sweep e internal/credstuffing.Detector.Sweep.
 func (d *Detector) Sweep(now time.Time, idleTTL time.Duration) int {
 	return d.profiles.Sweep(now, idleTTL) + d.paths.sweep(now, idleTTL)
 }

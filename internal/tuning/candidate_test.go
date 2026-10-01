@@ -1,3 +1,4 @@
+// Prueba la construcción de candidatos de configuración.
 package tuning
 
 import (
@@ -7,14 +8,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/engine"
 )
 
-// TestBaselineCandidate_MatchesEngineDefaults es el guardrail que
-// confirma que BaselineCandidate refleja EXACTAMENTE lo mismo que
-// engine.Default*Config()/DefaultPolicy() — los mismos que usa
-// cmd/engine — nunca una copia a mano que pudiera desincronizarse.
-// Como BaselineCandidate ya llama directamente a esas funciones, este
-// test es sobre todo una alarma temprana: si algún día alguien
-// reemplaza esas llamadas por literales hardcodeados, este test lo
-// detecta de inmediato.
 func TestBaselineCandidate_MatchesEngineDefaults(t *testing.T) {
 	c := BaselineCandidate()
 
@@ -43,9 +36,6 @@ func TestCandidate_Build_ConstructsUsableDecider(t *testing.T) {
 	}
 }
 
-// TestCandidate_Build_InvalidPolicy_ReturnsError confirma que un
-// candidato con una Policy inválida falla en Build, no más adelante
-// con un panic durante Replay.
 func TestCandidate_Build_InvalidPolicy_ReturnsError(t *testing.T) {
 	c := BaselineCandidate()
 	c.Policy = engine.Policy{ChallengeThreshold: 0.8, BlockThreshold: 0.5}

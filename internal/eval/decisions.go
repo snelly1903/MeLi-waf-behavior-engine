@@ -1,3 +1,4 @@
+// Carga las decisiones de un motor desde JSONL, registrando las líneas inválidas.
 package eval
 
 import (
@@ -17,7 +18,6 @@ type LoadDecisionsResult struct {
 
 	CorruptLines []int
 }
-
 
 func LoadDecisions(path string) (LoadDecisionsResult, error) {
 	f, err := os.Open(path)

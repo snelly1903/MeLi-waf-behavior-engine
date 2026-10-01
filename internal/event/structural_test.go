@@ -1,3 +1,4 @@
+// Verifica que el evento no tenga campos de ground truth.
 package event
 
 import (
@@ -6,12 +7,6 @@ import (
 	"testing"
 )
 
-// forbiddenFieldSubstrings son palabras que indicarían que el ground
-// truth (o alguna otra forma de "la respuesta correcta") se filtró
-// dentro del contrato del evento. Este test inspecciona el propio tipo
-// Event mediante reflexión, así que falla en el momento en que se
-// agrega un campo así a la estructura — antes de que nadie llegue
-// siquiera a escribir código que lo lea.
 var forbiddenFieldSubstrings = []string{
 	"label",
 	"truth",

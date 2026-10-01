@@ -1,3 +1,4 @@
+// Construye el reporte agregado de evaluación sobre los escenarios de holdout.
 package tuning
 
 import (
@@ -6,9 +7,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/eval"
 )
 
-// DetectorLayerStability resume, para UN candidato/ratio, cuánto
-// varían las métricas centrales entre seeds — Range = max-min,
-// ignorando N/A (nunca se tratan como 0).
 type DetectorLayerStability struct {
 	Candidate string
 	Ratio     int
@@ -20,8 +18,6 @@ type DetectorLayerStability struct {
 	SlowScanRecallDetectorRange float64
 }
 
-// ComputeDetectorLayerStability calcula el Range de cada métrica
-// entre rows — todas del MISMO candidato/ratio, una por seed.
 func ComputeDetectorLayerStability(rows []DetectorLayerRow) DetectorLayerStability {
 	if len(rows) == 0 {
 		return DetectorLayerStability{}
@@ -47,8 +43,6 @@ func ComputeDetectorLayerStability(rows []DetectorLayerRow) DetectorLayerStabili
 	return s
 }
 
-// renderStabilityTable arma la tabla de estabilidad de un candidato,
-// una fila por ratio.
 func renderStabilityTable(candidateName string, rowsByRatio map[int][]DetectorLayerRow) string {
 	var b []byte
 	w := func(format string, args ...any) { b = append(b, []byte(fmt.Sprintf(format, args...))...) }
@@ -64,9 +58,6 @@ func renderStabilityTable(candidateName string, rowsByRatio map[int][]DetectorLa
 	return string(b)
 }
 
-// renderActionDistributionTable arma la tabla ALLOW/CHALLENGE/BLOCK
-// (legit y malicious por separado) de un candidato, pooled entre
-// seeds, una fila por ratio.
 func renderActionDistributionTable(candidateName string, actionsByRatio map[int]ActionDistribution) string {
 	var b []byte
 	w := func(format string, args ...any) { b = append(b, []byte(fmt.Sprintf(format, args...))...) }
@@ -86,12 +77,8 @@ func renderActionDistributionTable(candidateName string, actionsByRatio map[int]
 	return string(b)
 }
 
-// HoldoutDatasetReport agrupa todo lo calculado para UN dataset
-// (tuning u holdout): el reporte completo de Baseline y de Final, más
-// su Action distribution pooled por ratio — todo lo necesario para
-// las tablas de comparación del reporte final de holdout.
 type HoldoutDatasetReport struct {
-	Label string // "tuning" u "holdout"
+	Label string
 
 	Baseline DetectorLayerCandidateReport
 	Final    DetectorLayerCandidateReport
@@ -100,12 +87,6 @@ type HoldoutDatasetReport struct {
 	FinalActions    map[int]ActionDistribution
 }
 
-// RenderHoldoutReport arma el reporte final baseline-vs-tuned de
-// holdout: las secciones completas de Baseline y Final en
-// tuning y en holdout, la comparación lado a lado Baseline-vs-Final
-// DENTRO de cada dataset, la comparación Final-tuning-vs-Final-holdout
-// (para generalización/overfitting), Action distribution y
-// estabilidad entre seeds de los cuatro (candidato x dataset).
 func RenderHoldoutReport(tuningReport, holdoutReport HoldoutDatasetReport) string {
 	var b []byte
 	w := func(s string) { b = append(b, []byte(s)...) }

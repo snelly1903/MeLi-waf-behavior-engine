@@ -1,3 +1,4 @@
+// Exporta los resultados del load test a CSV y JSON.
 package loadtest
 
 import (
@@ -8,36 +9,18 @@ import (
 	"strconv"
 )
 
-// CombinationResult es UNA fila del reporte final: una combinación
-// (perfil x concurrencia x modo OTel) ya agregada entre sus 3
-// repeticiones, más el delta de memoria del proceso COMBINADO
-// cliente+servidor (nunca "RAM exclusiva del servidor" — cliente y
-// servidor comparten el mismo proceso Go en este harness, ver
-// docs/decisiones.md).
 type CombinationResult struct {
 	Profile     string
 	Concurrency int
 	OTelEnabled bool
 
-	// PairedOTelComparison marca las combinaciones que pertenecen al
-	// bloque comparativo OTel ON/OFF pareado (mixed@25 y mixed@100,
-	// cada par OFF->ON corrido uno inmediatamente después del otro,
-	// cerca en el tiempo) — nunca las mismas combinaciones
-	// (perfil/concurrencia) que ya corrió la matriz principal, aunque
-	// coincidan en Profile/Concurrency/OTelEnabled=false.
 	PairedOTelComparison bool
 
 	Aggregated AggregatedResult
 
-	// CombinedProcessAllocDeltaBytes es runtime.MemStats().Alloc
-	// después menos antes de esta combinación — SIEMPRE del proceso
-	// combinado cliente+servidor (httptest.Server corre en el mismo
-	// proceso), nunca memoria exclusiva del servidor.
 	CombinedProcessAllocDeltaBytes int64
 }
 
-// WriteCSV escribe results en path, una fila por CombinationResult
-// (agregado — ver WriteJSON para el detalle crudo por repetición).
 func WriteCSV(path string, results []CombinationResult) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -89,10 +72,6 @@ func msOf(d interface{ Seconds() float64 }) float64 {
 	return d.Seconds() * 1000
 }
 
-// WriteJSON escribe results en path como JSON indentado — los mismos
-// datos agregados que WriteCSV (latencias ya en milisegundos), MÁS
-// el detalle crudo de cada repetición individual (`repetitions`) —
-// el CSV, al ser tabular, se queda solo con el agregado.
 func WriteJSON(path string, results []CombinationResult) error {
 	type repetitionJSON struct {
 		Requests      int     `json:"requests"`
@@ -119,9 +98,6 @@ func WriteJSON(path string, results []CombinationResult) error {
 		ThroughputMinRPS    float64 `json:"throughput_min_rps"`
 		ThroughputMaxRPS    float64 `json:"throughput_max_rps"`
 
-		// P50Ms/P95Ms/P99Ms son la MEDIANA de los percentiles
-		// calculados por repetición (ver AggregatedResult) — nunca
-		// pooled sobre todas las muestras juntas.
 		P50Ms float64 `json:"p50_ms"`
 		P95Ms float64 `json:"p95_ms"`
 		P99Ms float64 `json:"p99_ms"`

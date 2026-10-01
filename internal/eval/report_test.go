@@ -1,3 +1,4 @@
+// Prueba el render Markdown del reporte de evaluación.
 package eval
 
 import (
@@ -38,7 +39,6 @@ func TestRenderMarkdown_CleanResult_NoWarning(t *testing.T) {
 	if !strings.Contains(report, "credential_stuffing | 1 | 0 | 1.000") {
 		t.Error("report is missing the credential_stuffing recall row")
 	}
-	// slow_scan no tuvo ningún registro real: su Recall es N/A, no 0.
 	if !strings.Contains(report, "slow_scan | 0 | 0 | N/A") {
 		t.Error("report must show N/A for slow_scan recall, not 0.000")
 	}
@@ -72,7 +72,6 @@ func TestRenderMarkdown_DirtyResult_ShowsWarningAndLists(t *testing.T) {
 	if !strings.Contains(report, "Líneas de decisions.jsonl no interpretables: 7") {
 		t.Error("report is missing CorruptDecisionLines")
 	}
-	// El bloque de advertencia tiene que aparecer ANTES de los números.
 	warnIdx := strings.Index(report, "⚠️")
 	policyIdx := strings.Index(report, "Política estricta")
 	if warnIdx == -1 || policyIdx == -1 || warnIdx > policyIdx {
@@ -80,9 +79,6 @@ func TestRenderMarkdown_DirtyResult_ShowsWarningAndLists(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdown_AllZeroMatrix_EverythingIsNA confirma que un
-// escenario 0%-malicioso (sin ningún positivo real ni predicho) no
-// disfraza el N/A con ceros en el texto del reporte.
 func TestRenderMarkdown_AllZeroMatrix_EverythingIsNA(t *testing.T) {
 	empty := ConfusionMatrix{}
 	pr := PolicyResult{Matrix: empty, Metrics: empty.Metrics()}

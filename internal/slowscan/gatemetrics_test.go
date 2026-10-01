@@ -1,3 +1,4 @@
+// Verifica que EvaluateGateMetrics sea consistente con Evaluate y no mute estado.
 package slowscan
 
 import (
@@ -7,11 +8,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/finding"
 )
 
-// TestEvaluateGateMetrics_MatchesEvaluate_WhenTriggered confirma que,
-// para el mismo escenario que TestEvaluate_ClearSlowScan_Triggers,
-// EvaluateGateMetrics reporta los mismos números crudos que ya
-// terminan en el Finding real de Evaluate — necesario para confiar en
-// el diagnóstico.
 func TestEvaluateGateMetrics_MatchesEvaluate_WhenTriggered(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
@@ -44,9 +40,6 @@ func TestEvaluateGateMetrics_MatchesEvaluate_WhenTriggered(t *testing.T) {
 	if g.NotFoundRatio != 1.0 {
 		t.Errorf("NotFoundRatio = %v, want 1.0 (todos 404)", g.NotFoundRatio)
 	}
-	// Los mismos números crudos que Evaluate ya expone en
-	// ContributingSignals — confirmando que no hay una segunda
-	// fórmula divergente.
 	for _, sig := range lastFinding.ContributingSignals {
 		switch sig.Name {
 		case "distinct_paths":
@@ -65,11 +58,6 @@ func TestEvaluateGateMetrics_MatchesEvaluate_WhenTriggered(t *testing.T) {
 	}
 }
 
-// TestEvaluateGateMetrics_ExposesRawNumbers_WhenNotTriggered es el
-// punto central de este método: Evaluate descarta los cinco números
-// del gate cuando no dispara (devuelve finding.Finding{}) —
-// EvaluateGateMetrics los expone siempre, para poder ver cuál
-// condición seguía sin cumplirse.
 func TestEvaluateGateMetrics_ExposesRawNumbers_WhenNotTriggered(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
@@ -99,11 +87,6 @@ func TestEvaluateGateMetrics_ExposesRawNumbers_WhenNotTriggered(t *testing.T) {
 	}
 }
 
-// TestEvaluateGateMetrics_NeverMutatesState confirma que llamar
-// EvaluateGateMetrics no tiene ningún efecto secundario — a
-// diferencia de anomaly.Detector.EvaluateDebug, este método es una
-// lectura pura, así que se puede llamar cualquier cantidad de veces
-// para el mismo evento sin cambiar ningún resultado futuro.
 func TestEvaluateGateMetrics_NeverMutatesState(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
@@ -112,7 +95,7 @@ func TestEvaluateGateMetrics_NeverMutatesState(t *testing.T) {
 
 	first := d.EvaluateGateMetrics(e)
 	second := d.EvaluateGateMetrics(e)
-	third := d.Evaluate(e) // Evaluate después de EvaluateGateMetrics, sin cambios de comportamiento
+	third := d.Evaluate(e)
 
 	if first[0] != second[0] {
 		t.Errorf("dos llamadas seguidas de EvaluateGateMetrics dieron resultados distintos: %+v vs %+v", first[0], second[0])

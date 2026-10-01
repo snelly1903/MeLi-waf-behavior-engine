@@ -1,3 +1,4 @@
+// Prueba el recall por vector y la atribución de vector de ataque.
 package eval
 
 import (
@@ -13,16 +14,6 @@ func fakeDecisionWithVector(requestID string, action decision.Action, vector dec
 	return d
 }
 
-// buildVectorTestRecords arma, a mano, siete registros que cubren cada
-// combinación que importa:
-//
-//	r-1  credential_stuffing  BLOCK      vector=credential_stuffing  -> TP, atribución correcta
-//	r-2  credential_stuffing  ALLOW      -                           -> FN (no cuenta para atribución)
-//	r-3  credential_stuffing  CHALLENGE  vector=unknown              -> TP, atribución desconocida
-//	r-4  credential_stuffing  BLOCK      vector=slow_scan            -> TP, atribución incorrecta
-//	r-5  slow_scan            BLOCK      vector=slow_scan            -> TP, atribución correcta
-//	r-6  slow_scan            ALLOW      -                           -> FN (no cuenta para atribución)
-//	r-7  legit                BLOCK      vector=credential_stuffing  -> FP (no cuenta para atribución: no hay ataque real)
 func buildVectorTestRecords() []JoinedRecord {
 	return []JoinedRecord{
 		{RequestID: "r-1", Label: groundtruth.LabelCredentialStuffing, Decision: fakeDecisionWithVector("r-1", decision.ActionBlock, decision.AttackVectorCredentialStuffing)},
@@ -35,10 +26,6 @@ func buildVectorTestRecords() []JoinedRecord {
 	}
 }
 
-// TestByAttackVectorRecall_HandComputed:
-//
-//	credential_stuffing: TP=3 (r-1,r-3,r-4), FN=1 (r-2) -> recall = 3/4 = 0.75
-//	slow_scan:            TP=1 (r-5),         FN=1 (r-6) -> recall = 1/2 = 0.5
 func TestByAttackVectorRecall_HandComputed(t *testing.T) {
 	results := ByAttackVectorRecall(buildVectorTestRecords(), PolicyBroad)
 
@@ -60,13 +47,6 @@ func TestByAttackVectorRecall_HandComputed(t *testing.T) {
 	checkRatio(t, "slow_scan recall", scan.Recall, true, 0.5)
 }
 
-// TestEvaluateVectorAttribution_HandComputed:
-//
-//	Correct   = 2  (r-1, r-5)
-//	Unknown   = 1  (r-3)
-//	Incorrect = 1  (r-4)
-//	r-2, r-6 (falsos negativos) y r-7 (falso positivo) no cuentan para nada acá.
-//	Accuracy = Correct / (Correct + Incorrect) = 2 / 3
 func TestEvaluateVectorAttribution_HandComputed(t *testing.T) {
 	got := EvaluateVectorAttribution(buildVectorTestRecords())
 
@@ -82,10 +62,6 @@ func TestEvaluateVectorAttribution_HandComputed(t *testing.T) {
 	checkRatio(t, "Accuracy", got.Accuracy(), true, 2.0/3.0)
 }
 
-// TestEvaluateVectorAttribution_AllUnknown_AccuracyIsNotAvailable
-// comprueba el caso límite: si un motor siempre responde "unknown", no
-// hay ningún "correcto" ni "incorrecto" para dividir — la precisión de
-// atribución tiene que ser N/A, no 0%.
 func TestEvaluateVectorAttribution_AllUnknown_AccuracyIsNotAvailable(t *testing.T) {
 	records := []JoinedRecord{
 		{RequestID: "r-1", Label: groundtruth.LabelCredentialStuffing, Decision: fakeDecisionWithVector("r-1", decision.ActionBlock, decision.AttackVectorUnknown)},

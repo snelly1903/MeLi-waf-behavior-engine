@@ -1,3 +1,4 @@
+// Genera campañas sintéticas de credential stuffing distribuidas entre muchas IPs.
 package datagen
 
 import (

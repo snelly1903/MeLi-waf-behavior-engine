@@ -1,3 +1,4 @@
+// Resume los retrasos de detección por vector de ataque.
 package tuning
 
 import (
@@ -7,31 +8,16 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// OptionalFloat es un número que puede no tener sentido calcular —
-// por ejemplo, el promedio de requests-hasta-detección cuando ninguna
-// campaña fue detectada nunca. Mismo criterio que eval.Ratio: N/A
-// nunca se disimula con un 0.
 type OptionalFloat struct {
 	Value   float64
 	Defined bool
 }
 
-// OptionalDuration es el equivalente de OptionalFloat para
-// time.Duration.
 type OptionalDuration struct {
 	Value   time.Duration
 	Defined bool
 }
 
-// DelaySummary resume, para UN vector de ataque, todas sus campañas
-// dentro de una corrida: cuántas hubo, cuántas se detectaron alguna
-// vez ("eventual campaign detection"), y el promedio de
-// requests/tiempo hasta la primera detección — calculado solo sobre
-// las campañas SÍ detectadas (promediar sobre "nunca" no tiene
-// sentido numérico). EventualDetectionRate es la fracción de
-// campañas detectadas sobre el total — esa sí incluye las no
-// detectadas en su denominador, es la métrica que no debe ocultar
-// falsos negativos iniciales.
 type DelaySummary struct {
 	Vector                  groundtruth.Label
 	Campaigns               int
@@ -41,9 +27,6 @@ type DelaySummary struct {
 	MeanTimeToDetection     OptionalDuration
 }
 
-// SummarizeDelay agrupa delays (de UNA corrida, ver
-// ComputeDetectionDelay) por Vector y calcula un DelaySummary por
-// cada uno presente.
 func SummarizeDelay(delays []CampaignDelay) []DelaySummary {
 	type acc struct {
 		campaigns          int
@@ -89,10 +72,6 @@ func SummarizeDelay(delays []CampaignDelay) []DelaySummary {
 	return summaries
 }
 
-// ratioOf es el mismo cálculo que el helper privado "ratio" de
-// internal/eval — no se puede reusar ese directamente (es privado a
-// su paquete), pero es una única división de tres líneas, no vale la
-// pena exportarla solo para esto.
 func ratioOf(numerator, denominator int) eval.Ratio {
 	if denominator == 0 {
 		return eval.Ratio{Defined: false}

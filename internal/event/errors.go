@@ -1,10 +1,8 @@
+// Define los errores de validación del evento.
 package event
 
 import "errors"
 
-// Errores centinela de validación. Validate los devuelve unidos con
-// errors.Join, así quien llama puede comprobar una regla específica con
-// errors.Is incluso cuando fallaron varias reglas sobre el mismo Event.
 var (
 	ErrEmptyRequestID = errors.New("event: request_id is required")
 

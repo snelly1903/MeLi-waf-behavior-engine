@@ -1,3 +1,4 @@
+// Prueba la validación, la línea base de Welford y el scoring del detector de anomalías.
 package anomaly
 
 import (
@@ -19,11 +20,6 @@ func ipFor(i int) netip.Addr {
 	return netip.AddrFrom4([4]byte{203, 0, 113, byte(1 + i%254)})
 }
 
-// buildEvents arma total eventos de una entidad, con conteos exactos
-// para cada señal — así las ratios resultantes (NotFoundRatio,
-// FailedAuthRatio, PathDiversityRatio, WithoutRefererRatio,
-// AccountDiversityRatio) quedan bajo control total, sin depender de
-// ningún sorteo aleatorio.
 func buildEvents(ip netip.Addr, total, notFound, failedAuth, distinctPaths, withoutReferer, distinctAccounts int, offsetBase time.Duration) []event.Event {
 	events := make([]event.Event, total)
 	for i := 0; i < total; i++ {
@@ -60,11 +56,6 @@ func buildEvents(ip netip.Addr, total, notFound, failedAuth, distinctPaths, with
 	return events
 }
 
-// evaluateBatch observa todos los eventos del lote (así el snapshot
-// de profile.Store queda completo) y recién entonces llama Evaluate
-// UNA sola vez, con el último evento — para que cada entidad aporte
-// exactamente UNA muestra al baseline global, no una por cada evento
-// parcial del lote.
 func evaluateBatch(d *Detector, events []event.Event) finding.Finding {
 	for _, e := range events {
 		d.Observe(e)
@@ -92,22 +83,15 @@ func newTestDetector(t *testing.T, cfg Config) *Detector {
 	return d
 }
 
-// warmupBatch arma un lote "normal" con variación leve entre
-// entidades (idx), para que el baseline termine con varianza
-// distinta de cero en las cinco features — sin esto, cualquier
-// desviación posterior daría z=0 por la guarda de varianza cero, y no
-// probaría nada.
 func warmupBatch(ip netip.Addr, idx int, offsetBase time.Duration) []event.Event {
 	total := 20
-	notFound := 1 + idx%4      // ratio .05–.20
-	failedAuth := idx % 3      // ratio 0–.10
-	distinctPaths := 3 + idx%3 // ratio .15–.25
+	notFound := 1 + idx%4
+	failedAuth := idx % 3
+	distinctPaths := 3 + idx%3
 	withoutReferer := 1 + idx%3
 	distinctAccounts := idx % 2
 	return buildEvents(ip, total, notFound, failedAuth, distinctPaths, withoutReferer, distinctAccounts, offsetBase)
 }
-
-// --- Config.Validate ------------------------------------------------------
 
 func TestConfig_Validate_InvalidConfigurations(t *testing.T) {
 	valid := testConfig()
@@ -140,13 +124,6 @@ func TestNewDetector_InvalidConfig_ReturnsError(t *testing.T) {
 	}
 }
 
-// --- Welford: media y varianza calculadas a mano --------------------------
-
-// TestBaseline_Welford_HandComputed alimenta el baseline con la
-// secuencia [1,2,3,4,5] (replicada en las cinco features) y confirma
-// mean=3, varianza muestral=2.5 (M2/(n-1) = 10/4), calculado a mano:
-// desviaciones respecto a la media final (3): (-2,-1,0,1,2) al
-// cuadrado suman 4+1+0+1+4=10.
 func TestBaseline_Welford_HandComputed(t *testing.T) {
 	b := &baseline{}
 	for _, x := range []float64{1, 2, 3, 4, 5} {
@@ -175,15 +152,6 @@ func TestBaseline_Welford_HandComputed(t *testing.T) {
 	}
 }
 
-// --- Z-score calculado a mano, y contra el baseline PREVIO -----------------
-
-// TestEvaluateFeatures_ZScore_HandComputed construye a mano un
-// baselineSnapshot con mean=3, m2=10 (n=5, mismo baseline del test
-// anterior) y puntúa x=8: z = (8-3)/sqrt(2.5) ≈ 3.1623. Como el
-// snapshot se arma ANTES de llamar evaluateFeatures y evaluateFeatures
-// nunca lo modifica, este mismo test prueba a la vez que la
-// puntuación usa el baseline previo, no uno que ya incluya la
-// observación actual.
 func TestEvaluateFeatures_ZScore_HandComputed(t *testing.T) {
 	d := newTestDetector(t, testConfig())
 	bl := baselineSnapshot{n: 5}
@@ -212,25 +180,19 @@ func TestEvaluateFeatures_ZScore_HandComputed(t *testing.T) {
 	}
 }
 
-// --- Varianza cero: sin NaN/Inf ---------------------------------------------
-
 func TestEvaluateFeatures_ZeroVariance_NoNaNOrInf(t *testing.T) {
 	d := newTestDetector(t, testConfig())
-	// n=5, m2=0 en las cinco features: varianza (todavía) cero.
 	bl := baselineSnapshot{n: 5}
 	for i := range bl.stats {
 		bl.stats[i] = featureStats{mean: 0.1, m2: 0}
 	}
 	var x [featureCount]float64
 	for i := range x {
-		x[i] = 0.9 // se aleja del mean, pero la varianza sigue en 0
+		x[i] = 0.9
 	}
 
 	f := d.evaluateFeatures(x, bl, scope{label: "ip", key: "203.0.113.2"})
 
-	// z tiene que quedar en 0 para cada feature (no NaN, no Inf) — no
-	// se puede afirmar "cuántos desvíos estándar" de algo sin desvío
-	// todavía.
 	for _, sig := range f.ContributingSignals {
 		if math.IsNaN(sig.Value) || math.IsInf(sig.Value, 0) {
 			t.Fatalf("%s: z = %v, want a finite number (0)", sig.Name, sig.Value)
@@ -243,8 +205,6 @@ func TestEvaluateFeatures_ZeroVariance_NoNaNOrInf(t *testing.T) {
 		t.Error("Triggered = true, want false (every z is 0, combined score must be 0)")
 	}
 }
-
-// --- RiskScore siempre en [0,1] ---------------------------------------------
 
 func TestEvaluateFeatures_RiskScore_AlwaysInBounds(t *testing.T) {
 	d := newTestDetector(t, testConfig())
@@ -268,13 +228,9 @@ func TestEvaluateFeatures_RiskScore_AlwaysInBounds(t *testing.T) {
 	}
 }
 
-// --- Warm-up: nunca dispara, sin importar el valor -------------------------
-
 func TestEvaluate_DuringWarmUp_NeverTriggers(t *testing.T) {
-	d := newTestDetector(t, testConfig()) // MinSamples = 10
+	d := newTestDetector(t, testConfig())
 	for i := 0; i < 10; i++ {
-		// Valores deliberadamente extremos — ni así puede disparar
-		// durante el warm-up.
 		events := buildEvents(ipFor(i), 20, 18, 5, 1, 20, 1, time.Duration(i)*time.Minute)
 		f := evaluateBatch(d, events)
 		if f.Triggered {
@@ -283,16 +239,12 @@ func TestEvaluate_DuringWarmUp_NeverTriggers(t *testing.T) {
 	}
 }
 
-// --- Tráfico estable no dispara ---------------------------------------------
-
 func TestEvaluate_StableTraffic_DoesNotTrigger(t *testing.T) {
 	d := newTestDetector(t, testConfig())
 	for i := 0; i < 10; i++ {
 		evaluateBatch(d, warmupBatch(ipFor(i), i, time.Duration(i)*time.Minute))
 	}
 
-	// Una entidad más, con valores típicos del rango ya visto
-	// (notFound=2/20=.10, failedAuth=1/20=.05, etc.).
 	events := buildEvents(ipFor(20), 20, 2, 1, 4, 2, 0, 20*time.Minute)
 	f := evaluateBatch(d, events)
 
@@ -301,16 +253,12 @@ func TestEvaluate_StableTraffic_DoesNotTrigger(t *testing.T) {
 	}
 }
 
-// --- Desviación clara dispara ------------------------------------------------
-
 func TestEvaluate_ClearDeviation_Triggers(t *testing.T) {
 	d := newTestDetector(t, testConfig())
 	for i := 0; i < 10; i++ {
 		evaluateBatch(d, warmupBatch(ipFor(i), i, time.Duration(i)*time.Minute))
 	}
 
-	// 90% not-found — muy por encima de cualquier valor visto en el
-	// warm-up (.05–.20).
 	events := buildEvents(ipFor(21), 20, 18, 0, 4, 2, 0, 21*time.Minute)
 	f := evaluateBatch(d, events)
 
@@ -325,14 +273,12 @@ func TestEvaluate_ClearDeviation_Triggers(t *testing.T) {
 	}
 }
 
-// --- Anomalía por 404 y por errores de autenticación, por separado --------
-
 func TestEvaluate_AnomalyByNotFoundRatio_Triggers(t *testing.T) {
 	d := newTestDetector(t, testConfig())
 	for i := 0; i < 10; i++ {
 		evaluateBatch(d, warmupBatch(ipFor(i), i, time.Duration(i)*time.Minute))
 	}
-	events := buildEvents(ipFor(22), 20, 19, 0, 4, 2, 0, 22*time.Minute) // 95% not-found
+	events := buildEvents(ipFor(22), 20, 19, 0, 4, 2, 0, 22*time.Minute)
 	f := evaluateBatch(d, events)
 	if !f.Triggered {
 		t.Fatal("Triggered = false, want true for a clear not-found spike")
@@ -344,14 +290,12 @@ func TestEvaluate_AnomalyByFailedAuthRatio_Triggers(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		evaluateBatch(d, warmupBatch(ipFor(i), i, time.Duration(i)*time.Minute))
 	}
-	events := buildEvents(ipFor(23), 20, 0, 18, 4, 2, 0, 23*time.Minute) // 90% 401
+	events := buildEvents(ipFor(23), 20, 0, 18, 4, 2, 0, 23*time.Minute)
 	f := evaluateBatch(d, events)
 	if !f.Triggered {
 		t.Fatal("Triggered = false, want true for a clear failed-auth spike")
 	}
 }
-
-// --- Entidad nueva: puntuada contra un baseline ya calentado --------------
 
 func TestEvaluate_NewEntity_ScoredAgainstAlreadyWarmBaseline(t *testing.T) {
 	d := newTestDetector(t, testConfig())
@@ -359,8 +303,6 @@ func TestEvaluate_NewEntity_ScoredAgainstAlreadyWarmBaseline(t *testing.T) {
 		evaluateBatch(d, warmupBatch(ipFor(i), i, time.Duration(i)*time.Minute))
 	}
 
-	// ipFor(99) nunca apareció antes — su PRIMERA observación ya se
-	// puede puntuar, sin esperar historia propia.
 	events := buildEvents(ipFor(99), 20, 18, 0, 4, 2, 0, 99*time.Minute)
 	f := evaluateBatch(d, events)
 
@@ -368,8 +310,6 @@ func TestEvaluate_NewEntity_ScoredAgainstAlreadyWarmBaseline(t *testing.T) {
 		t.Fatal("Triggered = false, want true — a brand-new entity's first observation must still be scored against the already-warm population baseline")
 	}
 }
-
-// --- Anti-contaminación: una muestra disparada no se agrega al baseline --
 
 func TestEvaluate_TriggeredSampleExcludedFromBaseline(t *testing.T) {
 	d := newTestDetector(t, testConfig())
@@ -386,10 +326,6 @@ func TestEvaluate_TriggeredSampleExcludedFromBaseline(t *testing.T) {
 		t.Fatal("first extreme sample did not trigger (test setup issue)")
 	}
 
-	// Si la primera muestra extrema se hubiera agregado al baseline,
-	// la media/varianza ya se habrían movido hacia ella, y esta
-	// segunda muestra IDÉNTICA daría un z-score (y por lo tanto un
-	// RiskScore) notablemente MENOR.
 	second := evaluateBatch(d, extreme(ipFor(31), 31*time.Minute))
 	if !second.Triggered {
 		t.Fatal("second identical extreme sample did not trigger")
@@ -398,8 +334,6 @@ func TestEvaluate_TriggeredSampleExcludedFromBaseline(t *testing.T) {
 		t.Errorf("RiskScore changed between two identical extreme samples: first=%v second=%v — the first one must have leaked into the baseline", first.RiskScore, second.RiskScore)
 	}
 }
-
-// --- EntityID correcto -------------------------------------------------------
 
 func TestEvaluate_EntityID_ForIP(t *testing.T) {
 	d := newTestDetector(t, testConfig())
@@ -429,19 +363,14 @@ func TestEvaluate_EntityID_ForSession(t *testing.T) {
 	}
 	f := evaluateBatch(d, events)
 
-	// Toda la IP pertenece a una única sesión: en empate, gana
-	// sesión — mismo criterio que internal/slowscan.
 	want := "session:" + sessionID
 	if f.EntityID != want {
 		t.Errorf("EntityID = %q, want %q", f.EntityID, want)
 	}
 }
 
-// --- Concurrencia ------------------------------------------------------------
-
 func TestEvaluate_ConcurrentWrites_NoRaces(t *testing.T) {
 	d := newTestDetector(t, testConfig())
-	// Warm-up en serie, antes de la parte concurrente.
 	for i := 0; i < 10; i++ {
 		evaluateBatch(d, warmupBatch(ipFor(i), i, time.Duration(i)*time.Minute))
 	}

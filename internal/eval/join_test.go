@@ -1,3 +1,4 @@
+// Prueba el join entre etiquetas y decisiones y la detección de problemas.
 package eval
 
 import (
@@ -17,13 +18,6 @@ func fakeDecision(requestID string, action decision.Action) decision.Decision {
 	}
 }
 
-// TestJoin_MixOfProblems arma, a mano, un caso con cada uno de los
-// cuatro problemas de integridad que tiene que detectar Join:
-//   - r-2 tiene dos decisiones (duplicada).
-//   - r-4 tiene etiqueta pero ninguna decisión (faltante).
-//   - r-5 tiene decisión pero ninguna etiqueta (sobrante).
-//
-// r-1 y r-3 son el caso normal, sin problemas.
 func TestJoin_MixOfProblems(t *testing.T) {
 	labels := map[string]groundtruth.Label{
 		"r-1": groundtruth.LabelLegit,
@@ -33,10 +27,10 @@ func TestJoin_MixOfProblems(t *testing.T) {
 	}
 	decisions := []decision.Decision{
 		fakeDecision("r-1", decision.ActionAllow),
-		fakeDecision("r-2", decision.ActionBlock), // primera aparición, se usa esta
-		fakeDecision("r-2", decision.ActionAllow), // duplicada, se descarta
+		fakeDecision("r-2", decision.ActionBlock),
+		fakeDecision("r-2", decision.ActionAllow),
 		fakeDecision("r-3", decision.ActionChallenge),
-		fakeDecision("r-5", decision.ActionBlock), // sobrante: r-5 no tiene etiqueta
+		fakeDecision("r-5", decision.ActionBlock),
 	}
 
 	joined, issues := Join(labels, Issues{}, decisions)
@@ -44,15 +38,12 @@ func TestJoin_MixOfProblems(t *testing.T) {
 	if len(joined) != 3 {
 		t.Fatalf("joined has %d records, want 3: %+v", len(joined), joined)
 	}
-	// Join ordena por RequestID, así que el orden es determinista.
 	wantIDs := []string{"r-1", "r-2", "r-3"}
 	for i, want := range wantIDs {
 		if joined[i].RequestID != want {
 			t.Errorf("joined[%d].RequestID = %q, want %q", i, joined[i].RequestID, want)
 		}
 	}
-	// La decisión usada para r-2 tiene que ser la PRIMERA (BLOCK), no
-	// la duplicada (ALLOW).
 	if joined[1].Decision.Action != decision.ActionBlock {
 		t.Errorf("joined record for r-2 has action %q, want BLOCK (the first one seen)", joined[1].Decision.Action)
 	}
@@ -92,9 +83,6 @@ func TestJoin_NoProblems_IsClean(t *testing.T) {
 	}
 }
 
-// TestJoin_CarriesBaseIssuesFromLabelLoading confirma que los
-// problemas que ya traía la carga de etiquetas (duplicados, etiquetas
-// desconocidas) no se pierden al pasar por Join.
 func TestJoin_CarriesBaseIssuesFromLabelLoading(t *testing.T) {
 	base := Issues{
 		DuplicateLabelIDs: []string{"r-9"},

@@ -1,3 +1,4 @@
+// Resuelve de forma determinista los ASN simulados de los pools de IP sintéticos.
 package datagen
 
 import (

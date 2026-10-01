@@ -1,12 +1,8 @@
+// Agrega las repeticiones del load test en medianas y rangos.
 package loadtest
 
 import "time"
 
-// RepetitionSummary es el resultado crudo de UNA repetición,
-// resumido para reportarlo: se conservan también los resultados
-// crudos por repetición, nunca solo el agregado. Requests/Errors/
-// Throughput/percentiles se calculan SOLO sobre las muestras de ESA
-// repetición, nunca mezclados con las otras.
 type RepetitionSummary struct {
 	Requests      int
 	Errors        int
@@ -23,19 +19,6 @@ func summarizeRepetition(r RunResult) RepetitionSummary {
 	}
 }
 
-// AggregatedResult resume 3 repeticiones independientes de la MISMA
-// combinación (perfil x concurrencia x modo OTel): cada repetición
-// corre con decider/servidor frescos, nunca comparten estado. El
-// throughput se reporta como mediana + rango (min/max) entre las 3
-// repeticiones — nunca un promedio simple, que escondería cuánto
-// varió una corrida de otra.
-//
-// P50/P95/P99 son la MEDIANA de los percentiles calculados POR
-// REPETICIÓN: nunca se mezclan las muestras crudas de las 3
-// repeticiones en un pool único antes de calcular el percentil,
-// porque eso podría ocultar que una repetición concreta tuvo una
-// cola mucho peor que las otras dos. PerRepetition conserva el
-// resultado crudo de cada una, sin perder esa granularidad.
 type AggregatedResult struct {
 	Repetitions int
 
@@ -54,7 +37,6 @@ type AggregatedResult struct {
 	PerRepetition []RepetitionSummary
 }
 
-// Aggregate combina reps (una por repetición) en un AggregatedResult.
 func Aggregate(reps []RunResult) AggregatedResult {
 	if len(reps) == 0 {
 		return AggregatedResult{}
@@ -99,10 +81,6 @@ func medianFloat(values []float64) float64 {
 	}
 	sorted := make([]float64, len(values))
 	copy(sorted, values)
-	// Inserción simple: los conjuntos acá son de 3 elementos (una
-	// repetición por combinación), sort.Float64s sería overkill pero
-	// tampoco incorrecto — se usa igual por claridad, el tamaño es
-	// siempre chico.
 	for i := 1; i < len(sorted); i++ {
 		for j := i; j > 0 && sorted[j-1] > sorted[j]; j-- {
 			sorted[j-1], sorted[j] = sorted[j], sorted[j-1]
@@ -115,10 +93,6 @@ func medianFloat(values []float64) float64 {
 	return (sorted[mid-1] + sorted[mid]) / 2
 }
 
-// medianDuration es el equivalente de medianFloat para
-// time.Duration — usado para combinar los percentiles YA
-// calculados por repetición (ver Aggregate), nunca las muestras
-// crudas.
 func medianDuration(values []time.Duration) time.Duration {
 	if len(values) == 0 {
 		return 0

@@ -1,3 +1,4 @@
+// Calcula percentiles de latencia por nearest-rank.
 package loadtest
 
 import (
@@ -5,12 +6,6 @@ import (
 	"time"
 )
 
-// percentile calcula el percentil p (0-100) de values por el método
-// "nearest rank" — mismo criterio simple ya usado en
-// internal/tuning.percentile, reimplementado acá en vez de importado
-// para no acoplar este paquete de performance a internal/tuning
-// (paquetes con propósitos distintos, sin ninguna razón para
-// compartir dependencia). Devuelve 0 si values está vacío.
 func percentile(values []time.Duration, p float64) time.Duration {
 	if len(values) == 0 {
 		return 0

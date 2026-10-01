@@ -1,3 +1,4 @@
+// Prueba la validación y la serialización de los eventos etiquetados.
 package groundtruth
 
 import (
@@ -13,8 +14,6 @@ import (
 
 var referenceNow = time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
 
-// validEvent devuelve un event.Event completamente bien formado, para
-// no repetir su construcción en cada test de este archivo.
 func validEvent() event.Event {
 	return event.Event{
 		RequestID:  "r-000123",
@@ -92,8 +91,6 @@ func TestLabeledEvent_Validate_ReportsBothLabelAndEventErrors(t *testing.T) {
 	}
 }
 
-// TestLabeledEvent_Payload_IsExactlyTheEvent comprueba que Payload() no
-// hace nada más que devolver el Event contenido, sin transformarlo.
 func TestLabeledEvent_Payload_IsExactlyTheEvent(t *testing.T) {
 	e := validEvent()
 	le := LabeledEvent{Label: LabelSlowScan, Event: e}
@@ -103,21 +100,6 @@ func TestLabeledEvent_Payload_IsExactlyTheEvent(t *testing.T) {
 	}
 }
 
-// TestLabeledEvent_Payload_NeverCarriesLabel es el test central de
-// aislamiento: serializa lo que efectivamente viajaría hacia el motor
-// (el resultado de Payload(), no el LabeledEvent
-// completo) y confirma que no existen las claves JSON "label" ni
-// "ground_truth".
-//
-// Se comprueba por clave, no por substring en todo el documento: una
-// fuga del ground truth solo puede entrar como un campo nuevo (la
-// etiqueta no tiene ninguna razón para aparecer como el *valor* de un
-// campo que ya existe), así que verificar la ausencia exacta de esas
-// claves es una prueba precisa. Buscar palabras sueltas en todo el JSON
-// sería, en cambio, una aproximación: fallaría en falso si mañana un
-// campo legítimo (por ejemplo, una ruta como "/api/label-printer")
-// contuviera esa palabra por casualidad, y no detectaría con certeza
-// una fuga si la clave tuviera otra mayúscula o forma.
 func TestLabeledEvent_Payload_NeverCarriesLabel(t *testing.T) {
 	le := LabeledEvent{Label: LabelCredentialStuffing, Event: validEvent()}
 
@@ -138,10 +120,6 @@ func TestLabeledEvent_Payload_NeverCarriesLabel(t *testing.T) {
 	}
 }
 
-// TestLabeledEvent_Payload_PassesEventValidation comprueba que las dos
-// piezas del contrato encastran: un LabeledEvent válido produce, a
-// través de Payload(), un event.Event que el Validator acepta sin
-// cambios.
 func TestLabeledEvent_Payload_PassesEventValidation(t *testing.T) {
 	v := newTestValidator()
 	le := LabeledEvent{Label: LabelLegit, Event: validEvent()}
@@ -151,10 +129,6 @@ func TestLabeledEvent_Payload_PassesEventValidation(t *testing.T) {
 	}
 }
 
-// TestLabeledEventJSON_RoundTrip comprueba la serialización completa del
-// LabeledEvent (label + event), que es la forma en la que el generador
-// de tráfico lo escribe en el dataset — nunca la forma en la que algo
-// viaja hacia el motor.
 func TestLabeledEventJSON_RoundTrip(t *testing.T) {
 	original := LabeledEvent{Label: LabelSlowScan, Event: validEvent()}
 

@@ -1,3 +1,4 @@
+// Prueba la carga de etiquetas de ground truth.
 package eval
 
 import (
@@ -6,13 +7,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// testdata/eval/labels_sample.jsonl contiene, a propósito:
-//
-//	r-1  legit                  (válida)
-//	r-2  credential_stuffing    (válida, primera aparición)
-//	r-3  slow_scan              (válida)
-//	r-2  credential_stuffing    (duplicada — mismo request_id de nuevo)
-//	r-4  unknown_attack         (etiqueta desconocida)
 func TestLoadLabels_SampleFile(t *testing.T) {
 	result, err := LoadLabels("../../testdata/eval/labels_sample.jsonl")
 	if err != nil {
@@ -40,7 +34,6 @@ func TestLoadLabels_SampleFile(t *testing.T) {
 		t.Errorf("UnknownLabelIDs = %v, want [r-4]", result.UnknownLabelIDs)
 	}
 
-	// La etiqueta desconocida nunca debe terminar en el mapa utilizable.
 	if _, exists := result.Labels["r-4"]; exists {
 		t.Error("r-4 (unknown_attack) must not be present in Labels")
 	}

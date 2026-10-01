@@ -1,7 +1,4 @@
-// Command baseline genera decisions.jsonl para un escenario de datos
-// (ver cmd/datagen), aplicando un rate limit tradicional por IP con
-// ventana deslizante (internal/baseline). Es la línea base contra la
-// que se compara el motor conductual — no es, en sí mismo, ese motor.
+// Aplica el rate limit tradicional por IP a un escenario y escribe sus decisiones como línea base.
 package main
 
 import (

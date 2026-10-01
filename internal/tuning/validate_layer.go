@@ -1,3 +1,4 @@
+// Calcula y compara métricas por capa de detector entre candidatos.
 package tuning
 
 import (
@@ -7,16 +8,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// DetectorLayerRow es, para UN candidato (D0/D1), UN seed y UN ratio,
-// la fila de la validación combinada final de la detector layer: las
-// matrices de confusión Strict/Broad y sus métricas derivadas (nunca
-// recalculadas a mano — vienen tal cual de RunResult.Eval, mismo
-// criterio que el resto de internal/tuning), el recall
-// detector-específico (request-level, sobre el gate propio, nunca la
-// Decision final) de credential_stuffing y slow_scan, y la detección
-// eventual/delay por vector — policy-level (Decision-based), ya
-// vector-específica por diseño desde ComputeDetectionDelay (red
-// simulada para credential_stuffing, sesión/IP para slow_scan).
 type DetectorLayerRow struct {
 	Candidate string
 	Seed      uint64
@@ -38,10 +29,6 @@ type DetectorLayerRow struct {
 	DelayByVector []DelaySummary
 }
 
-// slowScanDetectorRecall es el equivalente de
-// credentialStuffingDetectorRecall para slow_scan: la fracción de
-// eventos etiquetados slow_scan cuyo SlowScan.Triggered fue true —
-// request-level, sobre el gate propio, nunca la Decision final.
 func slowScanDetectorRecall(diagnostics []EventDiagnostic) eval.Ratio {
 	var total, triggered int
 	for _, d := range diagnostics {
@@ -56,11 +43,6 @@ func slowScanDetectorRecall(diagnostics []EventDiagnostic) eval.Ratio {
 	return ratioOf(triggered, total)
 }
 
-// ComputeDetectorLayerRow arma la fila de un candidato/seed/ratio a
-// partir de result (de RunScenario) y diagnostics (de RunDiagnostics,
-// mismo scenario/candidate — puede ser nil si ratio=0 y no se
-// corrieron diagnósticos, en cuyo caso CSRecallDetector y
-// SlowScanRecallDetector quedan N/A, nunca en 0 disimulado).
 func ComputeDetectorLayerRow(candidateName string, result RunResult, diagnostics []EventDiagnostic) DetectorLayerRow {
 	row := DetectorLayerRow{
 		Candidate: candidateName, Seed: result.Seed, Ratio: result.Ratio,
@@ -94,15 +76,6 @@ func sumMatrix(ms []eval.ConfusionMatrix) eval.ConfusionMatrix {
 	return m
 }
 
-// AggregateDetectorLayerRows agrupa varias filas del MISMO
-// candidato/ratio (una por seed) sumando sus matrices de confusión
-// CRUDAS (pooled, no promedio de ratios ya calculados — evita el
-// sesgo de tratar 3 seeds de distinto tamaño como si pesaran igual) y
-// recalculando Precision/Recall/FPR/FNR/F1 sobre esa matriz pooled.
-// pooledDelays son los CampaignDelay crudos de los 3 seeds (de
-// RunResult.Delay, no DelaySummary) para que DelayByVector salga de
-// SummarizeDelay sobre el pool real de campañas, nunca de promediar
-// promedios.
 func AggregateDetectorLayerRows(rows []DetectorLayerRow, pooledDelays []CampaignDelay) DetectorLayerRow {
 	if len(rows) == 0 {
 		return DetectorLayerRow{}
@@ -134,10 +107,6 @@ func AggregateDetectorLayerRows(rows []DetectorLayerRow, pooledDelays []Campaign
 	return agg
 }
 
-// SumMitigationAttribution suma, campo a campo, varios
-// MitigationAttribution del MISMO vector (uno por seed) — conteos
-// enteros, nunca ratios, así que sumar es exacto, sin ningún sesgo de
-// tamaño de seed.
 func SumMitigationAttribution(items []MitigationAttribution) MitigationAttribution {
 	if len(items) == 0 {
 		return MitigationAttribution{}
@@ -153,11 +122,6 @@ func SumMitigationAttribution(items []MitigationAttribution) MitigationAttributi
 	return sum
 }
 
-// DetectorLayerCandidateReport agrupa todo lo calculado para UN
-// candidato (D0 o D1): filas por seed y ratio, agregadas por ratio
-// (pooled entre los 3 seeds), atribución pooled por ratio, y la
-// distribución de RiskScore pooled sobre TODO el tráfico (los 3
-// seeds, los 3 ratios).
 type DetectorLayerCandidateReport struct {
 	Candidate string
 
@@ -171,12 +135,6 @@ type DetectorLayerCandidateReport struct {
 
 var detectorLayerRatios = []int{0, 10, 30}
 
-// renderDetectorLayerCandidateSection arma, para UN
-// DetectorLayerCandidateReport, todas sus tablas (confusión, recall
-// detector-específico, delay por vector, atribución, RiskScore) —
-// extraído de RenderDetectorLayerComparison para poder reutilizarlo
-// también en el reporte de holdout, que necesita más de dos reportes
-// (baseline/final x tuning/holdout).
 func renderDetectorLayerCandidateSection(rep DetectorLayerCandidateReport) string {
 	var b []byte
 	w := func(format string, args ...any) { b = append(b, []byte(fmt.Sprintf(format, args...))...) }
@@ -248,11 +206,6 @@ func renderDetectorLayerCandidateSection(rep DetectorLayerCandidateReport) strin
 	return string(b)
 }
 
-// renderDetectorLayerSideBySide arma una tabla-resumen lado a lado
-// entre DOS DetectorLayerCandidateReport (cualquiera, no solo D0/D1 —
-// reutilizada por el reporte de holdout para comparar baseline vs.
-// final y tuning vs. holdout), para las métricas más importantes en
-// cada ratio.
 func renderDetectorLayerSideBySide(title string, a, b DetectorLayerCandidateReport) string {
 	var buf []byte
 	w := func(format string, args ...any) { buf = append(buf, []byte(fmt.Sprintf(format, args...))...) }
@@ -274,10 +227,6 @@ func renderDetectorLayerSideBySide(title string, a, b DetectorLayerCandidateRepo
 	return string(buf)
 }
 
-// RenderDetectorLayerComparison arma el reporte en Markdown de la
-// validación combinada final: una sección por candidato (D0, D1) con
-// todas sus tablas, seguida de una tabla-resumen D0 vs. D1 lado a
-// lado para las métricas más importantes en cada ratio.
 func RenderDetectorLayerComparison(reports []DetectorLayerCandidateReport) string {
 	var b []byte
 	w := func(s string) { b = append(b, []byte(s)...) }
@@ -291,12 +240,6 @@ func RenderDetectorLayerComparison(reports []DetectorLayerCandidateReport) strin
 	return string(b)
 }
 
-// credentialStuffingDetectorRecall calcula, sobre diagnostics de UNA
-// corrida, la fracción de eventos etiquetados credential_stuffing
-// cuyo CredentialStuffing.Triggered fue true — el recall
-// request-level del gate PROPIO, sin pasar por Policy ni por la
-// Decision final. Distinto a proposito de eval.ByAttackVectorRecall,
-// que es decision-based.
 func credentialStuffingDetectorRecall(diagnostics []EventDiagnostic) eval.Ratio {
 	var total, triggered int
 	for _, d := range diagnostics {

@@ -1,6 +1,4 @@
-// Command tune es el evaluador/calibrador offline del motor
-// conductual: genera los escenarios de tuning (seeds 101/102/103 por
-// defecto, ratios 0/10/30%)
+// Ejecuta la calibración offline del motor sobre los escenarios de tuning y exporta los reportes.
 package main
 
 import (

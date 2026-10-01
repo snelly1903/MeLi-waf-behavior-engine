@@ -1,6 +1,4 @@
-// Package credstuffing busca credential stuffing distribuido de bajo
-// volumen por IP, correlacionando actividad entre múltiples IPs de un
-// mismo grupo de red (ASN) dentro de una ventana temporal.
+// Implementa la detección de credential stuffing correlacionando intentos por ASN.
 package credstuffing
 
 import (
@@ -15,6 +13,7 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/finding"
 )
+
 type NetworkResolver interface {
 	Resolve(ip netip.Addr) (group string, ok bool)
 }
@@ -277,8 +276,6 @@ func (d *Detector) evaluateGroup(group string, obs []observation) finding.Findin
 			{Name: "auth_attempts_in_window", Value: float64(gate.TotalAttempts), Weight: w.Attempts},
 			{Name: "failed_auth_ratio", Value: gate.FailedRatio, Weight: w.Ratio},
 		},
-		// El grupo de red ya queda identificado en EntityID — acá no se
-		// repite, Explanation se enfoca en el porqué.
 		Explanation: fmt.Sprintf(
 			"%d distinct IPs, %d distinct accounts, %d auth attempts, %.0f%% failed (401/403) within the window",
 			gate.DistinctIPs, gate.DistinctAccounts, gate.TotalAttempts, gate.FailedRatio*100,
@@ -315,8 +312,6 @@ func ratioComponent(actual, min float64) float64 {
 	return score
 }
 
-// Sweep elimina cualquier grupo de red cuyo watermark tenga más de
-// idleTTL de antigüedad respecto a now, y devuelve cuántos eliminó.
 func (d *Detector) Sweep(now time.Time, idleTTL time.Duration) int {
 	d.mu.Lock()
 	defer d.mu.Unlock()

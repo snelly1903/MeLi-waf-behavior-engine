@@ -1,3 +1,4 @@
+// Prueba el resolver de ASN simulado sobre pools conocidos e IPs desconocidas.
 package datagen
 
 import (
@@ -30,9 +31,6 @@ func TestSimulatedASNResolver_ResolvesKnownPools(t *testing.T) {
 	}
 }
 
-// TestSimulatedASNResolver_UnknownIP_NeverGuesses confirma que una IP
-// fuera de los tres pools RFC 5737 conocidos queda sin resolver — el
-// resolver nunca inventa un grupo para algo que no generó.
 func TestSimulatedASNResolver_UnknownIP_NeverGuesses(t *testing.T) {
 	r := NewSimulatedASNResolver()
 
@@ -41,9 +39,6 @@ func TestSimulatedASNResolver_UnknownIP_NeverGuesses(t *testing.T) {
 	}
 }
 
-// TestSimulatedASNResolver_SameIPAlwaysSameGroup confirma que dos
-// llamadas con la misma IP siempre devuelven el mismo grupo —
-// determinismo puro, sin estado ni aleatoriedad.
 func TestSimulatedASNResolver_SameIPAlwaysSameGroup(t *testing.T) {
 	r := NewSimulatedASNResolver()
 	ip := netip.MustParseAddr("192.0.2.99")

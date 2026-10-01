@@ -1,3 +1,4 @@
+// Genera el reporte Markdown de la evaluación.
 package eval
 
 import (
@@ -5,12 +6,12 @@ import (
 	"strconv"
 	"strings"
 )
+
 type ReportMeta struct {
 	ScenarioName string
 
 	ExpectedRecords int
 }
-
 
 func formatRatio(r Ratio) string {
 	if !r.Defined {
@@ -49,7 +50,6 @@ func writePolicySection(b *strings.Builder, title string, pr PolicyResult) {
 	fmt.Fprintf(b, "Matriz: TP=%d FP=%d FN=%d TN=%d (total=%d)\n\n",
 		pr.Matrix.TP, pr.Matrix.FP, pr.Matrix.FN, pr.Matrix.TN, pr.Matrix.Total())
 }
-
 
 func RenderMarkdown(result Result, meta ReportMeta) string {
 	var b strings.Builder

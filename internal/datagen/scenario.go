@@ -1,3 +1,4 @@
+// Genera escenarios sintéticos mezclando tráfico legítimo y ataques reproducibles.
 package datagen
 
 import (
@@ -24,7 +25,7 @@ type ScenarioConfig struct {
 
 	StuffingShareOfMalicious float64
 
-	StuffingIPCap int //capacidad de ip, max 254
+	StuffingIPCap int
 	ScanIPCap     int
 
 	StuffingBase    CredentialStuffingCampaign

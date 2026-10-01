@@ -1,3 +1,4 @@
+// Prueba la validación del contrato de decisión.
 package decision
 
 import (
@@ -9,9 +10,6 @@ import (
 
 var referenceNow = time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
 
-// validDecision devuelve una Decision completamente bien formada (un
-// BLOCK con explicación y señales), así cada caso de test solo necesita
-// describir el campo que quiere romper.
 func validDecision() Decision {
 	return Decision{
 		RequestID:       "r-000123",
@@ -191,9 +189,6 @@ func TestValidate_Rejects(t *testing.T) {
 	}
 }
 
-// TestValidate_MultipleFailuresAreAllReported comprueba que una Decision
-// rota de dos formas distintas se reporta con los dos errores centinela
-// a la vez.
 func TestValidate_MultipleFailuresAreAllReported(t *testing.T) {
 	d := validDecision()
 	d.RequestID = ""
@@ -208,10 +203,6 @@ func TestValidate_MultipleFailuresAreAllReported(t *testing.T) {
 	}
 }
 
-// TestValidate_LLMExplanationIsNeverRequired comprueba que
-// LLMExplanation, al ser una capacidad asíncrona y todavía no
-// implementada, nunca es un campo obligatorio para que una decisión sea
-// válida — ni siquiera en BLOCK.
 func TestValidate_LLMExplanationIsNeverRequired(t *testing.T) {
 	d := validDecision()
 	d.LLMExplanation = nil

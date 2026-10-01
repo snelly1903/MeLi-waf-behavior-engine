@@ -1,3 +1,4 @@
+// Implementa el rate limit tradicional por IP con ventana deslizante usado como línea base.
 package baseline
 
 import (

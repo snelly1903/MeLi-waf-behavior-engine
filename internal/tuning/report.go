@@ -1,3 +1,4 @@
+// Exporta los resultados de tuning a CSV, JSON y Markdown.
 package tuning
 
 import (
@@ -12,15 +13,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// Row es una fila plana de exportación: UN candidato, UN seed, UNA
-// ratio, con TODAS las métricas — nunca solo la configuración
-// elegida, para poder reconstruir después por qué se eligió una
-// configuración. Los campos que pueden ser N/A (cualquier Ratio, o
-// los promedios de delay cuando nunca hubo una campaña detectada) se
-// exportan como el string que devuelve
-// formatRatio/formatOptionalFloat/formatOptionalDuration — "N/A"
-// nunca se confunde con "0" ni acá ni en el Markdown, mismo criterio
-// que ya usa internal/eval.
 type Row struct {
 	Candidate string `json:"candidate"`
 	Seed      uint64 `json:"seed"`
@@ -85,9 +77,6 @@ func formatOptionalDurationSeconds(v OptionalDuration) string {
 	return strconv.FormatFloat(v.Value.Seconds(), 'f', 1, 64)
 }
 
-// vectorRecall busca el AttackVectorRecall de vector dentro de vs —
-// devuelve un Ratio no definido si no aparece (nunca debería pasar,
-// pero es más seguro que asumir un índice fijo).
 func vectorRecall(vs []eval.AttackVectorRecall, vector groundtruth.Label) eval.Ratio {
 	for _, v := range vs {
 		if v.Vector == vector {
@@ -97,10 +86,6 @@ func vectorRecall(vs []eval.AttackVectorRecall, vector groundtruth.Label) eval.R
 	return eval.Ratio{Defined: false}
 }
 
-// delaySummaryFor busca el DelaySummary de vector dentro de ds —
-// devuelve un resumen vacío (0 campañas) si no aparece: significa que
-// esa ratio no generó ninguna campaña de ese vector (por ejemplo,
-// slow_scan en un escenario de 0%).
 func delaySummaryFor(ds []DelaySummary, vector groundtruth.Label) DelaySummary {
 	for _, d := range ds {
 		if d.Vector == vector {
@@ -110,9 +95,6 @@ func delaySummaryFor(ds []DelaySummary, vector groundtruth.Label) DelaySummary {
 	return DelaySummary{Vector: vector, EventualDetectionRate: eval.Ratio{Defined: false}}
 }
 
-// ToRows convierte results (uno por candidato×seed×ratio) en filas
-// planas listas para CSV/JSON — nunca agrega nada nuevo, solo
-// aplana lo que ya calculó RunScenario.
 func ToRows(results []RunResult) []Row {
 	rows := make([]Row, 0, len(results))
 	for _, r := range results {
@@ -185,9 +167,6 @@ func (r Row) csvRecord() []string {
 	}
 }
 
-// WriteCSV escribe rows en path, con encabezado — un candidato×seed×ratio
-// por fila, nunca preagregado: la agregación entre seeds se puede
-// reconstruir después a partir de estas filas crudas.
 func WriteCSV(path string, rows []Row) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -208,7 +187,6 @@ func WriteCSV(path string, rows []Row) error {
 	return w.Error()
 }
 
-// WriteJSON escribe rows en path como un array JSON indentado.
 func WriteJSON(path string, rows []Row) error {
 	data, err := json.MarshalIndent(rows, "", "  ")
 	if err != nil {
@@ -218,12 +196,6 @@ func WriteJSON(path string, rows []Row) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// RenderMarkdown arma un resumen legible de results: una tabla por
-// candidato×ratio, con las filas de cada seed y una fila de
-// resumen (media) — para ver de un vistazo tanto el resultado
-// agregado como la estabilidad entre seeds sin tener que abrir el
-// CSV. No vuelve a calcular ninguna métrica, solo formatea lo que ya
-// está en results/rows.
 func RenderMarkdown(results []RunResult) string {
 	var b strings.Builder
 	rows := ToRows(results)
@@ -259,9 +231,6 @@ func RenderMarkdown(results []RunResult) string {
 		}
 		b.WriteString("\n")
 
-		// Agregado entre TODOS los seeds del grupo (nunca solo el
-		// primero) — campañas y detectadas se suman, la tasa se
-		// recalcula sobre esos totales.
 		csCampaigns := sumInt(group, func(r Row) int { return r.CSCampaigns })
 		csDetected := sumInt(group, func(r Row) int { return r.CSDetectedCampaigns })
 		ssCampaigns := sumInt(group, func(r Row) int { return r.SSCampaigns })

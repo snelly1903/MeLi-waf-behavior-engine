@@ -1,3 +1,4 @@
+// Prueba la inicialización de telemetría y las métricas exportadas por cada recorder.
 package telemetry
 
 import (
@@ -10,12 +11,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
-// --- Init: fail-open --------------------------------------------------
-
-// TestInit_EmptyEndpoint_IsNoopWithoutDialing confirma la
-// configuración por defecto: sin Endpoint, Init nunca intenta
-// conectar con nadie, y usedNoop queda en false (no es un fallback,
-// es lo esperado).
 func TestInit_EmptyEndpoint_IsNoopWithoutDialing(t *testing.T) {
 	recorders, shutdown, usedNoop := Init(context.Background(), Config{})
 	defer func() {
@@ -30,23 +25,13 @@ func TestInit_EmptyEndpoint_IsNoopWithoutDialing(t *testing.T) {
 	if recorders == nil || recorders.Provider == nil {
 		t.Fatal("recorders/Provider = nil, want a usable no-op provider")
 	}
-	// Debe ser inocuo llamarlo, incluso sin ningún Collector real.
 	recorders.Engine.RecordFinding("credential_stuffing")
 	recorders.Engine.RecordAnomalyScore(0.5)
 	recorders.ASN.RecordCacheResult(true)
 	recorders.HTTP.RecordDecision("ALLOW", "unknown")
 }
 
-// TestInit_CollectorUnreachable_FallsBackToNoop confirma que, si
-// --otel-endpoint apunta a un Collector que no está escuchando, Init
-// debe caer a instrumentación no-op y devolver usedNoop=true, SIN
-// devolver un error que le impida a cmd/engine arrancar -- y sin
-// colgarse más allá de ConnectTimeout.
 func TestInit_CollectorUnreachable_FallsBackToNoop(t *testing.T) {
-	// Un puerto TCP libre, cerrado antes de intentar conectar: nadie
-	// escucha ahí, así que la conexión gRPC falla rápido
-	// (ECONNREFUSED), no por agotar todo el ConnectTimeout esperando
-	// -- pero igual verificamos que el tiempo total quede acotado.
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
@@ -79,20 +64,10 @@ func TestInit_CollectorUnreachable_FallsBackToNoop(t *testing.T) {
 	if recorders == nil || recorders.Provider == nil {
 		t.Fatal("recorders/Provider = nil, want a usable no-op provider even on fallback")
 	}
-	// El motor tiene que poder seguir sirviendo tráfico y registrando
-	// (sin efecto real) aunque el Collector esté caído.
 	recorders.Engine.RecordFinding("slow_scan")
 	recorders.ASN.RecordResolveResult("success")
 	recorders.HTTP.RecordDecision("BLOCK", "credential_stuffing")
 }
-
-// --- Nombres y valores reales de los instrumentos ----------------------
-//
-// Estos tests NO pasan por Init/dial -- construyen su propio
-// *sdkmetric.MeterProvider con un ManualReader (sin exportar nada por
-// red), exactamente la forma soportada por el SDK de OpenTelemetry
-// para testear instrumentación sin Collector/Prometheus/Internet (ver
-// docs/decisiones.md).
 
 func collect(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
 	t.Helper()
@@ -103,11 +78,6 @@ func collect(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMe
 	return rm
 }
 
-// findMetric busca, entre todas las métricas recolectadas, la que
-// tiene exactamente name -- fallando el test si no la encuentra, para
-// que un cambio accidental de nombre (por ejemplo, al renombrar
-// waf.asn.resolve.duration a waf.asn.provider.duration) se note acá,
-// no recién mirando Prometheus a mano.
 func findMetric(t *testing.T, rm metricdata.ResourceMetrics, name string) metricdata.Metrics {
 	t.Helper()
 	for _, sm := range rm.ScopeMetrics {
@@ -155,11 +125,6 @@ func TestEngineRecorder_RecordFinding_ExportsExpectedNameAndAttribute(t *testing
 	}
 }
 
-// TestEngineRecorder_RecordAnomalyScore_ExportsHistogramWithoutAttributes
-// confirma que waf.anomaly.score se exporta como Histogram (no como
-// Sum) y que cada Record, incluidos los de score 0 (evaluación no
-// disparada), queda contado -- sin ningún atributo, porque ya es
-// específico de un único detector.
 func TestEngineRecorder_RecordAnomalyScore_ExportsHistogramWithoutAttributes(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))

@@ -1,3 +1,4 @@
+// Prueba la estabilidad por capa de detector entre seeds.
 package tuning
 
 import (
@@ -17,8 +18,6 @@ func TestComputeDetectorLayerStability_RangeAcrossSeeds(t *testing.T) {
 	if diff := s.BroadRecallRange - 0.20; diff > 0.0001 || diff < -0.0001 {
 		t.Errorf("BroadRecallRange = %.4f, want 0.20 (0.80-0.60)", s.BroadRecallRange)
 	}
-	// El seed con CSRecallDetector N/A se ignora -- Range solo entre
-	// 0.90 y 0.70, nunca tratando el N/A como 0.
 	if diff := s.CSRecallDetectorRange - 0.20; diff > 0.0001 || diff < -0.0001 {
 		t.Errorf("CSRecallDetectorRange = %.4f, want 0.20 (0.90-0.70, ignorando el N/A)", s.CSRecallDetectorRange)
 	}

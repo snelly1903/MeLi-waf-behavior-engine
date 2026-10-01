@@ -1,3 +1,4 @@
+// Prueba de punta a punta el comando eval con escenarios limpios, sucios y archivos faltantes.
 package main
 
 import (
@@ -18,10 +19,6 @@ func writeLines(t *testing.T, path string, lines []string) {
 	}
 }
 
-// TestRun_EndToEnd_CleanScenario arma a mano un escenario chico (3
-// etiquetas, 3 decisiones ficticias que las aciertan todas) y confirma
-// que el comando genera un reporte limpio, sin advertencias de
-// integridad, con código de salida 0.
 func TestRun_EndToEnd_CleanScenario(t *testing.T) {
 	dir := t.TempDir()
 	writeLines(t, filepath.Join(dir, "labels.jsonl"), []string{
@@ -54,10 +51,6 @@ func TestRun_EndToEnd_CleanScenario(t *testing.T) {
 	}
 }
 
-// TestRun_EndToEnd_DirtyScenario deja una etiqueta sin decisión (r-4) y
-// confirma que el comando igual escribe el reporte, pero con la
-// advertencia de integridad y código de salida exitIntegrityIssues —
-// nunca un error operativo, porque el comando sí pudo hacer su trabajo.
 func TestRun_EndToEnd_DirtyScenario(t *testing.T) {
 	dir := t.TempDir()
 	writeLines(t, filepath.Join(dir, "labels.jsonl"), []string{
@@ -84,11 +77,8 @@ func TestRun_EndToEnd_DirtyScenario(t *testing.T) {
 	}
 }
 
-// TestRun_MissingScenarioFile confirma que un archivo inexistente es un
-// error operativo (exitOperationalError), distinto de un problema de
-// integridad del dato.
 func TestRun_MissingScenarioFile(t *testing.T) {
-	dir := t.TempDir() // vacío: no tiene labels.jsonl ni decisions.jsonl
+	dir := t.TempDir()
 
 	code := run(dir, filepath.Join(dir, "report.md"))
 
@@ -97,10 +87,6 @@ func TestRun_MissingScenarioFile(t *testing.T) {
 	}
 }
 
-// TestRun_StdoutWhenNoOut confirma que omitir --out no falla: el
-// reporte simplemente no se escribe a disco (se imprime a stdout desde
-// main(), que este test no captura, pero sí puede confirmar el código
-// de salida).
 func TestRun_StdoutWhenNoOut(t *testing.T) {
 	dir := t.TempDir()
 	writeLines(t, filepath.Join(dir, "labels.jsonl"), []string{

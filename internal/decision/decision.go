@@ -1,5 +1,4 @@
-// Package decision define el contrato de salida del motor: lo que
-// devuelve por cada evento que analiza.
+// Define el contrato de decisión que devuelve el motor por cada evento y su validación.
 package decision
 
 import (
@@ -12,9 +11,9 @@ import (
 type Action string
 
 const (
-	ActionAllow Action = "ALLOW"
+	ActionAllow     Action = "ALLOW"
 	ActionChallenge Action = "CHALLENGE"
-	ActionBlock Action = "BLOCK"
+	ActionBlock     Action = "BLOCK"
 )
 
 func (a Action) Valid() bool {
@@ -42,17 +41,18 @@ func (v AttackVector) Valid() bool {
 		return false
 	}
 }
+
 type ContributingSignal struct {
-	Name string `json:"name"`
-	Value float64 `json:"value"`
+	Name   string  `json:"name"`
+	Value  float64 `json:"value"`
 	Weight float64 `json:"weight"`
 }
 
 type Decision struct {
-	RequestID string `json:"request_id"`
+	RequestID string    `json:"request_id"`
 	Timestamp time.Time `json:"timestamp"`
-	EntityID string `json:"entity_id"`
-	Action Action `json:"action"`
+	EntityID  string    `json:"entity_id"`
+	Action    Action    `json:"action"`
 
 	ConfidenceScore float64 `json:"confidence_score"`
 

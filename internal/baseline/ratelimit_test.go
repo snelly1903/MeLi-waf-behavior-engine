@@ -1,3 +1,4 @@
+// Prueba umbrales, ventana deslizante y modos de conteo del rate limit.
 package baseline
 
 import (
@@ -57,8 +58,6 @@ func equalActions(a, b []decision.Action) bool {
 	return true
 }
 
-// TestDetect_BelowThreshold_AllAllow: una IP con menos peticiones que
-// el umbral en toda la ventana nunca se bloquea.
 func TestDetect_BelowThreshold_AllAllow(t *testing.T) {
 	ip := mustAddr("203.0.113.1")
 	events := []event.Event{
@@ -78,10 +77,6 @@ func TestDetect_BelowThreshold_AllAllow(t *testing.T) {
 	}
 }
 
-// TestDetect_ExactThresholdThenFirstOverflow: con MaxRequests=3, la
-// tercera petición (count=3, exactamente el umbral) tiene que seguir
-// siendo ALLOW, y recién la cuarta (count=4, la primera que lo supera)
-// pasa a BLOCK.
 func TestDetect_ExactThresholdThenFirstOverflow(t *testing.T) {
 	ip := mustAddr("203.0.113.2")
 	events := []event.Event{
@@ -102,8 +97,6 @@ func TestDetect_ExactThresholdThenFirstOverflow(t *testing.T) {
 	}
 }
 
-// TestDetect_TwoIPs_IndependentCounters: dos IPs entrelazadas en el
-// tiempo, con contadores que no se mezclan entre sí.
 func TestDetect_TwoIPs_IndependentCounters(t *testing.T) {
 	ipA := mustAddr("203.0.113.10")
 	ipB := mustAddr("203.0.113.20")
@@ -112,8 +105,8 @@ func TestDetect_TwoIPs_IndependentCounters(t *testing.T) {
 		ev("b-1", ipB, "/", 1*time.Second),
 		ev("a-2", ipA, "/", 2*time.Second),
 		ev("b-2", ipB, "/", 3*time.Second),
-		ev("a-3", ipA, "/", 4*time.Second), // 3ra de A: todavía en el límite
-		ev("b-3", ipB, "/", 5*time.Second), // 3ra de B: todavía en el límite
+		ev("a-3", ipA, "/", 4*time.Second),
+		ev("b-3", ipB, "/", 5*time.Second),
 	}
 	cfg := Config{MaxRequests: 3, Window: time.Minute, Mode: CountModeAll}
 
@@ -128,19 +121,13 @@ func TestDetect_TwoIPs_IndependentCounters(t *testing.T) {
 	}
 }
 
-// TestDetect_NATManySessions_SameIPStillShared documenta la
-// limitación conocida de un rate limit por IP: varias sesiones
-// legítimas distintas detrás del mismo IP (un NAT de oficina, como el
-// de datagen.GenerateOfficeCluster) comparten el mismo contador y
-// pueden terminar bloqueadas entre sí, aunque cada sesión individual
-// sea legítima.
 func TestDetect_NATManySessions_SameIPStillShared(t *testing.T) {
 	ip := mustAddr("203.0.113.30")
 	events := []event.Event{
 		evSession("r-1", ip, "s-1", 0),
 		evSession("r-2", ip, "s-2", 5*time.Second),
 		evSession("r-3", ip, "s-3", 10*time.Second),
-		evSession("r-4", ip, "s-4", 15*time.Second), // 4ta sesión, distinta, pero mismo IP
+		evSession("r-4", ip, "s-4", 15*time.Second),
 	}
 	cfg := Config{MaxRequests: 3, Window: time.Minute, Mode: CountModeAll}
 
@@ -153,18 +140,12 @@ func TestDetect_NATManySessions_SameIPStillShared(t *testing.T) {
 	}
 }
 
-// TestDetect_SlidingWindow_EventsLeaveWindow confirma que la ventana
-// es deslizante de verdad: peticiones viejas dejan de contar en
-// cuanto salen de la ventana, no recién cuando "se reinicia" ningún
-// contador fijo.
 func TestDetect_SlidingWindow_EventsLeaveWindow(t *testing.T) {
 	ip := mustAddr("203.0.113.40")
 	events := []event.Event{
 		ev("r-1", ip, "/", 0),
 		ev("r-2", ip, "/", 5*time.Second),
 		ev("r-3", ip, "/", 9*time.Second),
-		// Silencio largo: para cuando llega r-4, r-1..r-3 ya salieron
-		// de la ventana de 60s (cutoff = 100s-60s = 40s > 9s).
 		ev("r-4", ip, "/", 100*time.Second),
 	}
 	cfg := Config{MaxRequests: 3, Window: time.Minute, Mode: CountModeAll}
@@ -178,8 +159,6 @@ func TestDetect_SlidingWindow_EventsLeaveWindow(t *testing.T) {
 	}
 }
 
-// TestDetect_Determinism_SameInputSameOutput: la misma entrada
-// produce exactamente la misma salida corrida dos veces.
 func TestDetect_Determinism_SameInputSameOutput(t *testing.T) {
 	ip := mustAddr("203.0.113.50")
 	events := []event.Event{
@@ -208,12 +187,6 @@ func TestDetect_Determinism_SameInputSameOutput(t *testing.T) {
 	}
 }
 
-// TestDetect_AllModeVsAuthMode_CountDifferently es el caso central del
-// ajuste 1 del plan: en modo "all", peticiones a una ruta cualquiera
-// ("/home") cuentan contra el mismo límite que las de login, y pueden
-// terminar bloqueadas junto con ellas. En modo "auth", solo las
-// peticiones de login cuentan y pueden bloquearse; "/home" siempre es
-// ALLOW.
 func TestDetect_AllModeVsAuthMode_CountDifferently(t *testing.T) {
 	ip := mustAddr("203.0.113.60")
 	buildEvents := func() []event.Event {
@@ -249,9 +222,6 @@ func TestDetect_AllModeVsAuthMode_CountDifferently(t *testing.T) {
 	}
 }
 
-// TestConfig_Validate_InvalidConfigurations cubre las combinaciones
-// inválidas y confirma que cada una se puede detectar por separado con
-// errors.Is, incluso cuando se combinan varias a la vez.
 func TestConfig_Validate_InvalidConfigurations(t *testing.T) {
 	tests := []struct {
 		name string
@@ -290,14 +260,11 @@ func TestDetect_InvalidConfig_ReturnsErrorWithoutProcessing(t *testing.T) {
 	}
 }
 
-// TestDetect_EventsOutOfOrder_ReturnsError confirma que Detect nunca
-// calcula nada sobre una entrada que no está en orden cronológico:
-// falla explícitamente en cambio.
 func TestDetect_EventsOutOfOrder_ReturnsError(t *testing.T) {
 	ip := mustAddr("203.0.113.80")
 	events := []event.Event{
 		ev("r-1", ip, "/", 10*time.Second),
-		ev("r-2", ip, "/", 0), // anterior al primero: fuera de orden
+		ev("r-2", ip, "/", 0),
 	}
 	cfg := Config{MaxRequests: 10, Window: time.Minute, Mode: CountModeAll}
 
@@ -307,10 +274,6 @@ func TestDetect_EventsOutOfOrder_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestDetect_AllDecisionsPassContractValidation confirma que cada
-// Decision que arma Detect — tanto los ALLOW como los BLOCK, en modo
-// "all" y en modo "auth" — pasa decision.Validate() sin ningún error,
-// sobre un escenario que fuerza varios bloqueos.
 func TestDetect_AllDecisionsPassContractValidation(t *testing.T) {
 	ipA := mustAddr("203.0.113.90")
 	ipB := mustAddr("203.0.113.91")

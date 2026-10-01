@@ -1,5 +1,4 @@
-// Package asn implementa un credstuffing.NetworkResolver real,
-// consultando RIPEstat (RIPE NCC) para mapear una IP a su ASN
+// Resuelve el ASN de una IP consultando RIPEstat, con caché y métricas.
 package asn
 
 import (
@@ -15,7 +14,6 @@ import (
 
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
 )
-
 
 const DefaultBaseURL = "https://stat.ripe.net/data/network-info/data.json"
 
@@ -53,7 +51,6 @@ func (noopMetricsRecorder) RecordCacheResult(bool)                       {}
 func (noopMetricsRecorder) RecordResolveResult(string)                   {}
 func (noopMetricsRecorder) RecordProviderDuration(string, time.Duration) {}
 
-
 var (
 	ErrInvalidBaseURL               = errors.New("asn: base_url is required")
 	ErrInvalidSourceApp             = errors.New("asn: source_app is required")
@@ -62,7 +59,6 @@ var (
 	ErrInvalidSuccessTTL            = errors.New("asn: success_ttl must be greater than 0")
 	ErrInvalidFailureTTL            = errors.New("asn: failure_ttl must be greater than 0")
 )
-
 
 func (cfg Config) Validate() error {
 	var errs []error
@@ -87,8 +83,6 @@ func (cfg Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-// cacheEntry es lo que se retiene por IP: el resultado (positivo o
-// negativo) y cuándo vence.
 type cacheEntry struct {
 	group     string
 	ok        bool

@@ -1,3 +1,4 @@
+// Prueba diversidad de rutas, tasa de 404 y reproducibilidad del escaneo lento generado.
 package datagen
 
 import (
@@ -55,12 +56,6 @@ func TestGenerateSlowScanSession_GapsWithinBounds(t *testing.T) {
 	}
 }
 
-// TestSlowScanPathDiversity_HigherThanLegitNavegante es una comprobación
-// comparativa, no un umbral absoluto: la entropía de rutas del escaneo
-// lento tiene que ser claramente mayor que la de un navegante legítimo
-// con el mismo número de requests, porque esa es justamente la señal
-// que describe el PDF ("entropía de rutas solicitadas") — comparar
-// contra el propio dataset es más confiable que fijar un número mágico.
 func TestSlowScanPathDiversity_HigherThanLegitNavegante(t *testing.T) {
 	rngScan := NewRNG(53)
 	scanIP := PoolHostingSim.RandomAddr(rngScan)

@@ -1,3 +1,4 @@
+// Verifica que EvaluateDebug sea consistente con Evaluate y exponga el score combinado.
 package anomaly
 
 import (
@@ -6,9 +7,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
 )
 
-// evaluateDebugBatch es el equivalente de evaluateBatch pero llamando
-// EvaluateDebug en vez de Evaluate — usa exactamente los mismos
-// helpers de construcción de eventos que el resto de este archivo.
 func evaluateDebugBatch(d *Detector, events []event.Event) []DebugEvaluation {
 	for _, e := range events {
 		d.Observe(e)
@@ -16,12 +14,6 @@ func evaluateDebugBatch(d *Detector, events []event.Event) []DebugEvaluation {
 	return d.EvaluateDebug(events[len(events)-1])
 }
 
-// TestEvaluateDebug_MatchesEvaluate_WhenTriggered confirma que, para
-// el mismo escenario que ya prueba TestEvaluate_ClearDeviation_Triggers
-// (Evaluate), EvaluateDebug reporta el mismo Triggered/RiskScore desde
-// su propio camino de código independiente — necesario para poder
-// confiar en los reportes de diagnóstico sin dudar si reflejan lo que
-// el motor real haría.
 func TestEvaluateDebug_MatchesEvaluate_WhenTriggered(t *testing.T) {
 	dEval := newTestDetector(t, testConfig())
 	dDebug := newTestDetector(t, testConfig())
@@ -55,19 +47,12 @@ func TestEvaluateDebug_MatchesEvaluate_WhenTriggered(t *testing.T) {
 	}
 }
 
-// TestEvaluateDebug_ExposesCombinedScore_WhenNotTriggered es el punto
-// central de este método: Evaluate descarta el score combinado
-// cuando no cruza TriggerThreshold (devuelve
-// finding.Finding{} vacío) — EvaluateDebug lo expone siempre, para
-// poder medir "qué tan cerca estuvo" el tráfico legítimo que nunca
-// disparó, no solo contar cuántas veces disparó.
 func TestEvaluateDebug_ExposesCombinedScore_WhenNotTriggered(t *testing.T) {
 	d := newTestDetector(t, testConfig())
 	for i := 0; i < 10; i++ {
 		evaluateDebugBatch(d, warmupBatch(ipFor(i), i, 0))
 	}
 
-	// Tráfico típico, dentro del rango ya visto — no debería disparar.
 	events := buildEvents(ipFor(20), 20, 2, 1, 4, 2, 0, 0)
 	evals := evaluateDebugBatch(d, events)
 
@@ -80,20 +65,11 @@ func TestEvaluateDebug_ExposesCombinedScore_WhenNotTriggered(t *testing.T) {
 	if evals[0].RiskScore != 0 {
 		t.Errorf("RiskScore = %v, want 0 (no disparó)", evals[0].RiskScore)
 	}
-	// El punto de esta prueba: CombinedScore SÍ tiene un valor real
-	// (no cero forzado, salvo que coincida por casualidad) — a
-	// diferencia de Evaluate, que en este caso devolvería
-	// finding.Finding{} sin ningún número aprovechable.
 	if len(evals[0].ZScores) != int(featureCount) {
 		t.Errorf("ZScores tiene %d entradas, want %d (una por feature)", len(evals[0].ZScores), featureCount)
 	}
 }
 
-// TestEvaluateDebug_UpdatesBaseline_SameRuleAsEvaluate confirma que
-// EvaluateDebug deja el baseline en el mismo estado que Evaluate
-// dejaría para el mismo tráfico — necesario para poder sustituir
-// Evaluate por EvaluateDebug durante una corrida de diagnóstico sin
-// cambiar el comportamiento observable del detector.
 func TestEvaluateDebug_UpdatesBaseline_SameRuleAsEvaluate(t *testing.T) {
 	dEval := newTestDetector(t, testConfig())
 	dDebug := newTestDetector(t, testConfig())

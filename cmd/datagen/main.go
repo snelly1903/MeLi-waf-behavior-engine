@@ -1,4 +1,4 @@
-// Generador de tráfico sintético
+// Genera un escenario sintético de tráfico etiquetado a partir de una semilla y lo escribe a disco.
 package main
 
 import (

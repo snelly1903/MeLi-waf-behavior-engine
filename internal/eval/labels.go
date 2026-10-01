@@ -1,5 +1,4 @@
-// Package eval compara las decisiones de un motor (real o ficticio)
-// contra el ground truth generado en internal/datagen
+// Carga las etiquetas de ground truth de un escenario desde JSONL.
 package eval
 
 import (

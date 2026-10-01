@@ -1,3 +1,4 @@
+// Registra métricas OpenTelemetry de las decisiones servidas por la API HTTP.
 package telemetry
 
 import (
@@ -8,10 +9,6 @@ import (
 	"go.opentelemetry.io/otel/metric/noop"
 )
 
-// httpRecorder implementa httpapi.DecisionRecorder registrando la
-// métrica waf.decisions: un Counter con dos atributos de baja
-// cardinalidad, "action" (3 valores) y "attack_vector" (3 valores) --
-// 9 combinaciones como máximo. Nunca lleva EntityID ni RequestID.
 type httpRecorder struct {
 	decisions metric.Int64Counter
 }
@@ -28,7 +25,6 @@ func newHTTPRecorder(meter metric.Meter) httpRecorder {
 	return httpRecorder{decisions: decisions}
 }
 
-// RecordDecision implementa httpapi.DecisionRecorder.
 func (r httpRecorder) RecordDecision(action, attackVector string) {
 	r.decisions.Add(context.Background(), 1, metric.WithAttributes(
 		attribute.String("action", action),

@@ -1,3 +1,4 @@
+// Prueba que las decisiones inválidas y las líneas corruptas se reflejen en la evaluación.
 package eval
 
 import (
@@ -7,17 +8,11 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// TestEvaluateDecisions_InvalidDecisionIsExcludedNotAllow confirma que
-// una decisión que no pasa decision.Validate() no se cuenta
-// silenciosamente como ALLOW, y tampoco aparece duplicada en
-// MissingDecisionIDs además de en InvalidDecisionIDs.
 func TestEvaluateDecisions_InvalidDecisionIsExcludedNotAllow(t *testing.T) {
 	labels := map[string]groundtruth.Label{
 		"r-1": groundtruth.LabelLegit,
 		"r-2": groundtruth.LabelCredentialStuffing,
 	}
-	// r-2 llega con una decisión BLOCK inválida (sin explanation ni
-	// contributing_signals) — decision.Validate la rechaza.
 	decisionsResult := LoadDecisionsResult{
 		Decisions: []decision.Decision{
 			fakeDecision("r-1", decision.ActionAllow),
@@ -36,14 +31,11 @@ func TestEvaluateDecisions_InvalidDecisionIsExcludedNotAllow(t *testing.T) {
 	if result.Issues.Clean() {
 		t.Error("Issues.Clean() = true, want false (r-2 is invalid)")
 	}
-	// r-2 no entra al cálculo: solo r-1 (legit, ALLOW) queda cruzado.
 	if result.TotalJoined != 1 {
 		t.Errorf("TotalJoined = %d, want 1", result.TotalJoined)
 	}
 }
 
-// TestEvaluateDecisions_CorruptLinesMarkDirty confirma que las líneas
-// no interpretables de decisions.jsonl también ensucian Issues.Clean().
 func TestEvaluateDecisions_CorruptLinesMarkDirty(t *testing.T) {
 	labels := map[string]groundtruth.Label{"r-1": groundtruth.LabelLegit}
 	decisionsResult := LoadDecisionsResult{
@@ -61,12 +53,6 @@ func TestEvaluateDecisions_CorruptLinesMarkDirty(t *testing.T) {
 	}
 }
 
-// TestEvaluateDecisions_ConfusionMatrixTotalsMatchEvaluatedRecords es
-// la comprobación defensiva pedida explícitamente: TP+TN+FP+FN tiene
-// que coincidir exactamente con el número de registros evaluados, en
-// las dos políticas, incluso cuando hay decisiones inválidas o
-// corruptas de por medio (esos registros quedan afuera de la matriz,
-// nunca cuentan "gratis" en ningún casillero).
 func TestEvaluateDecisions_ConfusionMatrixTotalsMatchEvaluatedRecords(t *testing.T) {
 	labels := sampleLabels()
 	decisions := decideAllowAll(labels)

@@ -1,3 +1,4 @@
+// Verifica que AllowAllDecider produzca decisiones válidas.
 package engine
 
 import (

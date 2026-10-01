@@ -1,3 +1,4 @@
+// Prueba reproducibilidad, diversidad y etiquetado de las campañas de credential stuffing generadas.
 package datagen
 
 import (
@@ -83,7 +84,6 @@ func TestGenerateCredentialStuffingCampaign_StatusCodeMix(t *testing.T) {
 		case 401, 403:
 			failures++
 		case 200:
-			// éxito ocasional, esperado
 		default:
 			allowedOther++
 		}
@@ -133,9 +133,6 @@ func TestGenerateCredentialStuffingCampaign_AllEventsLabeled(t *testing.T) {
 	}
 }
 
-// TestGenerateCredentialStuffingCampaign_PayloadNeverCarriesLabel es una
-// capa extra de confianza específica de este generador, además de la
-// garantía genérica ya probada en internal/groundtruth.
 func TestGenerateCredentialStuffingCampaign_PayloadNeverCarriesLabel(t *testing.T) {
 	events := GenerateCredentialStuffingCampaign(NewRNG(8), DefaultCredentialStuffingCampaign, campaignStart)
 	for _, le := range events {

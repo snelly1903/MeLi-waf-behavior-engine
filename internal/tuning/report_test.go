@@ -1,3 +1,4 @@
+// Prueba la exportación de resultados de tuning.
 package tuning
 
 import (
@@ -11,10 +12,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/eval"
 )
 
-// TestToRows_UndefinedRatiosRenderAsNA cubre la división por cero
-// pedida explícitamente en Tests: un run sin ningún positivo real
-// (0% malicious) tiene que exportar "N/A" en Recall — nunca "0" ni
-// una celda vacía.
 func TestToRows_UndefinedRatiosRenderAsNA(t *testing.T) {
 	matrix := eval.ConfusionMatrix{TP: 0, FP: 1, FN: 0, TN: 9}
 	result := eval.Result{
@@ -41,8 +38,6 @@ func TestToRows_UndefinedRatiosRenderAsNA(t *testing.T) {
 	}
 }
 
-// TestToRows_DefinedValuesRenderAsNumbers es el espejo del anterior:
-// cuando SÍ hay datos, las celdas tienen que ser números, no "N/A".
 func TestToRows_DefinedValuesRenderAsNumbers(t *testing.T) {
 	matrix := eval.ConfusionMatrix{TP: 3, FP: 1, FN: 2, TN: 4}
 	result := eval.Result{
@@ -83,7 +78,7 @@ func TestWriteCSV_RoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading csv: %v", err)
 	}
-	if len(records) != 2 { // header + 1 fila
+	if len(records) != 2 {
 		t.Fatalf("records = %d, want 2 (header + 1 fila)", len(records))
 	}
 	if records[0][0] != "candidate" {
@@ -121,10 +116,6 @@ func TestWriteJSON_RoundTrips(t *testing.T) {
 	}
 }
 
-// TestRenderMarkdown_GroupsByCandidateAndRatio confirma que el
-// resumen agrupa correctamente varios seeds de la misma ratio bajo un
-// solo encabezado — la base de la sección de "estabilidad entre
-// seeds".
 func TestRenderMarkdown_GroupsByCandidateAndRatio(t *testing.T) {
 	matrix := eval.ConfusionMatrix{TP: 1, FP: 0, FN: 0, TN: 1}
 	er := eval.Result{

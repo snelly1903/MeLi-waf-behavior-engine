@@ -1,3 +1,4 @@
+// Genera sesiones y campañas sintéticas de escaneo lento de rutas.
 package datagen
 
 import (
@@ -9,9 +10,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// SlowScanProfile configura una sesión de escaneo lento. Los valores de
-// DefaultSlowScanProfile son un punto de partida razonable para el
-// dataset de prueba del challenge — NO son umbrales de detección.
 type SlowScanProfile struct {
 	Pool IPPool
 

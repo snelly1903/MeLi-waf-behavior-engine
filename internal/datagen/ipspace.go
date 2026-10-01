@@ -1,10 +1,10 @@
+// Define los pools de IPs públicas y ASN simulados usados por el generador.
 package datagen
 
 import (
 	"fmt"
 	"net/netip"
 )
-
 
 type SimulatedASN uint32
 
@@ -15,7 +15,7 @@ type IPPool struct {
 }
 
 var (
-	PoolHostingSim = IPPool{Name: "hosting-sim", ASN: 64512, Prefix: netip.MustParsePrefix("192.0.2.0/24")}
+	PoolHostingSim      = IPPool{Name: "hosting-sim", ASN: 64512, Prefix: netip.MustParsePrefix("192.0.2.0/24")}
 	PoolResidentialSimA = IPPool{Name: "residential-sim-a", ASN: 64513, Prefix: netip.MustParsePrefix("198.51.100.0/24")}
 	PoolResidentialSimB = IPPool{Name: "residential-sim-b", ASN: 64514, Prefix: netip.MustParsePrefix("203.0.113.0/24")}
 )

@@ -1,3 +1,4 @@
+// Prueba la validación y la normalización de eventos.
 package event
 
 import (
@@ -7,19 +8,13 @@ import (
 	"time"
 )
 
-// referenceNow es la "hora actual" fija que usan todos los tests de
-// este archivo, a través de un ManualClock — ningún test espera al
-// reloj real.
 var referenceNow = time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
 
-// validEvent devuelve un Event completamente bien formado que pasa
-// todas las reglas de validación, así cada caso de test solo necesita
-// describir el único campo que quiere romper.
 func validEvent() Event {
 	return Event{
 		RequestID:     "r-000123",
 		Timestamp:     referenceNow,
-		ClientIP:      netip.MustParseAddr("203.0.113.7"), // TEST-NET-3, public
+		ClientIP:      netip.MustParseAddr("203.0.113.7"),
 		SessionID:     "s-9f2a",
 		Method:        "GET",
 		Path:          "/dashboard",
@@ -43,7 +38,7 @@ func TestValidate_Accepts(t *testing.T) {
 		"minimal event (only required fields)": {
 			RequestID:  "r-1",
 			Timestamp:  referenceNow,
-			ClientIP:   netip.MustParseAddr("198.51.100.9"), // TEST-NET-2, public
+			ClientIP:   netip.MustParseAddr("198.51.100.9"),
 			Method:     "GET",
 			Path:       "/",
 			StatusCode: 200,
@@ -149,7 +144,7 @@ func TestValidate_Rejects(t *testing.T) {
 		},
 		{
 			name:    "method with invalid characters",
-			mutate:  func(e Event) Event { e.Method = "GET /path"; /* contiene un espacio */ return e },
+			mutate:  func(e Event) Event { e.Method = "GET /path"; return e },
 			wantErr: ErrInvalidMethodChars,
 		},
 		{
@@ -209,9 +204,6 @@ func TestValidate_Rejects(t *testing.T) {
 	}
 }
 
-// TestValidate_MultipleFailuresAreAllReported comprueba que un único
-// Event roto de dos formas distintas se reporta con los dos errores
-// centinela a la vez, no solo con el primero que se encuentra.
 func TestValidate_MultipleFailuresAreAllReported(t *testing.T) {
 	v := newTestValidator()
 	e := validEvent()
@@ -227,9 +219,6 @@ func TestValidate_MultipleFailuresAreAllReported(t *testing.T) {
 	}
 }
 
-// TestNormalize_WhitespaceSessionIDIsNotAnError comprueba la regla
-// aprobada: un session_id compuesto solo por espacios no se rechaza, se
-// trata como si el campo nunca se hubiera enviado.
 func TestNormalize_WhitespaceSessionIDIsNotAnError(t *testing.T) {
 	v := newTestValidator()
 	e := validEvent()

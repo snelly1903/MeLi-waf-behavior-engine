@@ -1,3 +1,4 @@
+// Define las configuraciones por defecto de los detectores y de la política de acciones.
 package engine
 
 import (

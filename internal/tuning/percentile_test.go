@@ -1,11 +1,8 @@
+// Prueba el resumen de percentiles.
 package tuning
 
 import "testing"
 
-// TestSummarize_HandComputed usa una muestra chica y calculable a
-// mano: [1,2,3,4,5,6,7,8,9,10] (n=10). Con "nearest rank"
-// (ceil(p*n)-1): p50->idx4(valor5), p75->idx7(valor8), p90->idx8(valor9),
-// p95->idx9(valor10).
 func TestSummarize_HandComputed(t *testing.T) {
 	values := []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 	s := Summarize(values)
@@ -33,9 +30,6 @@ func TestSummarize_HandComputed(t *testing.T) {
 	}
 }
 
-// TestSummarize_Empty_ReturnsZeroN confirma que una muestra vacía
-// queda con N=0 — nunca disimulada con ceros que parezcan datos
-// reales.
 func TestSummarize_Empty_ReturnsZeroN(t *testing.T) {
 	s := Summarize(nil)
 	if s.N != 0 {
@@ -43,8 +37,6 @@ func TestSummarize_Empty_ReturnsZeroN(t *testing.T) {
 	}
 }
 
-// TestSummarize_UnsortedInput_SameResultAsSorted confirma que el
-// orden de entrada no importa — Summarize ordena internamente.
 func TestSummarize_UnsortedInput_SameResultAsSorted(t *testing.T) {
 	a := Summarize([]float64{5, 1, 9, 3, 7, 2, 8, 4, 10, 6})
 	b := Summarize([]float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})

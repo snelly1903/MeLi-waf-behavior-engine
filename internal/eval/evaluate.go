@@ -1,9 +1,8 @@
+// Implementa la evaluación de decisiones contra el ground truth.
 package eval
 
 import "github.com/snelly1903/MeLi-waf-behavior-engine/internal/decision"
 
-// PolicyResult junta la matriz de confusión de una política con sus
-// métricas derivadas.
 type PolicyResult struct {
 	Matrix  ConfusionMatrix
 	Metrics Metrics

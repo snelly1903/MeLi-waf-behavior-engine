@@ -1,3 +1,4 @@
+// Reproduce una secuencia de eventos a través de un Decider.
 package tuning
 
 import (

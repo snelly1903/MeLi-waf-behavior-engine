@@ -1,3 +1,4 @@
+// Prueba expiración, orden de llegada y métricas del store de perfiles.
 package profile
 
 import (
@@ -19,9 +20,6 @@ func mustAddr(s string) netip.Addr {
 	return addr
 }
 
-// ev arma un event.Event mínimo pero completo para los tests de este
-// paquete. offset se suma a testBase; los demás campos tienen valores
-// neutros que cada test sobrescribe cuando le importan.
 func ev(ip netip.Addr, offset time.Duration) event.Event {
 	return event.Event{
 		RequestID:  "r",
@@ -51,20 +49,14 @@ func TestNewStore_InvalidWindow_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestObserve_ExpirationAndExactBorder cubre expiración normal (en
-// orden) y el borde exacto de la ventana: con arribos en orden
-// 10:00:00, 10:01:00, 10:03:00 y luego 10:06:00 (Window=5min), el
-// primero (10:00:00) queda estrictamente antes del corte
-// (10:06:00-5min=10:01:00) y se descarta; 10:01:00 está EXACTAMENTE en
-// el corte y se conserva (intervalo cerrado).
 func TestObserve_ExpirationAndExactBorder(t *testing.T) {
 	s := newTestStore(t, 5*time.Minute)
 	ip := mustAddr("203.0.113.1")
 
-	s.Observe(ev(ip, 0))             // 10:00:00 — va a expirar
-	s.Observe(ev(ip, 1*time.Minute)) // 10:01:00 — queda justo en el borde
-	s.Observe(ev(ip, 3*time.Minute)) // 10:03:00
-	s.Observe(ev(ip, 6*time.Minute)) // 10:06:00 — dispara el corte
+	s.Observe(ev(ip, 0))
+	s.Observe(ev(ip, 1*time.Minute))
+	s.Observe(ev(ip, 3*time.Minute))
+	s.Observe(ev(ip, 6*time.Minute))
 
 	m := s.SnapshotIP(ip)
 	if m.Total != 3 {
@@ -80,19 +72,13 @@ func TestObserve_ExpirationAndExactBorder(t *testing.T) {
 	}
 }
 
-// TestObserve_OutOfOrder_UsesWatermarkNotArrivalOrder es el caso
-// explícito pedido: con Window=5min, llegan 10:06, luego 10:03, luego
-// 09:59 (fuera de orden). El watermark queda en 10:06 (el máximo
-// visto, nunca retrocede); el corte es 10:06-5min=10:01. 10:03 está
-// dentro y cuenta; 09:59 está antes del corte y nunca se agrega, ni
-// "revive" nada. Total esperado = 2.
 func TestObserve_OutOfOrder_UsesWatermarkNotArrivalOrder(t *testing.T) {
 	s := newTestStore(t, 5*time.Minute)
 	ip := mustAddr("203.0.113.2")
 
-	s.Observe(ev(ip, 6*time.Minute))  // 10:06 — llega primero, fija el watermark
-	s.Observe(ev(ip, 3*time.Minute))  // 10:03 — llega atrasado, pero está en ventana
-	s.Observe(ev(ip, -1*time.Minute)) // 09:59 — llega atrasado, ya fuera de ventana
+	s.Observe(ev(ip, 6*time.Minute))
+	s.Observe(ev(ip, 3*time.Minute))
+	s.Observe(ev(ip, -1*time.Minute))
 
 	m := s.SnapshotIP(ip)
 	if m.Total != 2 {
@@ -108,19 +94,6 @@ func TestObserve_OutOfOrder_UsesWatermarkNotArrivalOrder(t *testing.T) {
 	}
 }
 
-// TestObserve_OrderInvariance_SameEventsDifferentArrivalOrder procesa
-// exactamente el mismo conjunto de cuatro timestamps
-// (10:00, 10:01, 10:03, 10:06 — Window=5min) dos veces sobre dos IPs
-// distintas: una vez en orden cronológico y otra vez en el orden
-// 10:06, 10:00, 10:03, 10:01. El resultado final tiene que ser
-// idéntico en los dos casos — Total=3 (10:00 expira, porque una vez
-// que el watermark llega a 10:06 el corte es 10:01 y 10:00 queda
-// estrictamente antes) y ventana efectiva WindowStart=10:01,
-// WindowEnd=10:06 — sin importar en qué orden llegaron los eventos.
-// Confirma, además, que el recorte inspecciona TODA la cola (no solo
-// el frente, como si estuviera ordenada) y que WindowStart/WindowEnd
-// se calculan por mínimo/máximo timestamp real, no por la posición del
-// elemento en el slice.
 func TestObserve_OrderInvariance_SameEventsDifferentArrivalOrder(t *testing.T) {
 	offsets := map[string]time.Duration{
 		"10:00": 0,
@@ -163,18 +136,13 @@ func TestObserve_OrderInvariance_SameEventsDifferentArrivalOrder(t *testing.T) {
 	}
 }
 
-// TestObserve_LateArrival_NeverRevivesAlreadyExpiredData refuerza el
-// mismo punto con una secuencia distinta: una vez que el watermark ya
-// avanzó lo suficiente para expirar una observación vieja, un evento
-// que llega tarde con un timestamp anterior al corte no puede
-// "resucitarla" ni a sí mismo.
 func TestObserve_LateArrival_NeverRevivesAlreadyExpiredData(t *testing.T) {
 	s := newTestStore(t, 5*time.Minute)
 	ip := mustAddr("203.0.113.3")
 
-	s.Observe(ev(ip, 0))              // 10:00:00
-	s.Observe(ev(ip, 10*time.Minute)) // 10:10:00 — corte pasa a 10:05:00, 10:00:00 expira
-	s.Observe(ev(ip, 1*time.Minute))  // 10:01:00 — llega tarde, ya está antes del corte
+	s.Observe(ev(ip, 0))
+	s.Observe(ev(ip, 10*time.Minute))
+	s.Observe(ev(ip, 1*time.Minute))
 
 	m := s.SnapshotIP(ip)
 	if m.Total != 1 {
@@ -224,8 +192,6 @@ func TestObserve_IndependentSessions(t *testing.T) {
 	if got := s.SnapshotSession("s-2").Total; got != 1 {
 		t.Errorf("s-2 Total = %d, want 1", got)
 	}
-	// El perfil de IP ve las tres, y cuenta 2 sesiones distintas detrás
-	// de ella (el caso NAT).
 	ipMetrics := s.SnapshotIP(ip)
 	if ipMetrics.Total != 3 {
 		t.Errorf("ip Total = %d, want 3", ipMetrics.Total)
@@ -238,15 +204,13 @@ func TestObserve_IndependentSessions(t *testing.T) {
 func TestObserve_EventWithoutSessionID_DoesNotCreateSessionEntry(t *testing.T) {
 	s := newTestStore(t, time.Minute)
 	ip := mustAddr("203.0.113.40")
-	s.Observe(ev(ip, 0)) // SessionID vacío
+	s.Observe(ev(ip, 0))
 
 	if got := s.SnapshotSession("").Total; got != 0 {
 		t.Errorf(`SnapshotSession("").Total = %d, want 0`, got)
 	}
 }
 
-// TestMetrics_HandComputed cubre 401/403, 404, cuentas distintas y
-// referer presente/ausente, todos calculados a mano.
 func TestMetrics_HandComputed(t *testing.T) {
 	s := newTestStore(t, time.Minute)
 	ip := mustAddr("203.0.113.50")
@@ -266,7 +230,7 @@ func TestMetrics_HandComputed(t *testing.T) {
 
 	e4 := ev(ip, 3*time.Second)
 	e4.StatusCode = 200
-	e4.LoginUserHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // cuenta repetida
+	e4.LoginUserHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 	for _, e := range []event.Event{e1, e2, e3, e4} {
 		s.Observe(e)
@@ -288,7 +252,7 @@ func TestMetrics_HandComputed(t *testing.T) {
 	if m.WithReferer != 1 || m.WithoutReferer != 3 {
 		t.Errorf("WithReferer=%d WithoutReferer=%d, want 1 and 3", m.WithReferer, m.WithoutReferer)
 	}
-	if len(m.PathCounts) != 2 { // "/" (x3) y "/admin" (x1)
+	if len(m.PathCounts) != 2 {
 		t.Errorf("len(PathCounts) = %d, want 2: %v", len(m.PathCounts), m.PathCounts)
 	}
 	if m.PathCounts["/"] != 3 || m.PathCounts["/admin"] != 1 {
@@ -296,9 +260,6 @@ func TestMetrics_HandComputed(t *testing.T) {
 	}
 }
 
-// TestSnapshotMetrics_PathCountsIsOwnedCopy confirma que modificar el
-// map devuelto en Metrics nunca afecta al estado interno del Store ni
-// a un snapshot posterior.
 func TestSnapshotMetrics_PathCountsIsOwnedCopy(t *testing.T) {
 	s := newTestStore(t, time.Minute)
 	ip := mustAddr("203.0.113.60")
@@ -331,15 +292,13 @@ func TestSnapshot_NeverObservedKey_ReturnsEmptyMetrics(t *testing.T) {
 	}
 }
 
-// TestSweep_RemovesOnlyIdleKeys confirma que Sweep elimina una clave
-// inactiva por más de idleTTL, y conserva una activa.
 func TestSweep_RemovesOnlyIdleKeys(t *testing.T) {
 	s := newTestStore(t, time.Minute)
 	idleIP := mustAddr("203.0.113.80")
 	activeIP := mustAddr("203.0.113.81")
 
-	s.Observe(ev(idleIP, 0))                // watermark = 10:00:00
-	s.Observe(ev(activeIP, 30*time.Minute)) // watermark = 10:30:00
+	s.Observe(ev(idleIP, 0))
+	s.Observe(ev(activeIP, 30*time.Minute))
 
 	now := testBase.Add(40 * time.Minute)
 	removed := s.Sweep(now, 20*time.Minute)
@@ -355,15 +314,9 @@ func TestSweep_RemovesOnlyIdleKeys(t *testing.T) {
 	}
 }
 
-// TestObserve_ConcurrentWrites_SameIP corre muchas goroutines
-// observando la misma IP en paralelo, con timestamps fijos y
-// deterministas (nunca time.Now()), y confirma con go test -race que
-// no hay condiciones de carrera y que el conteo final es exacto — la
-// prueba no depende de en qué orden intercalan las goroutines, solo
-// del resultado final.
 func TestObserve_ConcurrentWrites_SameIP(t *testing.T) {
 	const n = 200
-	s := newTestStore(t, time.Hour) // ventana ancha: todo cabe, ningún evento expira
+	s := newTestStore(t, time.Hour)
 	ip := mustAddr("203.0.113.90")
 
 	var wg sync.WaitGroup
@@ -381,10 +334,6 @@ func TestObserve_ConcurrentWrites_SameIP(t *testing.T) {
 	}
 }
 
-// TestObserve_ConcurrentWrites_MultipleIPsAndSessions ejercita el
-// mismo escenario con varias claves distintas en paralelo (IP y
-// sesión), para que -race también cubra el mutex del índice de
-// sesiones y no solo el de IPs.
 func TestObserve_ConcurrentWrites_MultipleIPsAndSessions(t *testing.T) {
 	const ips = 10
 	const perIP = 50

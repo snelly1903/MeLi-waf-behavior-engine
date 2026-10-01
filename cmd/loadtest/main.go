@@ -1,6 +1,4 @@
-// Command loadtest es el load test HTTP end-to-end (POST /v1/events):
-// corre la matriz perfil x concurrencia contra un *httpapi.Server
-// real montado en httptest.NewServer
+// Ejecuta el load test HTTP end-to-end sobre la matriz de perfiles y niveles de concurrencia.
 package main
 
 import (

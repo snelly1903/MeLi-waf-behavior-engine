@@ -1,3 +1,4 @@
+// Escribe el resumen en Markdown de los resultados del load test.
 package main
 
 import (
@@ -15,9 +16,6 @@ func nonEmpty(s, fallback string) string {
 	return s
 }
 
-// summaryParams son los parámetros de la corrida que se documentan en
-// summary.md: hardware, Go version, configuración, duración,
-// concurrency, OTel on/off, modo de ASN.
 type summaryParams struct {
 	Profiles      []string
 	Concurrencies []int

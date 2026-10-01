@@ -1,6 +1,4 @@
-// Package anomaly implementa un detector estadístico de anomalías:
-// un modelo online — media/varianza calculadas con el
-// algoritmo de Welford y z-scores unilaterales
+// Detecta anomalías estadísticas por IP y sesión con z-scores sobre una línea base online (Welford).
 package anomaly
 
 import (
@@ -34,6 +32,7 @@ var featureNames = [featureCount]string{
 	"without_referer_ratio_z",
 	"account_diversity_ratio_z",
 }
+
 type FeatureWeights struct {
 	NotFound         float64
 	FailedAuth       float64
@@ -45,6 +44,7 @@ type FeatureWeights struct {
 func (w FeatureWeights) asArray() [featureCount]float64 {
 	return [featureCount]float64{w.NotFound, w.FailedAuth, w.PathDiversity, w.Referer, w.AccountDiversity}
 }
+
 type Config struct {
 	Window time.Duration
 
@@ -99,6 +99,7 @@ func (cfg Config) Validate() error {
 	}
 	return errors.Join(errs...)
 }
+
 type featureStats struct {
 	mean float64
 	m2   float64
@@ -138,7 +139,7 @@ func (b *baseline) update(x [featureCount]float64) {
 const zEpsilon = 1e-9
 
 type scope struct {
-	label string // "ip" o "session"
+	label string
 	key   string
 }
 type Detector struct {
@@ -230,7 +231,7 @@ func (d *Detector) scoreFeatures(x [featureCount]float64, bl baselineSnapshot) (
 		if stddev > zEpsilon {
 			z = (x[i] - bl.stats[i].mean) / stddev
 			if z < 0 {
-				z = 0 // z-score unilateral: solo un incremento es sospechoso
+				z = 0
 			}
 		}
 		zs[i] = z
@@ -245,7 +246,6 @@ func (d *Detector) scoreFeatures(x [featureCount]float64, bl baselineSnapshot) (
 	}
 	return weightedSum / weightSum, zs
 }
-
 
 func (d *Detector) evaluateFeatures(x [featureCount]float64, bl baselineSnapshot, sc scope) finding.Finding {
 	combined, zs := d.scoreFeatures(x, bl)
@@ -263,7 +263,7 @@ func (d *Detector) evaluateFeatures(x [featureCount]float64, bl baselineSnapshot
 	}
 
 	return finding.Finding{
-		Triggered: true,
+		Triggered:           true,
 		AttackVector:        decision.AttackVectorUnknown,
 		RiskScore:           riskScore,
 		ContributingSignals: signals,
@@ -276,11 +276,11 @@ func (d *Detector) evaluateFeatures(x [featureCount]float64, bl baselineSnapshot
 }
 
 type DebugEvaluation struct {
-	Scope string
+	Scope         string
 	CombinedScore float64
-	Triggered bool
-	RiskScore float64
-	ZScores map[string]float64
+	Triggered     bool
+	RiskScore     float64
+	ZScores       map[string]float64
 }
 
 func (d *Detector) EvaluateDebug(e event.Event) []DebugEvaluation {

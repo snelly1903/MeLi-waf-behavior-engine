@@ -1,3 +1,4 @@
+// Prueba la atribución de mitigaciones por detector.
 package tuning
 
 import (
@@ -20,17 +21,13 @@ func attrEvent(label groundtruth.Label, action decision.Action, csTriggered, ssT
 	}
 }
 
-// TestComputeMitigationAttribution_FourCategories cubre las cuatro
-// combinaciones posibles para credential_stuffing: solo su propio
-// detector, detector propio + anomaly, solo anomaly, y ninguno de los
-// dos (señal cruzada) — nunca mezcladas.
 func TestComputeMitigationAttribution_FourCategories(t *testing.T) {
 	diagnostics := []EventDiagnostic{
-		attrEvent(groundtruth.LabelCredentialStuffing, decision.ActionChallenge, true, false, false), // solo cs
-		attrEvent(groundtruth.LabelCredentialStuffing, decision.ActionChallenge, true, false, true),  // cs + anomaly
-		attrEvent(groundtruth.LabelCredentialStuffing, decision.ActionChallenge, false, false, true), // solo anomaly
-		attrEvent(groundtruth.LabelCredentialStuffing, decision.ActionChallenge, false, true, false), // señal cruzada (slow_scan)
-		attrEvent(groundtruth.LabelCredentialStuffing, decision.ActionAllow, false, false, false),    // no mitigado -- no cuenta
+		attrEvent(groundtruth.LabelCredentialStuffing, decision.ActionChallenge, true, false, false),
+		attrEvent(groundtruth.LabelCredentialStuffing, decision.ActionChallenge, true, false, true),
+		attrEvent(groundtruth.LabelCredentialStuffing, decision.ActionChallenge, false, false, true),
+		attrEvent(groundtruth.LabelCredentialStuffing, decision.ActionChallenge, false, true, false),
+		attrEvent(groundtruth.LabelCredentialStuffing, decision.ActionAllow, false, false, false),
 	}
 
 	result := ComputeMitigationAttribution(diagnostics, eval.PolicyBroad)

@@ -1,3 +1,4 @@
+// Prueba reproducibilidad, ratio malicioso y consistencia de los escenarios generados.
 package datagen
 
 import (
@@ -62,11 +63,6 @@ func TestBuildScenario_ZeroPercent_HasNoMaliciousTraffic(t *testing.T) {
 	}
 }
 
-// TestBuildScenario_ZeroPercent_StillHasHardCases confirma que el
-// escenario "sin ataques" no es un caso de juguete: sigue conteniendo
-// los casos difíciles (NAT de oficina, cliente API sin referer/sesión,
-// algún 404 legítimo, tráfico legítimo sobre el ASN de hosting) — así
-// la medición de falsos positivos sobre este escenario es honesta.
 func TestBuildScenario_ZeroPercent_StillHasHardCases(t *testing.T) {
 	s := BuildScenario(DefaultScenarioConfig(1, 0))
 
@@ -99,7 +95,7 @@ func TestBuildScenario_ZeroPercent_StillHasHardCases(t *testing.T) {
 
 	sharedIPFound := false
 	for _, n := range ipCounts {
-		if n > 20 { // un único empleado ronda ~16 eventos; un cluster de 6 supera esto largo
+		if n > 20 {
 			sharedIPFound = true
 		}
 	}
@@ -109,7 +105,7 @@ func TestBuildScenario_ZeroPercent_StillHasHardCases(t *testing.T) {
 }
 
 func TestBuildScenario_AchievedRatioWithinTolerance(t *testing.T) {
-	const tolerance = 0.03 // 3 puntos porcentuales
+	const tolerance = 0.03
 
 	for _, ratio := range []float64{0.10, 0.30} {
 		t.Run(ratioName(ratio), func(t *testing.T) {
@@ -147,11 +143,6 @@ func TestBuildScenario_TimestampsSorted(t *testing.T) {
 	}
 }
 
-// TestBuildScenario_CampaignsFitWithinWindow comprueba que las dos
-// campañas de ataque quedan contenidas dentro de la ventana total del
-// escenario — necesario para que el futuro motor, con sus ventanas de
-// tiempo configurables, tenga margen suficiente para operar sobre un
-// solo archivo de escenario.
 func TestBuildScenario_CampaignsFitWithinWindow(t *testing.T) {
 	cfg := DefaultScenarioConfig(9, 0.30)
 	s := BuildScenario(cfg)
@@ -168,9 +159,6 @@ func TestBuildScenario_CampaignsFitWithinWindow(t *testing.T) {
 	}
 }
 
-// TestBuildScenario_HostedTenantAndAttackerIPsAreDisjoint confirma que,
-// en este escenario controlado, ninguna IP de ProfileHostedTenant
-// coincide con una IP atacante.
 func TestBuildScenario_HostedTenantAndAttackerIPsAreDisjoint(t *testing.T) {
 	s := BuildScenario(DefaultScenarioConfig(10, 0.30))
 
@@ -249,10 +237,6 @@ func readRequestIDs(t *testing.T, path string) map[string]bool {
 	return ids
 }
 
-// TestWriteScenario_EventsFileNeverCarriesLabel es la comprobación de
-// aislamiento del ground truth, esta vez sobre el ARCHIVO ya escrito a
-// disco (no solo en memoria) — la garantía real que le importa al
-// "motor WAF nunca recibe ni lee las etiquetas".
 func TestWriteScenario_EventsFileNeverCarriesLabel(t *testing.T) {
 	s := BuildScenario(DefaultScenarioConfig(12, 0.10))
 	dir := t.TempDir()

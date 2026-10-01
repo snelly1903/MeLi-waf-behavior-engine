@@ -1,8 +1,4 @@
-// Package engine (behavioral.go): el Decider real — combina los
-// detectores conductuales (internal/credstuffing, internal/slowscan e
-// internal/anomaly) en una única decision.Decision. Sin LLM, sin ASN
-// real, sin OTel/Grafana/k6/AWS todavía — ver docs/decisiones.md para
-// el alcance exacto.
+// Combina los detectores conductuales en una única decisión por evento (BehavioralDecider).
 package engine
 
 import (
@@ -19,11 +15,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/slowscan"
 )
 
-// anomalyPriority es la prioridad de desempate de statistical_anomaly
-// — la más alta (el desempate más débil) de las tres, y la referencia
-// para distinguir "detector específico" (credential_stuffing/
-// slow_scan, priority < anomalyPriority) de "genérico" en
-// selectAttribution.
 const anomalyPriority = 2
 
 var (
@@ -32,8 +23,6 @@ var (
 	ErrNilAnomalyDetector            = errors.New("engine: statistical anomaly detector is required")
 )
 
-// detector es la interfaz mínima que BehavioralDecider necesita de
-// cada fuente de Finding
 type detector interface {
 	Observe(event.Event)
 	Evaluate(event.Event) finding.Finding
@@ -44,7 +33,6 @@ type FindingsRecorder interface {
 	RecordFinding(detector string)
 	RecordAnomalyScore(score float64)
 }
-
 
 type noopFindingsRecorder struct{}
 
@@ -124,7 +112,6 @@ func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.De
 
 	attribution, secondaries := selectAttribution(triggered)
 
-
 	explanation := explanationFor(*attribution, secondaries, action, scoreSource.RiskScore, d.policy)
 
 	return decision.Decision{
@@ -201,7 +188,6 @@ func selectAttribution(triggered []triggeredFinding) (attribution *finding.Findi
 	f := triggered[chosen].finding
 	return &f, secondaries
 }
-
 
 func explanationFor(attribution finding.Finding, secondaries []finding.Finding, action decision.Action, decisionScore float64, policy Policy) string {
 	var explanation string

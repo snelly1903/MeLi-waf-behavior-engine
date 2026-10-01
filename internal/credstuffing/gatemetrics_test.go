@@ -1,3 +1,4 @@
+// Verifica que EvaluateGateMetrics exponga métricas crudas consistentes con Evaluate.
 package credstuffing
 
 import (
@@ -7,10 +8,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/finding"
 )
 
-// TestEvaluateGateMetrics_MatchesEvaluate_WhenTriggered confirma que,
-// para el mismo escenario que TestEvaluate_DistributedCampaign_Triggers,
-// EvaluateGateMetrics reporta los mismos números crudos que ya
-// terminan en el Finding real de Evaluate.
 func TestEvaluateGateMetrics_MatchesEvaluate_WhenTriggered(t *testing.T) {
 	resolver := fakeResolver{}
 	for i := 0; i < 20; i++ {
@@ -67,15 +64,10 @@ func TestEvaluateGateMetrics_MatchesEvaluate_WhenTriggered(t *testing.T) {
 	}
 }
 
-// TestEvaluateGateMetrics_ExposesRawNumbers_WhenNotTriggered es el
-// punto central de este método: Evaluate descarta los cuatro números
-// del gate cuando no dispara (devuelve finding.Finding{}) —
-// EvaluateGateMetrics los expone siempre.
 func TestEvaluateGateMetrics_ExposesRawNumbers_WhenNotTriggered(t *testing.T) {
 	resolver := fakeResolver{ipFor(0): "asn:64512"}
 	d := newTestDetector(t, baseConfig(resolver))
 
-	// Una sola IP, muchos intentos -- nunca cruza MinDistinctIPs.
 	var lastGate GateMetrics
 	for i := 0; i < 10; i++ {
 		e := authEvent(ipFor(0), time.Duration(i)*time.Second, "acct-A", 401)
@@ -98,10 +90,6 @@ func TestEvaluateGateMetrics_ExposesRawNumbers_WhenNotTriggered(t *testing.T) {
 	}
 }
 
-// TestEvaluateGateMetrics_NonAuthOrUnresolved_ReturnsNotFound cubre
-// los dos casos en que Evaluate devuelve un Finding vacío sin tocar
-// ningún estado: una ruta que no es de autenticación, y una IP que no
-// se pudo resolver a ningún grupo.
 func TestEvaluateGateMetrics_NonAuthOrUnresolved_ReturnsNotFound(t *testing.T) {
 	resolver := fakeResolver{ipFor(0): "asn:64512"}
 	d := newTestDetector(t, baseConfig(resolver))
@@ -112,7 +100,7 @@ func TestEvaluateGateMetrics_NonAuthOrUnresolved_ReturnsNotFound(t *testing.T) {
 		t.Error("found = true para una ruta no-auth, want false")
 	}
 
-	unresolved := authEvent(ipFor(99), 0, "acct-A", 401) // IP fuera del resolver
+	unresolved := authEvent(ipFor(99), 0, "acct-A", 401)
 	if _, found := d.EvaluateGateMetrics(unresolved); found {
 		t.Error("found = true para una IP sin resolver, want false")
 	}

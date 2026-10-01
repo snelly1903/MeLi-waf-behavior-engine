@@ -1,3 +1,4 @@
+// Prueba reproducibilidad y validez de las sesiones legítimas y los clusters de oficina.
 package datagen
 
 import (
@@ -11,13 +12,10 @@ import (
 
 var sessionStart = time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
 
-// TestGenerateLegitSession_Reproducible comprueba que la misma semilla,
-// el mismo perfil y el mismo punto de partida producen exactamente el
-// mismo JSON, byte a byte.
 func TestGenerateLegitSession_Reproducible(t *testing.T) {
 	for _, profile := range []LegitProfile{ProfileNavegante, ProfileAPIClient, ProfileOffice} {
 		t.Run(profile.Name, func(t *testing.T) {
-			ip := profile.Pool.RandomAddr(NewRNG(999)) // misma IP fija para ambas corridas
+			ip := profile.Pool.RandomAddr(NewRNG(999))
 
 			a := GenerateLegitSession(NewRNG(42), profile, sessionStart, ip)
 			b := GenerateLegitSession(NewRNG(42), profile, sessionStart, ip)
@@ -37,16 +35,6 @@ func TestGenerateLegitSession_Reproducible(t *testing.T) {
 	}
 }
 
-// validatorAsOfEachEvent valida cada evento "como si se hubiera
-// ingerido en el instante de su propio timestamp" — el reloj de la
-// tolerancia de tiempo del Validator (5 min de pasado, 1 min de futuro)
-// modela la ingesta en tiempo real, no la reproducción de un dataset ya
-// generado que puede abarcar horas simuladas. Validar así separa esa
-// comprobación de tiempo real (que no aplica acá) de la comprobación
-// estructural (IP, método, path, status, formato del hash) que sí
-// tiene que cumplir cualquier evento generado. Ver
-// docs/formato-eventos.md, sección de timestamps, para el mismo
-// razonamiento.
 func validatorAsOfEachEvent(le groundtruth.LabeledEvent) error {
 	v := event.NewValidator(event.NewManualClock(le.Event.Timestamp))
 	return le.Validate(v)
@@ -108,9 +96,6 @@ func TestGenerateLegitSession_TimestampsNonDecreasing(t *testing.T) {
 	}
 }
 
-// TestProfilesProduceDifferentBehaviors comprueba que los tres perfiles
-// no son intercambiables: cada uno tiene que mostrar, con la misma
-// semilla, el rasgo que lo distingue.
 func TestProfilesProduceDifferentBehaviors(t *testing.T) {
 	seed := uint64(11)
 
@@ -120,7 +105,6 @@ func TestProfilesProduceDifferentBehaviors(t *testing.T) {
 	rngAPI := NewRNG(seed)
 	apiEvents := GenerateLegitSession(rngAPI, ProfileAPIClient, sessionStart, ProfileAPIClient.Pool.RandomAddr(rngAPI))
 
-	// El navegante manda referer y pide al menos un asset estático.
 	navHasReferer, navHasAsset := false, false
 	for _, le := range navEvents {
 		if le.Event.Referer != "" {
@@ -139,8 +123,6 @@ func TestProfilesProduceDifferentBehaviors(t *testing.T) {
 		t.Error("ProfileNavegante never fetched a static asset")
 	}
 
-	// El cliente API nunca manda referer, nunca pide un asset, y nunca
-	// tiene sesión — la "trampa" del escaneo lento.
 	for _, le := range apiEvents {
 		if le.Event.Referer != "" {
 			t.Errorf("ProfileAPIClient sent a Referer, want it to never do so: %q", le.Event.Referer)
@@ -156,10 +138,6 @@ func TestProfilesProduceDifferentBehaviors(t *testing.T) {
 	}
 }
 
-// TestGenerateOfficeCluster_SharesIPButDistinctSessions comprueba la
-// trampa de la oficina: varios empleados, todos con la misma IP
-// (simulando el NAT corporativo) pero cada uno con su propio
-// session_id.
 func TestGenerateOfficeCluster_SharesIPButDistinctSessions(t *testing.T) {
 	const employees = 5
 	rng := NewRNG(13)
@@ -184,10 +162,6 @@ func TestGenerateOfficeCluster_SharesIPButDistinctSessions(t *testing.T) {
 	}
 }
 
-// TestGenerateOfficeCluster_TimestampsAreSorted comprueba que, al
-// juntar varias sesiones (una por empleado, cada una con su propio
-// horario de inicio), el resultado queda ordenado por Timestamp —
-// coherente en el tiempo sin necesitar ninguna espera real.
 func TestGenerateOfficeCluster_TimestampsAreSorted(t *testing.T) {
 	rng := NewRNG(14)
 	events := GenerateOfficeCluster(rng, 6, sessionStart, 15*time.Minute)

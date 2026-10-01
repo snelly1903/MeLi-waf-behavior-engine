@@ -1,3 +1,4 @@
+// Une etiquetas y decisiones por request_id y registra los problemas de datos.
 package eval
 
 import (
@@ -6,6 +7,7 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/decision"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
+
 type JoinedRecord struct {
 	RequestID string
 	Label     groundtruth.Label

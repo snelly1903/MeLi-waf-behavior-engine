@@ -1,3 +1,4 @@
+// Prueba el análisis de distribuciones de risk score.
 package tuning
 
 import (
@@ -17,11 +18,6 @@ func riskEvent(label groundtruth.Label, csRisk, ssRisk, anRisk float64, anTrigge
 	}
 }
 
-// TestAnalyzeRiskScoreDistributions_SeparatesMaliciousFromLegit
-// confirma que credential_stuffing agrupa sus propios eventos
-// maliciosos aparte de los legítimos, y que un evento de slow_scan no
-// cuenta como "malicious" para credential_stuffing (queda en
-// other_attack).
 func TestAnalyzeRiskScoreDistributions_SeparatesMaliciousFromLegit(t *testing.T) {
 	diagnostics := []EventDiagnostic{
 		riskEvent(groundtruth.LabelLegit, 0, 0, 0, false),
@@ -60,9 +56,6 @@ func TestAnalyzeRiskScoreDistributions_SeparatesMaliciousFromLegit(t *testing.T)
 	}
 }
 
-// TestAnalyzeRiskScoreDistributions_AnomalyHasNoOwnType_UsesGenericMalicious
-// confirma que, para statistical_anomaly (sin un tipo de ataque
-// propio), "malicious" agrupa CUALQUIER ataque, no solo uno.
 func TestAnalyzeRiskScoreDistributions_AnomalyHasNoOwnType_UsesGenericMalicious(t *testing.T) {
 	diagnostics := []EventDiagnostic{
 		riskEvent(groundtruth.LabelCredentialStuffing, 0, 0, 0.3, true),
@@ -91,10 +84,6 @@ func TestAnalyzeRiskScoreDistributions_AnomalyHasNoOwnType_UsesGenericMalicious(
 	}
 }
 
-// TestAnalyzeRiskScoreDistributions_RiskScoreZero_IncludedNotExcluded
-// confirma que un evento donde el detector no disparó (RiskScore=0)
-// SÍ entra en la distribución — nunca se excluye, es parte real de
-// la distribución (la mayoría del tráfico legítimo nunca dispara).
 func TestAnalyzeRiskScoreDistributions_RiskScoreZero_IncludedNotExcluded(t *testing.T) {
 	diagnostics := []EventDiagnostic{
 		riskEvent(groundtruth.LabelLegit, 0, 0, 0, false),

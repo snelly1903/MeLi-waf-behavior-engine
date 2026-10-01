@@ -1,3 +1,4 @@
+// Prueba la configuración y las señales del detector de escaneo lento.
 package slowscan
 
 import (
@@ -14,8 +15,6 @@ import (
 
 var testBase = time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
 
-// ipFor arma una dirección determinista y distinta para el índice i,
-// dentro de 203.0.113.0/24 (RFC 5737, documentación).
 func ipFor(i int) netip.Addr {
 	return netip.AddrFrom4([4]byte{203, 0, 113, byte(1 + i%254)})
 }
@@ -73,8 +72,6 @@ func observe(d *Detector, e event.Event) finding.Finding {
 	return d.Evaluate(e)
 }
 
-// --- Config.Validate ------------------------------------------------------
-
 func TestConfig_Validate_InvalidConfigurations(t *testing.T) {
 	valid := baseConfig()
 	tests := []struct {
@@ -101,8 +98,6 @@ func TestConfig_Validate_InvalidConfigurations(t *testing.T) {
 		})
 	}
 }
-
-// --- El caso central: escaneo lento claro que dispara ---------------------
 
 func TestEvaluate_ClearSlowScan_Triggers(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
@@ -132,8 +127,6 @@ func TestEvaluate_ClearSlowScan_Triggers(t *testing.T) {
 	}
 }
 
-// --- Mismo volumen concentrado en una sola ruta: NO es scanning -----------
-
 func TestEvaluate_ConcentratedSingleRoute_DoesNotTrigger(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
@@ -147,8 +140,6 @@ func TestEvaluate_ConcentratedSingleRoute_DoesNotTrigger(t *testing.T) {
 		t.Errorf("Triggered = true, want false — 20 requests to a single route is not scanning: %+v", last)
 	}
 }
-
-// --- Muchas rutas legítimas con pocos 404: crawler/SPA ---------------------
 
 func TestEvaluate_ManyLegitPathsLowNotFound_DoesNotTrigger(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
@@ -164,15 +155,13 @@ func TestEvaluate_ManyLegitPathsLowNotFound_DoesNotTrigger(t *testing.T) {
 	}
 }
 
-// --- Muchos 404 sobre pocas rutas repetidas: NO deben bastar ---------------
-
 func TestEvaluate_ManyNotFoundFewPaths_DoesNotTrigger(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
 
 	var last finding.Finding
 	for i := 0; i < 20; i++ {
-		path := sensitivePath(i % 3) // solo 3 rutas distintas, repetidas
+		path := sensitivePath(i % 3)
 		last = observe(d, ev(ip, time.Duration(i)*time.Minute, path, 404, false))
 	}
 
@@ -181,15 +170,13 @@ func TestEvaluate_ManyNotFoundFewPaths_DoesNotTrigger(t *testing.T) {
 	}
 }
 
-// --- Cliente API sin Referer, navegación estable: NO dispara ---------------
-
 func TestEvaluate_StableAPIClientNoReferer_DoesNotTrigger(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
 
 	var last finding.Finding
 	for i := 0; i < 20; i++ {
-		path := realPath(i % 5) // 5 endpoints estables, repetidos
+		path := realPath(i % 5)
 		last = observe(d, ev(ip, time.Duration(i)*time.Minute, path, 200, false))
 	}
 
@@ -198,15 +185,11 @@ func TestEvaluate_StableAPIClientNoReferer_DoesNotTrigger(t *testing.T) {
 	}
 }
 
-// --- Ausencia de Referer sola no dispara -----------------------------------
-
 func TestEvaluate_MissingRefererAlone_DoesNotTrigger(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
 
 	var last finding.Finding
-	// Volumen y diversidad deliberadamente muy por debajo del gate —
-	// lo único "sospechoso" acá es que no hay Referer en ningún caso.
 	for i := 0; i < 5; i++ {
 		last = observe(d, ev(ip, time.Duration(i)*time.Minute, sensitivePath(i%3), 404, false))
 	}
@@ -216,17 +199,12 @@ func TestEvaluate_MissingRefererAlone_DoesNotTrigger(t *testing.T) {
 	}
 }
 
-// --- Escaneo con intervalos grandes que sí se acumula en la ventana -------
-
 func TestEvaluate_SlowScanWithLargeGaps_AccumulatesWithinWindow(t *testing.T) {
-	d := newTestDetector(t, baseConfig()) // Window = 2h
+	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
 
 	var last finding.Finding
 	for i := 0; i < 20; i++ {
-		// Gaps de 6 minutos: 20 requests caen en ~114 minutos, dentro
-		// de la ventana de 2 horas, pero muy por debajo de cualquier
-		// rate limit tradicional.
 		last = observe(d, ev(ip, time.Duration(i)*6*time.Minute, sensitivePath(i), 404, false))
 	}
 
@@ -235,10 +213,8 @@ func TestEvaluate_SlowScanWithLargeGaps_AccumulatesWithinWindow(t *testing.T) {
 	}
 }
 
-// --- Eventos fuera de ventana dejan de contribuir --------------------------
-
 func TestEvaluate_EventsOutsideWindow_StopContributing(t *testing.T) {
-	d := newTestDetector(t, baseConfig()) // Window = 2h
+	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
 
 	var trigger finding.Finding
@@ -249,7 +225,6 @@ func TestEvaluate_EventsOutsideWindow_StopContributing(t *testing.T) {
 		t.Fatalf("first batch did not trigger, want it to (test setup issue): %+v", trigger)
 	}
 
-	// 5 horas después (Window=2h): todo el primer lote ya expiró.
 	late := ev(ip, 5*time.Hour, realPath(0), 200, true)
 	after := observe(d, late)
 
@@ -257,8 +232,6 @@ func TestEvaluate_EventsOutsideWindow_StopContributing(t *testing.T) {
 		t.Errorf("Triggered = true after the window elapsed, want false: %+v", after)
 	}
 }
-
-// --- Eventos fuera de orden: invariancia --------------------------------
 
 func TestEvaluate_OutOfOrder_SameResultAsChronological(t *testing.T) {
 	build := func(order []int) *Detector {
@@ -291,15 +264,13 @@ func TestEvaluate_OutOfOrder_SameResultAsChronological(t *testing.T) {
 	}
 }
 
-// --- Evento sin session_id: cae a evaluación por IP ------------------------
-
 func TestEvaluate_EventWithoutSessionID_FallsBackToIP(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
 
 	var last finding.Finding
 	for i := 0; i < 20; i++ {
-		e := ev(ip, time.Duration(i)*time.Minute, sensitivePath(i), 404, false) // SessionID == ""
+		e := ev(ip, time.Duration(i)*time.Minute, sensitivePath(i), 404, false)
 		last = observe(d, e)
 	}
 
@@ -312,18 +283,12 @@ func TestEvaluate_EventWithoutSessionID_FallsBackToIP(t *testing.T) {
 	}
 }
 
-// --- Entropía calculada a mano ---------------------------------------------
-
 func TestNormalizedEntropy_HandComputed(t *testing.T) {
-	// 4 rutas, 1 visita cada una: máxima diversidad posible con 4
-	// rutas distintas -> entropía normalizada = 1.0.
 	uniform := map[string]int{"/a": 1, "/b": 1, "/c": 1, "/d": 1}
 	if got := normalizedEntropy(uniform, 4, 4); got < 0.999 || got > 1.001 {
 		t.Errorf("normalizedEntropy(uniform) = %v, want ~1.0", got)
 	}
 
-	// 4 rutas, muy concentrado: {17,1,1,1} sobre 20 -> H≈0.848 bits,
-	// max=log2(4)=2 -> normalizada ≈ 0.424.
 	skewed := map[string]int{"/a": 17, "/b": 1, "/c": 1, "/d": 1}
 	got := normalizedEntropy(skewed, 20, 4)
 	want := 0.424
@@ -331,41 +296,28 @@ func TestNormalizedEntropy_HandComputed(t *testing.T) {
 		t.Errorf("normalizedEntropy(skewed) = %v, want ~%v", got, want)
 	}
 
-	// Una sola ruta: sin diversidad, entropía 0 por definición.
 	if got := normalizedEntropy(map[string]int{"/a": 10}, 10, 1); got != 0 {
 		t.Errorf("normalizedEntropy(single path) = %v, want 0", got)
 	}
 }
 
-// --- Novedad de rutas calculada a mano --------------------------------------
-
 func TestNovelPathRatio_HandComputed(t *testing.T) {
-	d := newTestDetector(t, baseConfig()) // MaxVisitorsForNovelPath = 1
+	d := newTestDetector(t, baseConfig())
 	thisIP := ipFor(0)
 	otherIP := ipFor(1)
 
-	// "/" la piden esta IP y otra más (2 visitantes distintos: no es
-	// "novel"). "/wp-admin" la pide únicamente esta IP (1 visitante:
-	// sí es "novel").
 	d.paths.observe("/", thisIP, testBase)
 	d.paths.observe("/", otherIP, testBase.Add(time.Second))
 	d.paths.observe("/wp-admin", thisIP, testBase.Add(2*time.Second))
 
 	pathCounts := map[string]int{"/": 1, "/wp-admin": 1}
 	got := d.novelPathRatio(pathCounts, 2)
-	want := 0.5 // 1 de 2 rutas es novel
+	want := 0.5
 	if got != want {
 		t.Errorf("novelPathRatio = %v, want %v", got, want)
 	}
 }
 
-// --- RiskScore nunca cero cuando Triggered es true --------------------------
-
-// TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore arma,
-// a mano, un caso donde las cinco señales del gate caen EXACTO en su
-// umbral configurado, y confirma Triggered=true con RiskScore
-// exactamente igual a ScoreFloor (con Referer en 0 para que el
-// promedio de las seis componentes dé exactamente 0).
 func TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore(t *testing.T) {
 	cfg := Config{
 		Window:                  time.Hour,
@@ -382,11 +334,6 @@ func TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore(t *test
 	ip := ipFor(0)
 	other := ipFor(1)
 
-	// 5 rutas (/p1../p5), 2 requests cada una (uniforme -> entropía
-	// exacta 1.0), 1 de cada 2 es 404 (ratio exacto 0.5), todas con
-	// Referer (para que el componente de Referer dé 0). /p1,/p2,/p3
-	// solo las visita esta IP (novel); /p4,/p5 también las visita
-	// "other" (no novel) -> 3 de 5 son novel = 0.6 exacto.
 	var last finding.Finding
 	paths := []string{"/p1", "/p2", "/p3", "/p4", "/p5"}
 	for i, p := range paths {
@@ -405,12 +352,6 @@ func TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore(t *test
 	}
 }
 
-// --- Los tres tests nuevos de IP + sesión -----------------------------------
-
-// TestEvaluate_ScannerRotatingSessions_DetectedByIP es el caso central
-// de la corrección: un atacante que rota session_id para que cada
-// sesión, individualmente, se quede por debajo de los umbrales —
-// mientras el agregado de la IP sí representa un escaneo claro.
 func TestEvaluate_ScannerRotatingSessions_DetectedByIP(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
@@ -419,7 +360,7 @@ func TestEvaluate_ScannerRotatingSessions_DetectedByIP(t *testing.T) {
 	for s := 0; s < 4; s++ {
 		sessionID := fmt.Sprintf("s-%d", s)
 		for j := 0; j < 5; j++ {
-			path := fmt.Sprintf("/sensitive-%d-%d", s, j) // 5 rutas por sesión, 20 en total, todas distintas
+			path := fmt.Sprintf("/sensitive-%d-%d", s, j)
 			e := evSession(ip, time.Duration(s*10+j)*time.Minute, path, 404, false, sessionID)
 			last = observe(d, e)
 		}
@@ -434,11 +375,6 @@ func TestEvaluate_ScannerRotatingSessions_DetectedByIP(t *testing.T) {
 	}
 }
 
-// TestEvaluate_LegitNATMultipleSessions_DoesNotTrigger confirma que un
-// NAT legítimo con varias sesiones navegando normalmente no dispara —
-// ni por sesión ni por IP — porque el gate completo (en particular,
-// NotFoundRatio) sigue exigiendo el patrón real de escaneo, no solo
-// diversidad de rutas agregada.
 func TestEvaluate_LegitNATMultipleSessions_DoesNotTrigger(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
@@ -447,7 +383,7 @@ func TestEvaluate_LegitNATMultipleSessions_DoesNotTrigger(t *testing.T) {
 	for s := 0; s < 3; s++ {
 		sessionID := fmt.Sprintf("s-%d", s)
 		for j := 0; j < 8; j++ {
-			path := realPath(s*8 + j) // rutas reales, todas distintas entre sesiones
+			path := realPath(s*8 + j)
 			e := evSession(ip, time.Duration(s*20+j)*time.Minute, path, 200, true, sessionID)
 			last = observe(d, e)
 		}
@@ -458,10 +394,6 @@ func TestEvaluate_LegitNATMultipleSessions_DoesNotTrigger(t *testing.T) {
 	}
 }
 
-// TestEvaluate_IPAndSessionBothTrigger_ReturnsSingleFinding fuerza un
-// empate exacto (toda la IP pertenece a una única sesión, así que las
-// dos perspectivas calculan sobre los mismos datos) y confirma que se
-// devuelve un único Finding, y que en un empate exacto gana sesión.
 func TestEvaluate_IPAndSessionBothTrigger_ReturnsSingleFinding(t *testing.T) {
 	d := newTestDetector(t, baseConfig())
 	ip := ipFor(0)
@@ -484,8 +416,6 @@ func TestEvaluate_IPAndSessionBothTrigger_ReturnsSingleFinding(t *testing.T) {
 		t.Errorf("EntityID = %q, want %q — on an exact tie, session must win", last.EntityID, wantEntityID)
 	}
 }
-
-// --- Concurrencia ------------------------------------------------------------
 
 func TestObserve_ConcurrentWrites_SameIP(t *testing.T) {
 	const n = 40
@@ -514,7 +444,7 @@ func TestObserve_ConcurrentWrites_SameIP(t *testing.T) {
 }
 
 func TestSweep_RemovesOnlyIdleState(t *testing.T) {
-	d := newTestDetector(t, baseConfig()) // Window = 2h
+	d := newTestDetector(t, baseConfig())
 	idleIP := ipFor(0)
 	activeIP := ipFor(1)
 

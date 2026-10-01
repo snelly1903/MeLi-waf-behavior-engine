@@ -1,3 +1,4 @@
+// Prueba la configuración y las señales del detector de credential stuffing.
 package credstuffing
 
 import (
@@ -14,9 +15,6 @@ import (
 
 var testBase = time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC)
 
-// fakeResolver es un NetworkResolver determinista, exclusivamente para
-// tests — nunca código de producción. Un IP ausente del mapa se
-// reporta como no resoluble (ok=false).
 type fakeResolver map[netip.Addr]string
 
 func (r fakeResolver) Resolve(ip netip.Addr) (string, bool) {
@@ -24,8 +22,6 @@ func (r fakeResolver) Resolve(ip netip.Addr) (string, bool) {
 	return group, ok
 }
 
-// ipFor arma una dirección determinista y distinta para el índice i,
-// dentro de 203.0.113.0/24 (RFC 5737, documentación).
 func ipFor(i int) netip.Addr {
 	return netip.AddrFrom4([4]byte{203, 0, 113, byte(1 + i%254)})
 }
@@ -55,11 +51,6 @@ func nonAuthEvent(ip netip.Addr, offset time.Duration) event.Event {
 	}
 }
 
-// baseConfig son los umbrales usados por la mayoría de los tests de
-// este archivo — valores de prueba elegidos para que sean fáciles de
-// razonar a mano, NUNCA los umbrales finales de calibración (eso es
-// una tarea posterior, contra un dataset separado, igual que se hizo
-// con internal/baseline).
 func baseConfig(resolver NetworkResolver) Config {
 	return Config{
 		Window:              10 * time.Minute,
@@ -82,14 +73,10 @@ func newTestDetector(t *testing.T, cfg Config) *Detector {
 	return d
 }
 
-// observe llama Observe y devuelve Evaluate para el mismo evento —
-// el orden que el propio Detector documenta como precondición.
 func observe(d *Detector, e event.Event) finding.Finding {
 	d.Observe(e)
 	return d.Evaluate(e)
 }
-
-// --- Config.Validate ---------------------------------------------------
 
 func TestConfig_Validate_InvalidConfigurations(t *testing.T) {
 	valid := baseConfig(fakeResolver{})
@@ -128,8 +115,6 @@ func TestNewDetector_InvalidConfig_ReturnsError(t *testing.T) {
 	}
 }
 
-// --- El caso central: campaña distribuida que dispara -------------------
-
 func TestEvaluate_DistributedCampaign_Triggers(t *testing.T) {
 	resolver := fakeResolver{}
 	for i := 0; i < 20; i++ {
@@ -138,11 +123,9 @@ func TestEvaluate_DistributedCampaign_Triggers(t *testing.T) {
 	d := newTestDetector(t, baseConfig(resolver))
 
 	var last finding.Finding
-	// 20 IPs distintas, cada una con 1 intento, 15 cuentas distintas
-	// (algunas reutilizadas), 90% de fallos.
 	for i := 0; i < 20; i++ {
 		status := 401
-		if i%10 == 0 { // 2 de 20 exitosos: ratio de fallo 0.9
+		if i%10 == 0 {
 			status = 200
 		}
 		account := "acct-" + string(rune('A'+i%15))
@@ -170,15 +153,6 @@ func TestEvaluate_DistributedCampaign_Triggers(t *testing.T) {
 	}
 }
 
-// --- RiskScore nunca cero al disparar ------------------------------------
-
-// TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore
-// confirma que, con las cuatro señales EXACTAMENTE en su umbral
-// configurado (5 IPs, 4 cuentas, 6 intentos, ratio de fallo 0.5),
-// Triggered tiene que dar true, y RiskScore tiene que ser
-// estrictamente mayor que 0 — sin el piso (ScoreFloor), los cuatro
-// componentes normalizados darían 0 y el score total sería 0 pese a
-// haber disparado.
 func TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore(t *testing.T) {
 	resolver := fakeResolver{
 		ipFor(0): "asn:64512",
@@ -189,15 +163,12 @@ func TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore(t *test
 	}
 	d := newTestDetector(t, baseConfig(resolver))
 
-	// 6 intentos, 5 IPs distintas (ipFor(0) se repite), 4 cuentas
-	// distintas (A,B,C,D — D y A se reutilizan), 3 fallos de 6 (ratio
-	// exacto 0.5).
 	events := []event.Event{
-		authEvent(ipFor(0), 0*time.Second, "acct-A", 401), // fallo
+		authEvent(ipFor(0), 0*time.Second, "acct-A", 401),
 		authEvent(ipFor(0), 1*time.Second, "acct-B", 200),
-		authEvent(ipFor(1), 2*time.Second, "acct-C", 401), // fallo
+		authEvent(ipFor(1), 2*time.Second, "acct-C", 401),
 		authEvent(ipFor(2), 3*time.Second, "acct-D", 200),
-		authEvent(ipFor(3), 4*time.Second, "acct-D", 403), // fallo
+		authEvent(ipFor(3), 4*time.Second, "acct-D", 403),
 		authEvent(ipFor(4), 5*time.Second, "acct-A", 200),
 	}
 
@@ -215,14 +186,10 @@ func TestEvaluate_AllSignalsExactlyAtThreshold_TriggersWithPositiveScore(t *test
 	if last.RiskScore >= 1 {
 		t.Errorf("RiskScore = %v, want it strictly less than 1", last.RiskScore)
 	}
-	// En el borde exacto, los cuatro componentes normalizados dan 0, así
-	// que el score tiene que ser EXACTAMENTE el piso configurado.
 	if last.RiskScore != 0.2 {
 		t.Errorf("RiskScore = %v, want exactly ScoreFloor (0.2) at the exact threshold", last.RiskScore)
 	}
 }
-
-// --- Una sola IP no puede, por sí sola, demostrar el caso distribuido ---
 
 func TestEvaluate_SingleIP_ManyAttempts_DoesNotTrigger(t *testing.T) {
 	ip := ipFor(0)
@@ -230,9 +197,6 @@ func TestEvaluate_SingleIP_ManyAttempts_DoesNotTrigger(t *testing.T) {
 	d := newTestDetector(t, baseConfig(resolver))
 
 	var last finding.Finding
-	// 50 intentos, todos fallidos, todos desde la MISMA IP y la misma
-	// cuenta — un flood clásico de una sola IP, no una campaña
-	// distribuida.
 	for i := 0; i < 50; i++ {
 		e := authEvent(ip, time.Duration(i)*time.Second, "acct-A", 401)
 		last = observe(d, e)
@@ -243,22 +207,17 @@ func TestEvaluate_SingleIP_ManyAttempts_DoesNotTrigger(t *testing.T) {
 	}
 }
 
-// --- Tráfico legítimo compartiendo ASN con atacantes ---------------------
-
 func TestEvaluate_LegitTenantSharingASNWithAttackers_DoesNotTrigger(t *testing.T) {
 	resolver := fakeResolver{}
 	for i := 0; i < 30; i++ {
-		resolver[ipFor(i)] = "asn:64512" // mismo grupo que usaría un atacante
+		resolver[ipFor(i)] = "asn:64512"
 	}
 	d := newTestDetector(t, baseConfig(resolver))
 
 	var last finding.Finding
-	// 30 IPs, 30 cuentas distintas, volumen alto — pero casi todos los
-	// logins tienen éxito (ratio de fallo muy bajo): un tenant
-	// legítimo real.
 	for i := 0; i < 30; i++ {
 		status := 200
-		if i == 0 { // un único fallo entre 30 — normal, alguien tipeó mal
+		if i == 0 {
 			status = 401
 		}
 		account := "acct-" + string(rune('A'+i%26))
@@ -271,8 +230,6 @@ func TestEvaluate_LegitTenantSharingASNWithAttackers_DoesNotTrigger(t *testing.T
 	}
 }
 
-// --- Muchos 401 pero pocas cuentas (posible brute-force de una cuenta) --
-
 func TestEvaluate_ManyFailuresFewAccounts_DoesNotTrigger(t *testing.T) {
 	resolver := fakeResolver{}
 	for i := 0; i < 20; i++ {
@@ -281,9 +238,6 @@ func TestEvaluate_ManyFailuresFewAccounts_DoesNotTrigger(t *testing.T) {
 	d := newTestDetector(t, baseConfig(resolver))
 
 	var last finding.Finding
-	// 20 IPs distintas, volumen alto, 100% de fallos — pero todas
-	// contra la MISMA cuenta (solo 1 distinta, muy por debajo de
-	// MinDistinctAccounts=4).
 	for i := 0; i < 20; i++ {
 		e := authEvent(ipFor(i), time.Duration(i)*time.Second, "acct-single-target", 401)
 		last = observe(d, e)
@@ -294,8 +248,6 @@ func TestEvaluate_ManyFailuresFewAccounts_DoesNotTrigger(t *testing.T) {
 	}
 }
 
-// --- Muchas cuentas pero pocos errores (login legítimo masivo) ----------
-
 func TestEvaluate_ManyAccountsFewFailures_DoesNotTrigger(t *testing.T) {
 	resolver := fakeResolver{}
 	for i := 0; i < 20; i++ {
@@ -304,7 +256,6 @@ func TestEvaluate_ManyAccountsFewFailures_DoesNotTrigger(t *testing.T) {
 	d := newTestDetector(t, baseConfig(resolver))
 
 	var last finding.Finding
-	// 20 IPs, 20 cuentas distintas — pero todos exitosos.
 	for i := 0; i < 20; i++ {
 		account := "acct-" + string(rune('A'+i%20))
 		e := authEvent(ipFor(i), time.Duration(i)*time.Second, account, 200)
@@ -316,8 +267,6 @@ func TestEvaluate_ManyAccountsFewFailures_DoesNotTrigger(t *testing.T) {
 	}
 }
 
-// --- Eventos fuera de ventana --------------------------------------------
-
 func TestEvaluate_EventsOutsideWindow_StopCounting(t *testing.T) {
 	resolver := fakeResolver{}
 	for i := 0; i < 6; i++ {
@@ -325,9 +274,6 @@ func TestEvaluate_EventsOutsideWindow_StopCounting(t *testing.T) {
 	}
 	d := newTestDetector(t, baseConfig(resolver))
 
-	// Primer lote: 6 intentos, 5 IPs distintas (ipFor(0) se repite), 4
-	// cuentas distintas, ratio de fallo exacto 0.5 — cumple las cuatro
-	// condiciones, dispara.
 	var trigger finding.Finding
 	batch := []event.Event{
 		authEvent(ipFor(0), 0*time.Second, "acct-A", 401),
@@ -344,9 +290,6 @@ func TestEvaluate_EventsOutsideWindow_StopCounting(t *testing.T) {
 		t.Fatalf("first batch did not trigger, want it to (test setup issue): %+v", trigger)
 	}
 
-	// Segundo evento, 30 minutos después (Window=10min): para cuando
-	// llega, todo el primer lote ya expiró. Por sí solo, un único
-	// intento no alcanza ningún umbral.
 	late := authEvent(ipFor(5), 30*time.Minute, "acct-E", 200)
 	after := observe(d, late)
 
@@ -355,17 +298,11 @@ func TestEvaluate_EventsOutsideWindow_StopCounting(t *testing.T) {
 	}
 }
 
-// --- ASN desconocido ------------------------------------------------------
-
 func TestObserve_UnresolvedIP_ExcludedFromCorrelation(t *testing.T) {
-	// unresolved no está en el mapa: Resolve le va a devolver ok=false.
 	knownIP := ipFor(0)
 	resolver := fakeResolver{knownIP: "asn:64512"}
 	d := newTestDetector(t, baseConfig(resolver))
 
-	// 20 IPs no resolubles, con toda la pinta de una campaña si se
-	// las agrupara — pero como no resuelven, no deberían contar en
-	// ningún grupo ni disparar nunca.
 	var lastUnresolved finding.Finding
 	for i := 1; i <= 20; i++ {
 		e := authEvent(ipFor(i), time.Duration(i)*time.Second, "acct-X", 401)
@@ -375,16 +312,11 @@ func TestObserve_UnresolvedIP_ExcludedFromCorrelation(t *testing.T) {
 		t.Errorf("Triggered = true for an unresolved IP, want false: %+v", lastUnresolved)
 	}
 
-	// Confirmar que no contaminaron el grupo real conocido: un único
-	// intento desde knownIP sigue evaluando como "no dispara" por sí
-	// solo (no heredó ningún conteo de las IPs no resueltas).
 	knownFinding := observe(d, authEvent(knownIP, 21*time.Second, "acct-Y", 401))
 	if knownFinding.Triggered {
 		t.Errorf("Triggered = true for the known group after only 1 attempt, want false (unresolved IPs must not have leaked into it): %+v", knownFinding)
 	}
 }
-
-// --- Eventos sin login_user_hash ------------------------------------------
 
 func TestEvaluate_MissingLoginUserHash_ExcludedFromAccountSet(t *testing.T) {
 	resolver := fakeResolver{}
@@ -394,9 +326,6 @@ func TestEvaluate_MissingLoginUserHash_ExcludedFromAccountSet(t *testing.T) {
 	d := newTestDetector(t, baseConfig(resolver))
 
 	var last finding.Finding
-	// 6 IPs, 6 intentos, ratio de fallo alto — pero login_user_hash
-	// vacío en todos: DistinctAccounts debe quedar en 0, muy por
-	// debajo de MinDistinctAccounts=4.
 	for i := 0; i < 6; i++ {
 		e := authEvent(ipFor(i), time.Duration(i)*time.Second, "", 401)
 		last = observe(d, e)
@@ -406,8 +335,6 @@ func TestEvaluate_MissingLoginUserHash_ExcludedFromAccountSet(t *testing.T) {
 		t.Errorf("Triggered = true, want false — empty login_user_hash must never count toward DistinctAccounts: %+v", last)
 	}
 }
-
-// --- Un evento que no es de autenticación nunca dispara ni toca estado --
 
 func TestObserveEvaluate_NonAuthEvent_NeverTriggers(t *testing.T) {
 	ip := ipFor(0)
@@ -420,13 +347,6 @@ func TestObserveEvaluate_NonAuthEvent_NeverTriggers(t *testing.T) {
 	}
 }
 
-// --- Concurrencia ----------------------------------------------------------
-
-// TestObserve_ConcurrentWrites_SameGroup corre muchas goroutines
-// observando el mismo grupo de red en paralelo, cada una con IP y
-// cuenta distintas y timestamps fijos y deterministas (nunca
-// time.Now()), y confirma con go test -race que no hay condiciones de
-// carrera y que el resultado final dispara con un score coherente.
 func TestObserve_ConcurrentWrites_SameGroup(t *testing.T) {
 	const n = 60
 	resolver := fakeResolver{}
@@ -446,8 +366,6 @@ func TestObserve_ConcurrentWrites_SameGroup(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Evaluar con un último evento del mismo grupo, ya con todo lo
-	// anterior observado.
 	probe := authEvent(ipFor(0), time.Duration(n)*time.Millisecond, "acct-probe", 401)
 	f := observe(d, probe)
 
@@ -459,8 +377,6 @@ func TestObserve_ConcurrentWrites_SameGroup(t *testing.T) {
 	}
 }
 
-// TestSweep_RemovesOnlyIdleGroups confirma que Sweep elimina un grupo
-// inactivo por más de idleTTL, y conserva uno activo.
 func TestSweep_RemovesOnlyIdleGroups(t *testing.T) {
 	idleIP := ipFor(0)
 	activeIP := ipFor(1)

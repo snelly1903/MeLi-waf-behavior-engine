@@ -1,3 +1,4 @@
+// Provee helpers compartidos para los tests de tuning.
 package tuning
 
 import (
@@ -8,9 +9,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// fakeCampaignResolver es un NetworkResolver determinista, solo para
-// estos tests — nunca código de producción, mismo criterio que
-// fakeResolver en internal/engine/behavioral_test.go.
 type fakeCampaignResolver map[netip.Addr]string
 
 func (r fakeCampaignResolver) Resolve(ip netip.Addr) (string, bool) {

@@ -1,3 +1,4 @@
+// Genera sesiones de tráfico legítimo por perfil y clusters de oficina que comparten IP.
 package datagen
 
 import (

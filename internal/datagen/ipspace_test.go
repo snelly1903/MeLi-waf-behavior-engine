@@ -1,3 +1,4 @@
+// Verifica que los pools de IP sean públicos, respeten su prefijo y tengan ASN distintos.
 package datagen
 
 import (
@@ -9,11 +10,6 @@ import (
 
 var allPools = []IPPool{PoolHostingSim, PoolResidentialSimA, PoolResidentialSimB}
 
-// TestPools_AddressesArePublic confirma que ninguna dirección sorteada
-// de estos pools activa las reglas de "IP privada" del Validator
-// (RFC1918, loopback, link-local, sin especificar) — la misma
-// conclusión verificada "a mano" (ver docs/decisiones.md), ahora
-// fijada como regresión permanente.
 func TestPools_AddressesArePublic(t *testing.T) {
 	rng := NewRNG(1)
 	for _, pool := range allPools {
@@ -26,8 +22,6 @@ func TestPools_AddressesArePublic(t *testing.T) {
 	}
 }
 
-// TestPools_AddressesStayWithinPrefix confirma que cada dirección
-// sorteada realmente pertenece al bloque CIDR declarado del pool.
 func TestPools_AddressesStayWithinPrefix(t *testing.T) {
 	rng := NewRNG(2)
 	for _, pool := range allPools {
@@ -40,9 +34,6 @@ func TestPools_AddressesStayWithinPrefix(t *testing.T) {
 	}
 }
 
-// TestPools_AddressesPassEventValidator confirma que una IP sorteada de
-// cualquiera de los tres pools, dentro de un Event por lo demás válido,
-// pasa el Validator sin errores.
 func TestPools_AddressesPassEventValidator(t *testing.T) {
 	rng := NewRNG(3)
 	now := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
@@ -101,13 +92,9 @@ func TestIPPool_DistinctAddrsExcluding_PanicsWhenNotEnoughRemain(t *testing.T) {
 	}()
 	rng := NewRNG(21)
 	exclude := PoolHostingSim.DistinctAddrs(rng, 250)
-	PoolHostingSim.DistinctAddrsExcluding(rng, 10, exclude) // solo quedan 4
+	PoolHostingSim.DistinctAddrsExcluding(rng, 10, exclude)
 }
 
-// TestPools_HaveDistinctSimulatedASNsInPrivateUseRange confirma que los
-// tres ASN simulados son todos distintos y caen dentro del rango
-// 64512–65534 reservado por la IANA (RFC 6996) para uso privado — así
-// ninguno se puede confundir con el ASN de un proveedor real.
 func TestPools_HaveDistinctSimulatedASNsInPrivateUseRange(t *testing.T) {
 	seen := make(map[SimulatedASN]string)
 	for _, pool := range allPools {

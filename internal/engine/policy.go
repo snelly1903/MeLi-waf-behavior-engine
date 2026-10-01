@@ -1,3 +1,4 @@
+// Traduce el risk score en una acción ALLOW, CHALLENGE o BLOCK según umbrales.
 package engine
 
 import (
@@ -11,7 +12,6 @@ type Policy struct {
 
 	BlockThreshold float64
 }
-
 
 var ErrInvalidPolicy = errors.New("engine: policy must satisfy 0 <= challenge_threshold < block_threshold <= 1")
 

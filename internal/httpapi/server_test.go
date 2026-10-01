@@ -1,3 +1,4 @@
+// Prueba los handlers HTTP de eventos y healthz.
 package httpapi
 
 import (
@@ -21,9 +22,6 @@ func testServer(t *testing.T) *Server {
 	return NewServer(validator, engine.AllowAllDecider{}, nil)
 }
 
-// fakeDecisionRecorder captura cada llamada a RecordDecision — usado
-// para verificar que Server la invoca con action/attack_vector
-// correctos, sin necesitar OpenTelemetry en este test.
 type fakeDecisionRecorder struct {
 	calls []fakeDecisionCall
 }
@@ -53,10 +51,6 @@ func decodeErrorResponse(t *testing.T, rec *httptest.ResponseRecorder) errorResp
 	return resp
 }
 
-// TestHandleEvents_ValidEvent_ReturnsAllowDecision cubre el caso
-// "evento válido": la respuesta es 200, parsea como decision.Decision,
-// pasa decision.Validate(), y RequestID/EntityID quedan derivados
-// correctamente del evento enviado.
 func TestHandleEvents_ValidEvent_ReturnsAllowDecision(t *testing.T) {
 	srv := testServer(t)
 	body := []byte(`{
@@ -94,11 +88,6 @@ func TestHandleEvents_ValidEvent_ReturnsAllowDecision(t *testing.T) {
 	}
 }
 
-// TestHandleEvents_RecordsDecisionMetric verifica que handleEvents
-// llame al DecisionRecorder exactamente una vez, con el action y
-// attack_vector reales de la Decision devuelta — la métrica
-// waf.decisions. Nunca con EntityID/RequestID (esos campos ni
-// siquiera están disponibles en la interfaz DecisionRecorder).
 func TestHandleEvents_RecordsDecisionMetric(t *testing.T) {
 	clock := event.NewManualClock(time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC))
 	validator := event.NewValidator(clock)
@@ -126,11 +115,9 @@ func TestHandleEvents_RecordsDecisionMetric(t *testing.T) {
 	}
 }
 
-// TestHandleEvents_MalformedJSON_Returns400 cubre el caso "JSON
-// corrupto".
 func TestHandleEvents_MalformedJSON_Returns400(t *testing.T) {
 	srv := testServer(t)
-	rec := postEvents(t, srv, []byte(`{"request_id": "r-1", "timestamp":`)) // JSON truncado
+	rec := postEvents(t, srv, []byte(`{"request_id": "r-1", "timestamp":`))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d (body=%q)", rec.Code, http.StatusBadRequest, rec.Body.String())
@@ -141,9 +128,6 @@ func TestHandleEvents_MalformedJSON_Returns400(t *testing.T) {
 	}
 }
 
-// TestHandleEvents_InvalidEvent_Returns422 cubre el caso "evento
-// inválido": JSON bien formado, pero el Validator lo rechaza (acá,
-// por tener una IP privada — event.ErrPrivateClientIP).
 func TestHandleEvents_InvalidEvent_Returns422(t *testing.T) {
 	srv := testServer(t)
 	body := []byte(`{
@@ -169,8 +153,6 @@ func TestHandleEvents_InvalidEvent_Returns422(t *testing.T) {
 	}
 }
 
-// TestHandleEvents_WrongMethod_Returns405 cubre el caso "método HTTP
-// incorrecto".
 func TestHandleEvents_WrongMethod_Returns405(t *testing.T) {
 	srv := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/events", nil)
@@ -189,7 +171,6 @@ func TestHandleEvents_WrongMethod_Returns405(t *testing.T) {
 	}
 }
 
-// TestHandleHealthz_ReturnsOK cubre el caso "health check".
 func TestHandleHealthz_ReturnsOK(t *testing.T) {
 	srv := testServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

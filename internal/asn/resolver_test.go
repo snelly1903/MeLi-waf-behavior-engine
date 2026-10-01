@@ -1,3 +1,4 @@
+// Prueba el resolver de ASN contra un servidor RIPEstat simulado.
 package asn
 
 import (
@@ -36,8 +37,6 @@ func newTestResolver(t *testing.T, baseURL string, clock event.Clock) *Resolver 
 	return r
 }
 
-// --- Config.Validate --------------------------------------------------
-
 func TestConfig_Validate_InvalidConfigurations(t *testing.T) {
 	valid := testConfig("http://example.invalid", event.SystemClock{})
 	tests := []struct {
@@ -66,8 +65,6 @@ func TestNewResolver_InvalidConfig_ReturnsError(t *testing.T) {
 		t.Fatal("NewResolver() error = nil, want an error")
 	}
 }
-
-// --- Parseo exitoso -----------------------------------------------------
 
 func networkInfoHandler(asns []string, status string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -105,8 +102,6 @@ func TestResolve_ASPrefix_IsStripped(t *testing.T) {
 	}
 }
 
-// --- Política conservadora: 0 y >1 ASN ------------------------------------
-
 func TestResolve_ZeroASNs_ReturnsUnresolved(t *testing.T) {
 	srv := httptest.NewServer(networkInfoHandler([]string{}, "ok"))
 	defer srv.Close()
@@ -119,9 +114,6 @@ func TestResolve_ZeroASNs_ReturnsUnresolved(t *testing.T) {
 	}
 }
 
-// TestResolve_MultipleASNs_ReturnsUnresolved cubre el caso en que
-// RIPEstat devuelve más de un ASN (multi-homing) — este prototipo no
-// elige uno arbitrariamente, trata la ambigüedad como no resoluble.
 func TestResolve_MultipleASNs_ReturnsUnresolved(t *testing.T) {
 	srv := httptest.NewServer(networkInfoHandler([]string{"15169", "6432"}, "ok"))
 	defer srv.Close()
@@ -133,8 +125,6 @@ func TestResolve_MultipleASNs_ReturnsUnresolved(t *testing.T) {
 		t.Errorf("Resolve() = (%q, true), want ok=false for a multi-ASN response", group)
 	}
 }
-
-// --- Errores del proveedor -------------------------------------------------
 
 func TestResolve_MalformedJSON_ReturnsUnresolved(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -173,11 +163,9 @@ func TestResolve_RIPEStatusNotOK_ReturnsUnresolved(t *testing.T) {
 	}
 }
 
-// --- Timeout: acota TODO Resolve, incluida la espera de capacidad --------
-
 func TestResolve_ProviderTooSlow_TimesOutAndReturnsUnresolved(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second) // muy por encima del Timeout configurado
+		time.Sleep(2 * time.Second)
 	}))
 	defer srv.Close()
 
@@ -195,16 +183,6 @@ func TestResolve_ProviderTooSlow_TimesOutAndReturnsUnresolved(t *testing.T) {
 	}
 }
 
-// TestResolve_TimeoutConsumedWaitingForCapacity_NeverCallsProvider
-// confirma que, si el plazo se agota esperando un cupo de
-// concurrencia, Resolve devuelve ("", false) SIN llegar a llamar al
-// proveedor — nunca una espera ilimitada antes del timeout.
-//
-// Ocupa el único cupo directamente sobre el campo interno r.sem (el
-// test vive en el mismo paquete) en vez de con una segunda llamada de
-// fondo a Resolve: así no hay ninguna carrera de tiempos entre el
-// timeout de esa llamada de fondo y el de la que se está probando —
-// el cupo queda ocupado de forma determinista durante todo el test.
 func TestResolve_TimeoutConsumedWaitingForCapacity_NeverCallsProvider(t *testing.T) {
 	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +199,7 @@ func TestResolve_TimeoutConsumedWaitingForCapacity_NeverCallsProvider(t *testing
 		t.Fatalf("NewResolver: %v", err)
 	}
 
-	r.sem <- struct{}{} // ocupa el único cupo, sin pasar por el proveedor
+	r.sem <- struct{}{}
 	defer func() { <-r.sem }()
 
 	start := time.Now()
@@ -238,8 +216,6 @@ func TestResolve_TimeoutConsumedWaitingForCapacity_NeverCallsProvider(t *testing
 		t.Errorf("provider was called %d times, want exactly 0 (Resolve must never reach the HTTP call while capacity is exhausted)", callCount.Load())
 	}
 }
-
-// --- Caché positivo y negativo, con TTL -----------------------------------
 
 func TestResolve_CachesSuccessfulResult_AvoidsSecondCall(t *testing.T) {
 	var callCount atomic.Int32
@@ -261,9 +237,6 @@ func TestResolve_CachesSuccessfulResult_AvoidsSecondCall(t *testing.T) {
 	}
 }
 
-// fakeMetricsRecorder captura cada llamada — usado para verificar que
-// Resolve reporta caché hit/miss y el resultado de cada resolución
-// real, sin necesitar OpenTelemetry en este test.
 type fakeMetricsRecorder struct {
 	mu             sync.Mutex
 	cacheResults   []bool
@@ -289,10 +262,6 @@ func (r *fakeMetricsRecorder) RecordProviderDuration(result string, d time.Durat
 	r.durationCalls++
 }
 
-// TestResolve_ReportsMetrics_CacheAndResolveResult cubre el camino
-// feliz de la instrumentación: un primer Resolve (miss + success, con
-// su duración) y un segundo Resolve sobre la misma IP (hit, sin
-// llamada nueva al proveedor y sin una segunda medición de duración).
 func TestResolve_ReportsMetrics_CacheAndResolveResult(t *testing.T) {
 	srv := httptest.NewServer(networkInfoHandler([]string{"15169"}, "ok"))
 	defer srv.Close()
@@ -320,11 +289,6 @@ func TestResolve_ReportsMetrics_CacheAndResolveResult(t *testing.T) {
 	}
 }
 
-// TestResolve_ReportsCapacityTimeout_WithoutDurationCall confirma que
-// el caso "el plazo se consumió esperando cupo de concurrencia" se
-// reporta como "capacity_timeout" y nunca dispara
-// RecordProviderDuration — ahí nunca hubo ninguna llamada real al
-// proveedor que medir.
 func TestResolve_ReportsCapacityTimeout_WithoutDurationCall(t *testing.T) {
 	metrics := &fakeMetricsRecorder{}
 	cfg := testConfig("http://example.invalid", event.SystemClock{})
@@ -336,7 +300,7 @@ func TestResolve_ReportsCapacityTimeout_WithoutDurationCall(t *testing.T) {
 		t.Fatalf("NewResolver: %v", err)
 	}
 
-	r.sem <- struct{}{} // ocupa el único cupo posible a mano (mismo truco que TestResolve_TimeoutConsumedWaitingForCapacity_NeverCallsProvider)
+	r.sem <- struct{}{}
 	defer func() { <-r.sem }()
 
 	_, ok := r.Resolve(netip.MustParseAddr("8.8.8.8"))
@@ -370,13 +334,13 @@ func TestResolve_SuccessTTL_ExpiresAndRequeries(t *testing.T) {
 	ip := netip.MustParseAddr("8.8.8.8")
 
 	r.Resolve(ip)
-	clock.Advance(30 * time.Second) // todavía dentro del TTL
+	clock.Advance(30 * time.Second)
 	r.Resolve(ip)
 	if got := callCount.Load(); got != 1 {
 		t.Fatalf("provider was called %d times before the TTL elapsed, want 1", got)
 	}
 
-	clock.Advance(31 * time.Second) // ya pasó el TTL de 1 minuto
+	clock.Advance(31 * time.Second)
 	r.Resolve(ip)
 	if got := callCount.Load(); got != 2 {
 		t.Errorf("provider was called %d times after the TTL elapsed, want 2", got)
@@ -407,14 +371,12 @@ func TestResolve_FailureTTL_ShorterThanSuccessTTL_Requeries(t *testing.T) {
 		t.Fatalf("provider was called %d times before the negative TTL elapsed, want 1", got)
 	}
 
-	clock.Advance(6 * time.Second) // ya pasaron los 10s del caché negativo
+	clock.Advance(6 * time.Second)
 	r.Resolve(ip)
 	if got := callCount.Load(); got != 2 {
 		t.Errorf("provider was called %d times after the negative TTL elapsed, want 2", got)
 	}
 }
-
-// --- Sweep ------------------------------------------------------------------
 
 func TestSweep_RemovesOnlyExpiredEntries(t *testing.T) {
 	srv := httptest.NewServer(networkInfoHandler([]string{"15169"}, "ok"))
@@ -430,15 +392,13 @@ func TestSweep_RemovesOnlyExpiredEntries(t *testing.T) {
 
 	r.Resolve(netip.MustParseAddr("8.8.8.8"))
 	clock.Advance(2 * time.Minute)
-	r.Resolve(netip.MustParseAddr("8.8.4.4")) // entra ya con el reloj más nuevo
+	r.Resolve(netip.MustParseAddr("8.8.4.4"))
 
 	removed := r.Sweep(clock.Now())
 	if removed != 1 {
 		t.Errorf("Sweep removed %d entries, want 1 (only the expired one)", removed)
 	}
 }
-
-// --- Límite de concurrencia -------------------------------------------------
 
 func TestResolve_ConcurrencyLimit_NeverExceedsMax(t *testing.T) {
 	const maxConcurrent = 3
@@ -477,7 +437,7 @@ func TestResolve_ConcurrencyLimit_NeverExceedsMax(t *testing.T) {
 		}(i)
 	}
 
-	time.Sleep(200 * time.Millisecond) // deja que se acumulen las que puedan
+	time.Sleep(200 * time.Millisecond)
 	close(release)
 	wg.Wait()
 
@@ -485,8 +445,6 @@ func TestResolve_ConcurrencyLimit_NeverExceedsMax(t *testing.T) {
 		t.Errorf("observed %d concurrent requests to the provider, want at most %d", got, maxConcurrent)
 	}
 }
-
-// --- Concurrencia general con -race ----------------------------------------
 
 func TestResolve_ConcurrentCalls_NoRaces(t *testing.T) {
 	srv := httptest.NewServer(networkInfoHandler([]string{"15169"}, "ok"))

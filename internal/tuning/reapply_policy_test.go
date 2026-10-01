@@ -1,3 +1,4 @@
+// Prueba la reaplicación de políticas y la distribución de acciones.
 package tuning
 
 import (
@@ -12,17 +13,10 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// TestRunResultWithPolicy_SamePolicy_MatchesFullRun es el test
-// central de esta optimización: reaplicar LA MISMA Policy que ya
-// produjo baseDecisions, sin volver a correr
-// ningún detector, tiene que dar EXACTAMENTE el mismo Eval y Delay que
-// una corrida completa con RunScenario — si esto no fuera cierto, el
-// sweep de Policy estaría comparando candidatos con una métrica
-// distinta a la que produciría el motor real.
 func TestRunResultWithPolicy_SamePolicy_MatchesFullRun(t *testing.T) {
 	scenario := datagen.BuildScenario(datagen.DefaultScenarioConfig(555, 0.10))
 	resolver := datagen.NewSimulatedASNResolver()
-	candidate := BaselineCandidate() // Policy = engine.DefaultPolicy() = {0.5, 0.8}
+	candidate := BaselineCandidate()
 
 	full, err := RunScenario(scenario, candidate, resolver)
 	if err != nil {
@@ -44,11 +38,6 @@ func TestRunResultWithPolicy_SamePolicy_MatchesFullRun(t *testing.T) {
 	}
 }
 
-// TestReapplyPolicy_KeepsEvidenceChangesOnlyAction confirma que
-// ReapplyPolicy nunca toca ConfidenceScore/AttackVector/EntityID —
-// solo Action — y que una Policy más permisiva (ChallengeThreshold
-// más bajo) nunca puede producir MENOS CHALLENGE+BLOCK que la
-// original sobre el mismo ConfidenceScore.
 func TestReapplyPolicy_KeepsEvidenceChangesOnlyAction(t *testing.T) {
 	original := []decision.Decision{
 		{RequestID: "r-1", ConfidenceScore: 0.55, AttackVector: decision.AttackVectorCredentialStuffing, EntityID: "network:asn:1", Action: decision.ActionAllow},

@@ -1,3 +1,4 @@
+// Prueba el reloj manual.
 package event
 
 import (

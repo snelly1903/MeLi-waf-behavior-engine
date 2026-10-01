@@ -1,3 +1,4 @@
+// Escribe un escenario a disco como eventos, etiquetas y manifiesto.
 package datagen
 
 import (

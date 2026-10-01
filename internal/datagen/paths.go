@@ -1,3 +1,4 @@
+// Define la ruta de login, las rutas sensibles y los parámetros de fuzzing usados por el generador.
 package datagen
 
 const DefaultLoginPath = "/login"

@@ -1,3 +1,4 @@
+// Define la interfaz Decider y el decisor trivial AllowAllDecider.
 package engine
 
 import (
