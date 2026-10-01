@@ -1,0 +1,12 @@
+# Provisioning automático del dashboard -- carga cualquier JSON que
+# haya en grafana/dashboards/ sin tener que importarlo a mano.
+apiVersion: 1
+providers:
+  - name: waf-engine
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

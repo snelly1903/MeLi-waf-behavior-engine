@@ -1,0 +1,5 @@
+{"request_id":"r-d1","timestamp":"2026-09-24T10:00:00Z","entity_id":"ip:203.0.113.1","action":"ALLOW","confidence_score":0.05,"attack_vector":"unknown"}
+{"request_id":"r-d2","timestamp":"2026-09-24T10:00:05Z","entity_id":"ip:203.0.113.2","action":"BLOCK","confidence_score":0.9,"attack_vector":"credential_stuffing","contributing_signals":[{"name":"cluster_fail_ratio_wilson","value":0.81,"weight":1.0}],"explanation":"fail ratio muy alto en el cluster"}
+{"request_id":"r-d3","timestamp":"2026-09-24T10:00:10Z" INVALID JSON HERE
+{"request_id":"","timestamp":"2026-09-24T10:00:15Z","entity_id":"ip:203.0.113.4","action":"ALLOW","confidence_score":0.1,"attack_vector":"unknown"}
+{"request_id":"r-d5","timestamp":"2026-09-24T10:00:20Z","entity_id":"ip:203.0.113.5","action":"BLOCK","confidence_score":0.95,"attack_vector":"slow_scan"}

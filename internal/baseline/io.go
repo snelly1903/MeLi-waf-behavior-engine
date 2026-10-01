@@ -1,0 +1,54 @@
+// Lee eventos y escribe decisiones en formato JSONL para la línea base.
+package baseline
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+
+	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/decision"
+	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
+)
+
+func LoadEvents(path string) ([]event.Event, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("baseline: opening events file: %w", err)
+	}
+	defer f.Close()
+
+	var events []event.Event
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	line := 0
+	for scanner.Scan() {
+		line++
+		var e event.Event
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
+			return nil, fmt.Errorf("baseline: events.jsonl line %d: %w", line, err)
+		}
+		events = append(events, e)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("baseline: reading events file: %w", err)
+	}
+	return events, nil
+}
+
+func WriteDecisions(path string, decisions []decision.Decision) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("baseline: creating decisions file: %w", err)
+	}
+	defer f.Close()
+
+	w := bufio.NewWriter(f)
+	enc := json.NewEncoder(w)
+	for _, d := range decisions {
+		if err := enc.Encode(d); err != nil {
+			return fmt.Errorf("baseline: writing decision %q: %w", d.RequestID, err)
+		}
+	}
+	return w.Flush()
+}

@@ -1,0 +1,52 @@
+# Stack de observabilidad: OpenTelemetry Collector + Prometheus +
+# Grafana. cmd/engine (el motor Go) NO corre acá -- sigue levantándose
+# local con "go run ./cmd/engine", apuntando su exportador OTLP al
+# Collector expuesto en localhost:4317. Versiones de imagen fijas,
+# nunca "latest" -- reproducibilidad.
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.113.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel/collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP/gRPC -- cmd/engine exporta acá.
+      - "8889:8889" # Métricas en formato Prometheus -- Prometheus scrapea acá.
+    networks:
+      - waf-observability
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - otel-collector
+    networks:
+      - waf-observability
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      # Solo para este demo local: acceso de lectura sin login, para
+      # que el evaluador abra el dashboard sin ningún paso manual. El
+      # panel de administración sigue exigiendo login
+      # (admin/admin) -- nunca se expondría así fuera de una demo
+      # local.
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - waf-observability
+
+networks:
+  waf-observability:
+    driver: bridge

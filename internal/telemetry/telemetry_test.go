@@ -1,0 +1,216 @@
+// Prueba la inicialización de telemetría y las métricas exportadas por cada recorder.
+package telemetry
+
+import (
+	"context"
+	"net"
+	"testing"
+	"time"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+)
+
+func TestInit_EmptyEndpoint_IsNoopWithoutDialing(t *testing.T) {
+	recorders, shutdown, usedNoop := Init(context.Background(), Config{})
+	defer func() {
+		if err := shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown() = %v, want nil", err)
+		}
+	}()
+
+	if usedNoop {
+		t.Error("usedNoop = true, want false when Endpoint is empty (this is the default, not a fallback)")
+	}
+	if recorders == nil || recorders.Provider == nil {
+		t.Fatal("recorders/Provider = nil, want a usable no-op provider")
+	}
+	recorders.Engine.RecordFinding("credential_stuffing")
+	recorders.Engine.RecordAnomalyScore(0.5)
+	recorders.ASN.RecordCacheResult(true)
+	recorders.HTTP.RecordDecision("ALLOW", "unknown")
+}
+
+func TestInit_CollectorUnreachable_FallsBackToNoop(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	endpoint := lis.Addr().String()
+	if err := lis.Close(); err != nil {
+		t.Fatalf("closing listener: %v", err)
+	}
+
+	connectTimeout := 500 * time.Millisecond
+	start := time.Now()
+	recorders, shutdown, usedNoop := Init(context.Background(), Config{
+		Endpoint:       endpoint,
+		Insecure:       true,
+		ConnectTimeout: connectTimeout,
+	})
+	elapsed := time.Since(start)
+	defer func() {
+		if err := shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown() = %v, want nil", err)
+		}
+	}()
+
+	if !usedNoop {
+		t.Error("usedNoop = false, want true when the collector is unreachable at startup")
+	}
+	if elapsed > 2*connectTimeout {
+		t.Errorf("Init took %v with an unreachable collector, want it bounded close to ConnectTimeout (%v)", elapsed, connectTimeout)
+	}
+	if recorders == nil || recorders.Provider == nil {
+		t.Fatal("recorders/Provider = nil, want a usable no-op provider even on fallback")
+	}
+	recorders.Engine.RecordFinding("slow_scan")
+	recorders.ASN.RecordResolveResult("success")
+	recorders.HTTP.RecordDecision("BLOCK", "credential_stuffing")
+}
+
+func collect(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("reader.Collect: %v", err)
+	}
+	return rm
+}
+
+func findMetric(t *testing.T, rm metricdata.ResourceMetrics, name string) metricdata.Metrics {
+	t.Helper()
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == name {
+				return m
+			}
+		}
+	}
+	t.Fatalf("no se encontró la métrica %q entre las recolectadas", name)
+	return metricdata.Metrics{}
+}
+
+func sumDataPoints(t *testing.T, m metricdata.Metrics) []metricdata.DataPoint[int64] {
+	t.Helper()
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if !ok {
+		t.Fatalf("la métrica %q no es un Sum[int64] (es %T)", m.Name, m.Data)
+	}
+	return sum.DataPoints
+}
+
+func TestEngineRecorder_RecordFinding_ExportsExpectedNameAndAttribute(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	r := newEngineRecorder(provider.Meter("test"))
+
+	r.RecordFinding("credential_stuffing")
+	r.RecordFinding("credential_stuffing")
+	r.RecordFinding("slow_scan")
+
+	rm := collect(t, reader)
+	points := sumDataPoints(t, findMetric(t, rm, "waf.detector.findings"))
+
+	got := map[string]int64{}
+	for _, p := range points {
+		detector, _ := p.Attributes.Value("detector")
+		got[detector.AsString()] = p.Value
+	}
+	if got["credential_stuffing"] != 2 {
+		t.Errorf("credential_stuffing = %d, want 2", got["credential_stuffing"])
+	}
+	if got["slow_scan"] != 1 {
+		t.Errorf("slow_scan = %d, want 1", got["slow_scan"])
+	}
+}
+
+func TestEngineRecorder_RecordAnomalyScore_ExportsHistogramWithoutAttributes(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	r := newEngineRecorder(provider.Meter("test"))
+
+	r.RecordAnomalyScore(0)
+	r.RecordAnomalyScore(0.42)
+	r.RecordAnomalyScore(0.87)
+
+	rm := collect(t, reader)
+	m := findMetric(t, rm, "waf.anomaly.score")
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("waf.anomaly.score no es un Histogram[float64] (es %T)", m.Data)
+	}
+	if len(hist.DataPoints) != 1 {
+		t.Fatalf("waf.anomaly.score data points = %d, want 1 (sin atributos, una única serie)", len(hist.DataPoints))
+	}
+	dp := hist.DataPoints[0]
+	if dp.Count != 3 {
+		t.Errorf("count = %d, want 3 (los tres Record, incluido el de score 0)", dp.Count)
+	}
+	wantSum := 0 + 0.42 + 0.87
+	if dp.Sum < wantSum-0.0001 || dp.Sum > wantSum+0.0001 {
+		t.Errorf("sum = %v, want %v", dp.Sum, wantSum)
+	}
+}
+
+func TestHTTPRecorder_RecordDecision_ExportsExpectedNameAndAttributes(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	r := newHTTPRecorder(provider.Meter("test"))
+
+	r.RecordDecision("ALLOW", "unknown")
+	r.RecordDecision("BLOCK", "credential_stuffing")
+
+	rm := collect(t, reader)
+	points := sumDataPoints(t, findMetric(t, rm, "waf.decisions"))
+	if len(points) != 2 {
+		t.Fatalf("data points = %d, want 2 (una serie por combinación action/attack_vector)", len(points))
+	}
+	for _, p := range points {
+		action, _ := p.Attributes.Value("action")
+		vector, _ := p.Attributes.Value("attack_vector")
+		if p.Value != 1 {
+			t.Errorf("action=%s attack_vector=%s: value = %d, want 1", action.AsString(), vector.AsString(), p.Value)
+		}
+	}
+}
+
+func TestASNRecorder_RecordsAllThreeInstruments(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	r := newASNRecorder(provider.Meter("test"))
+
+	r.RecordCacheResult(false)
+	r.RecordCacheResult(true)
+	r.RecordResolveResult("success")
+	r.RecordResolveResult("capacity_timeout")
+	r.RecordProviderDuration("success", 42*time.Millisecond)
+
+	rm := collect(t, reader)
+
+	cachePoints := sumDataPoints(t, findMetric(t, rm, "waf.asn.cache"))
+	if len(cachePoints) != 2 {
+		t.Errorf("waf.asn.cache data points = %d, want 2 (hit y miss)", len(cachePoints))
+	}
+
+	resolvePoints := sumDataPoints(t, findMetric(t, rm, "waf.asn.resolve"))
+	if len(resolvePoints) != 2 {
+		t.Errorf("waf.asn.resolve data points = %d, want 2 (success y capacity_timeout)", len(resolvePoints))
+	}
+
+	durationMetric := findMetric(t, rm, "waf.asn.provider.duration")
+	hist, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("waf.asn.provider.duration no es un Histogram[float64] (es %T)", durationMetric.Data)
+	}
+	if len(hist.DataPoints) != 1 {
+		t.Fatalf("waf.asn.provider.duration data points = %d, want 1", len(hist.DataPoints))
+	}
+	if hist.DataPoints[0].Count != 1 {
+		t.Errorf("count = %d, want 1", hist.DataPoints[0].Count)
+	}
+	result, _ := hist.DataPoints[0].Attributes.Value("result")
+	if result.AsString() != "success" {
+		t.Errorf(`result attribute = %q, want "success"`, result.AsString())
+	}
+}

@@ -1,0 +1,109 @@
+// Verifica que los pools de IP sean públicos, respeten su prefijo y tengan ASN distintos.
+package datagen
+
+import (
+	"testing"
+	"time"
+
+	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
+)
+
+var allPools = []IPPool{PoolHostingSim, PoolResidentialSimA, PoolResidentialSimB}
+
+func TestPools_AddressesArePublic(t *testing.T) {
+	rng := NewRNG(1)
+	for _, pool := range allPools {
+		for i := 0; i < 200; i++ {
+			addr := pool.RandomAddr(rng)
+			if addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsUnspecified() {
+				t.Fatalf("pool %q produced a non-public address: %v", pool.Name, addr)
+			}
+		}
+	}
+}
+
+func TestPools_AddressesStayWithinPrefix(t *testing.T) {
+	rng := NewRNG(2)
+	for _, pool := range allPools {
+		for i := 0; i < 200; i++ {
+			addr := pool.RandomAddr(rng)
+			if !pool.Prefix.Contains(addr) {
+				t.Fatalf("pool %q (%v) produced an address outside its prefix: %v", pool.Name, pool.Prefix, addr)
+			}
+		}
+	}
+}
+
+func TestPools_AddressesPassEventValidator(t *testing.T) {
+	rng := NewRNG(3)
+	now := time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)
+	v := event.NewValidator(event.NewManualClock(now))
+
+	for _, pool := range allPools {
+		addr := pool.RandomAddr(rng)
+		e := event.Event{
+			RequestID:  "r-1",
+			Timestamp:  now,
+			ClientIP:   addr,
+			Method:     "GET",
+			Path:       "/",
+			StatusCode: 200,
+		}
+		if err := v.Validate(e); err != nil {
+			t.Errorf("pool %q: an event with ClientIP=%v failed validation: %v", pool.Name, addr, err)
+		}
+	}
+}
+
+func TestIPPool_DistinctAddrsExcluding_NeverReturnsExcluded(t *testing.T) {
+	rng := NewRNG(20)
+	exclude := PoolHostingSim.DistinctAddrs(rng, 8)
+
+	got := PoolHostingSim.DistinctAddrsExcluding(rng, 50, exclude)
+	if len(got) != 50 {
+		t.Fatalf("DistinctAddrsExcluding returned %d addresses, want 50", len(got))
+	}
+
+	excludedSet := make(map[string]bool, len(exclude))
+	for _, a := range exclude {
+		excludedSet[a.String()] = true
+	}
+
+	seen := make(map[string]bool, len(got))
+	for _, a := range got {
+		if excludedSet[a.String()] {
+			t.Fatalf("DistinctAddrsExcluding returned an excluded address: %v", a)
+		}
+		if seen[a.String()] {
+			t.Fatalf("duplicate address: %v", a)
+		}
+		seen[a.String()] = true
+		if !PoolHostingSim.Prefix.Contains(a) {
+			t.Fatalf("address %v is outside %v", a, PoolHostingSim.Prefix)
+		}
+	}
+}
+
+func TestIPPool_DistinctAddrsExcluding_PanicsWhenNotEnoughRemain(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("DistinctAddrsExcluding did not panic when too few addresses remain")
+		}
+	}()
+	rng := NewRNG(21)
+	exclude := PoolHostingSim.DistinctAddrs(rng, 250)
+	PoolHostingSim.DistinctAddrsExcluding(rng, 10, exclude)
+}
+
+func TestPools_HaveDistinctSimulatedASNsInPrivateUseRange(t *testing.T) {
+	seen := make(map[SimulatedASN]string)
+	for _, pool := range allPools {
+		if pool.ASN < 64512 || pool.ASN > 65534 {
+			t.Errorf("pool %q has ASN %d, outside the IANA private-use range 64512-65534", pool.Name, pool.ASN)
+		}
+		if existing, dup := seen[pool.ASN]; dup {
+			t.Errorf("ASN %d is shared by pools %q and %q, want distinct ASNs per pool", pool.ASN, existing, pool.Name)
+		}
+		seen[pool.ASN] = pool.Name
+	}
+}

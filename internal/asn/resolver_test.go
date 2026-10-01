@@ -1,0 +1,465 @@
+// Prueba el resolver de ASN contra un servidor RIPEstat simulado.
+package asn
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
+)
+
+func testConfig(baseURL string, clock event.Clock) Config {
+	return Config{
+		BaseURL:               baseURL,
+		SourceApp:             "waf-behavior-engine-test",
+		Timeout:               200 * time.Millisecond,
+		MaxConcurrentRequests: 2,
+		SuccessTTL:            time.Hour,
+		FailureTTL:            time.Minute,
+		Clock:                 clock,
+	}
+}
+
+func newTestResolver(t *testing.T, baseURL string, clock event.Clock) *Resolver {
+	t.Helper()
+	r, err := NewResolver(testConfig(baseURL, clock))
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+	return r
+}
+
+func TestConfig_Validate_InvalidConfigurations(t *testing.T) {
+	valid := testConfig("http://example.invalid", event.SystemClock{})
+	tests := []struct {
+		name   string
+		modify func(c Config) Config
+	}{
+		{"empty base url", func(c Config) Config { c.BaseURL = ""; return c }},
+		{"empty source app", func(c Config) Config { c.SourceApp = ""; return c }},
+		{"zero timeout", func(c Config) Config { c.Timeout = 0; return c }},
+		{"zero max concurrent", func(c Config) Config { c.MaxConcurrentRequests = 0; return c }},
+		{"zero success ttl", func(c Config) Config { c.SuccessTTL = 0; return c }},
+		{"zero failure ttl", func(c Config) Config { c.FailureTTL = 0; return c }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.modify(valid).Validate(); err == nil {
+				t.Fatal("Validate() = nil, want an error")
+			}
+		})
+	}
+}
+
+func TestNewResolver_InvalidConfig_ReturnsError(t *testing.T) {
+	cfg := testConfig("", event.SystemClock{})
+	if _, err := NewResolver(cfg); err == nil {
+		t.Fatal("NewResolver() error = nil, want an error")
+	}
+}
+
+func networkInfoHandler(asns []string, status string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp := networkInfoResponse{Status: status}
+		resp.Data.ASNs = asns
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func TestResolve_SingleASN_Succeeds(t *testing.T) {
+	srv := httptest.NewServer(networkInfoHandler([]string{"15169"}, "ok"))
+	defer srv.Close()
+
+	r := newTestResolver(t, srv.URL, event.SystemClock{})
+	group, ok := r.Resolve(netip.MustParseAddr("8.8.8.8"))
+
+	if !ok {
+		t.Fatal("Resolve() ok = false, want true")
+	}
+	if group != "asn:15169" {
+		t.Errorf("group = %q, want %q", group, "asn:15169")
+	}
+}
+
+func TestResolve_ASPrefix_IsStripped(t *testing.T) {
+	srv := httptest.NewServer(networkInfoHandler([]string{"AS15169"}, "ok"))
+	defer srv.Close()
+
+	r := newTestResolver(t, srv.URL, event.SystemClock{})
+	group, ok := r.Resolve(netip.MustParseAddr("8.8.8.8"))
+
+	if !ok || group != "asn:15169" {
+		t.Errorf("Resolve() = (%q, %v), want (%q, true)", group, ok, "asn:15169")
+	}
+}
+
+func TestResolve_ZeroASNs_ReturnsUnresolved(t *testing.T) {
+	srv := httptest.NewServer(networkInfoHandler([]string{}, "ok"))
+	defer srv.Close()
+
+	r := newTestResolver(t, srv.URL, event.SystemClock{})
+	_, ok := r.Resolve(netip.MustParseAddr("203.0.113.1"))
+
+	if ok {
+		t.Error("Resolve() ok = true, want false (no ASN in the response)")
+	}
+}
+
+func TestResolve_MultipleASNs_ReturnsUnresolved(t *testing.T) {
+	srv := httptest.NewServer(networkInfoHandler([]string{"15169", "6432"}, "ok"))
+	defer srv.Close()
+
+	r := newTestResolver(t, srv.URL, event.SystemClock{})
+	group, ok := r.Resolve(netip.MustParseAddr("8.8.8.8"))
+
+	if ok {
+		t.Errorf("Resolve() = (%q, true), want ok=false for a multi-ASN response", group)
+	}
+}
+
+func TestResolve_MalformedJSON_ReturnsUnresolved(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("{not valid json"))
+	}))
+	defer srv.Close()
+
+	r := newTestResolver(t, srv.URL, event.SystemClock{})
+	_, ok := r.Resolve(netip.MustParseAddr("203.0.113.2"))
+	if ok {
+		t.Error("Resolve() ok = true, want false for malformed JSON")
+	}
+}
+
+func TestResolve_NonOKStatus_ReturnsUnresolved(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	r := newTestResolver(t, srv.URL, event.SystemClock{})
+	_, ok := r.Resolve(netip.MustParseAddr("203.0.113.3"))
+	if ok {
+		t.Error("Resolve() ok = true, want false for a non-200 response")
+	}
+}
+
+func TestResolve_RIPEStatusNotOK_ReturnsUnresolved(t *testing.T) {
+	srv := httptest.NewServer(networkInfoHandler([]string{"15169"}, "error"))
+	defer srv.Close()
+
+	r := newTestResolver(t, srv.URL, event.SystemClock{})
+	_, ok := r.Resolve(netip.MustParseAddr("203.0.113.4"))
+	if ok {
+		t.Error(`Resolve() ok = true, want false when status != "ok"`)
+	}
+}
+
+func TestResolve_ProviderTooSlow_TimesOutAndReturnsUnresolved(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+	}))
+	defer srv.Close()
+
+	r := newTestResolver(t, srv.URL, event.SystemClock{})
+
+	start := time.Now()
+	_, ok := r.Resolve(netip.MustParseAddr("203.0.113.5"))
+	elapsed := time.Since(start)
+
+	if ok {
+		t.Error("Resolve() ok = true, want false when the provider is too slow")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("Resolve() took %v, want it bounded close to the configured Timeout (200ms)", elapsed)
+	}
+}
+
+func TestResolve_TimeoutConsumedWaitingForCapacity_NeverCallsProvider(t *testing.T) {
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		fmt.Fprint(w, `{"status":"ok","data":{"asns":["15169"]}}`)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(srv.URL, event.SystemClock{})
+	cfg.MaxConcurrentRequests = 1
+	cfg.Timeout = 100 * time.Millisecond
+	r, err := NewResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	r.sem <- struct{}{}
+	defer func() { <-r.sem }()
+
+	start := time.Now()
+	_, ok := r.Resolve(netip.MustParseAddr("203.0.113.11"))
+	elapsed := time.Since(start)
+
+	if ok {
+		t.Error("Resolve() ok = true, want false when capacity never freed up in time")
+	}
+	if elapsed > 300*time.Millisecond {
+		t.Errorf("Resolve() took %v while waiting for capacity, want it bounded close to Timeout (100ms)", elapsed)
+	}
+	if callCount.Load() != 0 {
+		t.Errorf("provider was called %d times, want exactly 0 (Resolve must never reach the HTTP call while capacity is exhausted)", callCount.Load())
+	}
+}
+
+func TestResolve_CachesSuccessfulResult_AvoidsSecondCall(t *testing.T) {
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		fmt.Fprint(w, `{"status":"ok","data":{"asns":["15169"]}}`)
+	}))
+	defer srv.Close()
+
+	r := newTestResolver(t, srv.URL, event.SystemClock{})
+	ip := netip.MustParseAddr("8.8.8.8")
+
+	r.Resolve(ip)
+	r.Resolve(ip)
+	r.Resolve(ip)
+
+	if got := callCount.Load(); got != 1 {
+		t.Errorf("provider was called %d times, want exactly 1 (the rest must come from cache)", got)
+	}
+}
+
+type fakeMetricsRecorder struct {
+	mu             sync.Mutex
+	cacheResults   []bool
+	resolveResults []string
+	durationCalls  int
+}
+
+func (r *fakeMetricsRecorder) RecordCacheResult(hit bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cacheResults = append(r.cacheResults, hit)
+}
+
+func (r *fakeMetricsRecorder) RecordResolveResult(result string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolveResults = append(r.resolveResults, result)
+}
+
+func (r *fakeMetricsRecorder) RecordProviderDuration(result string, d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.durationCalls++
+}
+
+func TestResolve_ReportsMetrics_CacheAndResolveResult(t *testing.T) {
+	srv := httptest.NewServer(networkInfoHandler([]string{"15169"}, "ok"))
+	defer srv.Close()
+
+	metrics := &fakeMetricsRecorder{}
+	cfg := testConfig(srv.URL, event.SystemClock{})
+	cfg.Metrics = metrics
+	r, err := NewResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	ip := netip.MustParseAddr("8.8.8.8")
+	r.Resolve(ip)
+	r.Resolve(ip)
+
+	if want := []bool{false, true}; !reflect.DeepEqual(metrics.cacheResults, want) {
+		t.Errorf("cacheResults = %v, want %v (miss y después hit)", metrics.cacheResults, want)
+	}
+	if want := []string{"success"}; !reflect.DeepEqual(metrics.resolveResults, want) {
+		t.Errorf("resolveResults = %v, want %v (solo se llamó al proveedor una vez)", metrics.resolveResults, want)
+	}
+	if metrics.durationCalls != 1 {
+		t.Errorf("durationCalls = %d, want 1 (la segunda llamada vino de caché, sin llamar al proveedor)", metrics.durationCalls)
+	}
+}
+
+func TestResolve_ReportsCapacityTimeout_WithoutDurationCall(t *testing.T) {
+	metrics := &fakeMetricsRecorder{}
+	cfg := testConfig("http://example.invalid", event.SystemClock{})
+	cfg.MaxConcurrentRequests = 1
+	cfg.Timeout = 100 * time.Millisecond
+	cfg.Metrics = metrics
+	r, err := NewResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	r.sem <- struct{}{}
+	defer func() { <-r.sem }()
+
+	_, ok := r.Resolve(netip.MustParseAddr("8.8.8.8"))
+	if ok {
+		t.Fatal("Resolve() ok = true, want false")
+	}
+
+	if want := []string{"capacity_timeout"}; !reflect.DeepEqual(metrics.resolveResults, want) {
+		t.Errorf("resolveResults = %v, want %v", metrics.resolveResults, want)
+	}
+	if metrics.durationCalls != 0 {
+		t.Errorf("durationCalls = %d, want 0 (nunca se llamó al proveedor)", metrics.durationCalls)
+	}
+}
+
+func TestResolve_SuccessTTL_ExpiresAndRequeries(t *testing.T) {
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		fmt.Fprint(w, `{"status":"ok","data":{"asns":["15169"]}}`)
+	}))
+	defer srv.Close()
+
+	clock := event.NewManualClock(time.Now())
+	cfg := testConfig(srv.URL, clock)
+	cfg.SuccessTTL = time.Minute
+	r, err := NewResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+	ip := netip.MustParseAddr("8.8.8.8")
+
+	r.Resolve(ip)
+	clock.Advance(30 * time.Second)
+	r.Resolve(ip)
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("provider was called %d times before the TTL elapsed, want 1", got)
+	}
+
+	clock.Advance(31 * time.Second)
+	r.Resolve(ip)
+	if got := callCount.Load(); got != 2 {
+		t.Errorf("provider was called %d times after the TTL elapsed, want 2", got)
+	}
+}
+
+func TestResolve_FailureTTL_ShorterThanSuccessTTL_Requeries(t *testing.T) {
+	var callCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	clock := event.NewManualClock(time.Now())
+	cfg := testConfig(srv.URL, clock)
+	cfg.FailureTTL = 10 * time.Second
+	r, err := NewResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+	ip := netip.MustParseAddr("203.0.113.6")
+
+	r.Resolve(ip)
+	clock.Advance(5 * time.Second)
+	r.Resolve(ip)
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("provider was called %d times before the negative TTL elapsed, want 1", got)
+	}
+
+	clock.Advance(6 * time.Second)
+	r.Resolve(ip)
+	if got := callCount.Load(); got != 2 {
+		t.Errorf("provider was called %d times after the negative TTL elapsed, want 2", got)
+	}
+}
+
+func TestSweep_RemovesOnlyExpiredEntries(t *testing.T) {
+	srv := httptest.NewServer(networkInfoHandler([]string{"15169"}, "ok"))
+	defer srv.Close()
+
+	clock := event.NewManualClock(time.Now())
+	cfg := testConfig(srv.URL, clock)
+	cfg.SuccessTTL = time.Minute
+	r, err := NewResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	r.Resolve(netip.MustParseAddr("8.8.8.8"))
+	clock.Advance(2 * time.Minute)
+	r.Resolve(netip.MustParseAddr("8.8.4.4"))
+
+	removed := r.Sweep(clock.Now())
+	if removed != 1 {
+		t.Errorf("Sweep removed %d entries, want 1 (only the expired one)", removed)
+	}
+}
+
+func TestResolve_ConcurrencyLimit_NeverExceedsMax(t *testing.T) {
+	const maxConcurrent = 3
+	var current, maxObserved atomic.Int32
+	release := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := current.Add(1)
+		for {
+			old := maxObserved.Load()
+			if n <= old || maxObserved.CompareAndSwap(old, n) {
+				break
+			}
+		}
+		<-release
+		current.Add(-1)
+		fmt.Fprint(w, `{"status":"ok","data":{"asns":["15169"]}}`)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(srv.URL, event.SystemClock{})
+	cfg.MaxConcurrentRequests = maxConcurrent
+	cfg.Timeout = 2 * time.Second
+	r, err := NewResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ip := netip.AddrFrom4([4]byte{203, 0, 113, byte(20 + i)})
+			r.Resolve(ip)
+		}(i)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if got := maxObserved.Load(); got > int32(maxConcurrent) {
+		t.Errorf("observed %d concurrent requests to the provider, want at most %d", got, maxConcurrent)
+	}
+}
+
+func TestResolve_ConcurrentCalls_NoRaces(t *testing.T) {
+	srv := httptest.NewServer(networkInfoHandler([]string{"15169"}, "ok"))
+	defer srv.Close()
+
+	r := newTestResolver(t, srv.URL, event.SystemClock{})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ip := netip.AddrFrom4([4]byte{203, 0, 113, byte(1 + i%254)})
+			r.Resolve(ip)
+		}(i)
+	}
+	wg.Wait()
+}

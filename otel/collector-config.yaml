@@ -1,0 +1,23 @@
+# Configuración del OpenTelemetry Collector: recibe métricas OTLP/gRPC
+# del proceso Go (cmd/engine) y las expone en formato Prometheus para
+# que prometheus/prometheus.yml las scrapee. Deliberadamente mínima --
+# solo el pipeline de métricas, sin tracing ni logs.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch: {}
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
