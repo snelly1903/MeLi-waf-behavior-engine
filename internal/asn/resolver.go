@@ -1,34 +1,5 @@
 // Package asn implementa un credstuffing.NetworkResolver real,
-// consultando RIPEstat (RIPE NCC) para mapear una IP a su ASN — el
-// enriquecimiento real de IP que exige el challenge. internal/asn
-// nunca importa internal/credstuffing: Resolver satisface la
-// interfaz NetworkResolver (Resolve(ip netip.Addr) (string, bool))
-// por tipado estructural de Go, no por herencia explícita — el
-// detector nunca sabe qué proveedor hay detrás.
-//
-// Fuente de datos: https://stat.ripe.net/data/network-info/,
-// gratuita y sin API key (nada que hardcodear como secreto). Es una
-// fuente apropiada para este challenge/prototipo — RIPE NCC es uno de
-// los cinco Regional Internet Registries reales, no un scraper de
-// terceros —, pero sus términos de uso actuales restringen ciertos
-// usos comerciales sin permiso explícito
-// (https://www.ripe.net/support/legal/terms/); NO se presenta acá
-// como el proveedor definitivo de un despliegue de producción, sino
-// como la fuente pública/gratuita razonable para demostrar el
-// enriquecimiento real en esta etapa. Cambiar de proveedor más
-// adelante es reemplazar este archivo, no tocar
-// internal/credstuffing ni internal/engine.
-//
-// Advertencia de diseño, documentada explícitamente: este Resolver
-// hace un lookup remoto SÍNCRONO dentro del camino de cada request
-// (credstuffing.Detector.Observe lo llama directamente). Es aceptable
-// para este prototipo — el caché agresivo (ver cacheEntry) absorbe la
-// gran mayoría de las consultas repetidas —, pero NO sería el diseño
-// correcto para tráfico masivo con muchas IPs nunca vistas: ahí
-// haría falta resolver de forma asíncrona (una cola, un enriquecimiento
-// diferido que no bloquee la decisión inicial) en vez de esperar la
-// respuesta de un tercero dentro del camino síncrono de cada
-// request.
+// consultando RIPEstat (RIPE NCC) para mapear una IP a su ASN
 package asn
 
 import (
@@ -45,105 +16,44 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
 )
 
-// DefaultBaseURL es el endpoint de RIPEstat que este Resolver
-// consulta por defecto.
+
 const DefaultBaseURL = "https://stat.ripe.net/data/network-info/data.json"
 
-// Config configura el Resolver.
 type Config struct {
-	// BaseURL es el endpoint a consultar — configurable para que los
-	// tests puedan apuntar a un httptest.Server en vez de a RIPEstat
-	// real. Nunca hardcodeado dentro de este paquete.
 	BaseURL string
 
-	// SourceApp identifica a este proyecto ante RIPEstat, según su
-	// propia guía de uso (parámetro sourceapp) — para que un uso
-	// regular/automatizado quede identificable, no anónimo. No es un
-	// secreto: es solo un nombre.
 	SourceApp string
 
-	// Timeout acota el tiempo TOTAL de Resolve — incluyendo el tiempo
-	// que pueda pasar esperando un cupo del límite de concurrencia
-	// (ver MaxConcurrentRequests) y la llamada HTTP en sí. Si el
-	// plazo se consume esperando cupo, Resolve devuelve ("", false)
-	// sin haber llegado a hacer ninguna petición de red. Debe ser
-	// mayor que 0.
 	Timeout time.Duration
 
-	// MaxConcurrentRequests acota cuántas consultas HTTP a RIPEstat
-	// puede haber en vuelo al mismo tiempo — buena práctica hacia un
-	// servicio público gratuito, y protección contra una ráfaga de
-	// IPs nunca vistas (por ejemplo, un ataque real) disparando
-	// muchas llamadas simultáneas. Debe ser mayor que 0.
 	MaxConcurrentRequests int
 
-	// SuccessTTL es cuánto se cachea una resolución exitosa. Un ASN
-	// real cambia rara vez — puede ser largo (horas).
 	SuccessTTL time.Duration
 
-	// FailureTTL es cuánto se cachea un fallo (caché negativo) — más
-	// corto que SuccessTTL, para no reintentar en cada request contra
-	// un proveedor caído, pero sí reintentar razonablemente pronto
-	// cuando vuelva.
 	FailureTTL time.Duration
 
-	// Clock provee el "ahora" para el TTL del caché — reutiliza
-	// event.Clock en vez de otra interfaz de reloj más. Si es nil, se
-	// usa event.SystemClock{}.
 	Clock event.Clock
 
-	// HTTPClient es el cliente HTTP a usar. Si es nil, se construye
-	// uno por defecto. Inyectable para tests.
 	HTTPClient *http.Client
 
-	// Metrics recibe, si no es nil, las métricas de operación de este
-	// Resolver (caché hit/miss, resultado de cada resolución, y
-	// cuánto tarda la llamada real al proveedor). Si es nil, se usa
-	// un noopMetricsRecorder: este paquete nunca importa
-	// OpenTelemetry directamente; internal/telemetry implementa esta
-	// interfaz desde afuera, por tipado estructural (mismo criterio
-	// que credstuffing.NetworkResolver).
 	Metrics MetricsRecorder
 }
 
-// MetricsRecorder es la interfaz mínima que Resolver usa para
-// reportar su actividad. result, en RecordResolveResult y
-// RecordProviderDuration, es siempre uno de "success", "failure" o
-// (solo en RecordResolveResult) "capacity_timeout" — nunca un ASN
-// individual ni ninguna otra cadena de alta cardinalidad; ver
-// docs/decisiones.md sobre por qué.
 type MetricsRecorder interface {
-	// RecordCacheResult informa si Resolve encontró la IP en caché
-	// (hit=true) o no (hit=false) — incluye tanto "nunca se cacheó"
-	// como "estaba cacheada pero venció".
 	RecordCacheResult(hit bool)
 
-	// RecordResolveResult informa el resultado final de un intento de
-	// resolución que no vino de caché: "success", "failure" (el
-	// proveedor respondió pero sin un ASN utilizable, o falló la
-	// llamada) o "capacity_timeout" (el plazo se consumió esperando
-	// un cupo de concurrencia, sin llegar a llamar al proveedor).
 	RecordResolveResult(result string)
 
-	// RecordProviderDuration informa cuánto tardó la llamada HTTP
-	// real al proveedor (nunca incluye la espera de capacidad ni el
-	// tiempo de caché) — solo se llama para "success" o "failure",
-	// nunca para "capacity_timeout" (ahí no hubo ninguna llamada que
-	// medir).
 	RecordProviderDuration(result string, d time.Duration)
 }
 
-// noopMetricsRecorder es el valor por defecto cuando Config.Metrics
-// es nil: mantiene a Resolver libre de comprobaciones de nil en cada
-// llamada.
 type noopMetricsRecorder struct{}
 
 func (noopMetricsRecorder) RecordCacheResult(bool)                       {}
 func (noopMetricsRecorder) RecordResolveResult(string)                   {}
 func (noopMetricsRecorder) RecordProviderDuration(string, time.Duration) {}
 
-// Errores centinela de configuración, comprobables individualmente
-// con errors.Is.
+
 var (
 	ErrInvalidBaseURL               = errors.New("asn: base_url is required")
 	ErrInvalidSourceApp             = errors.New("asn: source_app is required")
@@ -153,7 +63,7 @@ var (
 	ErrInvalidFailureTTL            = errors.New("asn: failure_ttl must be greater than 0")
 )
 
-// Validate comprueba que cfg tenga valores utilizables.
+
 func (cfg Config) Validate() error {
 	var errs []error
 	if strings.TrimSpace(cfg.BaseURL) == "" {
@@ -185,9 +95,6 @@ type cacheEntry struct {
 	expiresAt time.Time
 }
 
-// Resolver implementa credstuffing.NetworkResolver consultando
-// RIPEstat, con caché (positivo y negativo, con TTL) y un límite de
-// concurrencia. Es seguro para uso concurrente.
 type Resolver struct {
 	cfg        Config
 	httpClient *http.Client
@@ -200,8 +107,6 @@ type Resolver struct {
 	cache map[netip.Addr]cacheEntry
 }
 
-// NewResolver construye un Resolver. Devuelve error si cfg no es
-// utilizable.
 func NewResolver(cfg Config) (*Resolver, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -228,8 +133,6 @@ func NewResolver(cfg Config) (*Resolver, error) {
 	}, nil
 }
 
-// networkInfoResponse es la forma mínima de la respuesta de RIPEstat
-// que este Resolver necesita.
 type networkInfoResponse struct {
 	Status string `json:"status"`
 	Data   struct {
@@ -237,9 +140,6 @@ type networkInfoResponse struct {
 	} `json:"data"`
 }
 
-// Resolve implementa credstuffing.NetworkResolver. Nunca bloquea más
-// allá de cfg.Timeout en total — esa cota cubre tanto la espera de un
-// cupo de concurrencia como la llamada HTTP.
 func (r *Resolver) Resolve(ip netip.Addr) (string, bool) {
 	if group, ok, found := r.cacheGet(ip); found {
 		r.metrics.RecordCacheResult(true)
@@ -251,11 +151,6 @@ func (r *Resolver) Resolve(ip netip.Addr) (string, bool) {
 	defer cancel()
 
 	if !r.acquire(ctx) {
-		// El plazo se consumió esperando un cupo de concurrencia —
-		// nunca se llegó a consultar a RIPEstat. No se cachea: esto
-		// es contención local pasajera, no una respuesta real del
-		// proveedor sobre esta IP, así que cachearlo podría suprimir
-		// injustamente un reintento una vez que la contención baje.
 		r.metrics.RecordResolveResult("capacity_timeout")
 		return "", false
 	}
@@ -270,9 +165,6 @@ func (r *Resolver) Resolve(ip netip.Addr) (string, bool) {
 	return group, ok
 }
 
-// resultLabel traduce ok a la etiqueta de bajo cardinalidad que usan
-// las métricas de este paquete — nunca el número de ASN ni ningún
-// otro dato de la IP en sí.
 func resultLabel(ok bool) string {
 	if ok {
 		return "success"
@@ -280,8 +172,6 @@ func resultLabel(ok bool) string {
 	return "failure"
 }
 
-// acquire toma un cupo del semáforo de concurrencia, o devuelve false
-// si ctx se cancela (por el timeout) antes de conseguirlo.
 func (r *Resolver) acquire(ctx context.Context) bool {
 	select {
 	case r.sem <- struct{}{}:
@@ -295,9 +185,6 @@ func (r *Resolver) release() {
 	<-r.sem
 }
 
-// fetch hace la consulta HTTP real a RIPEstat y aplica la política de
-// interpretación de la respuesta (ver el comentario de
-// parseASNs).
 func (r *Resolver) fetch(ctx context.Context, ip netip.Addr) (string, bool) {
 	url := fmt.Sprintf("%s?resource=%s&sourceapp=%s", r.cfg.BaseURL, ip.String(), r.cfg.SourceApp)
 
@@ -327,15 +214,6 @@ func (r *Resolver) fetch(ctx context.Context, ip netip.Addr) (string, bool) {
 	return parseASNs(parsed.Data.ASNs)
 }
 
-// parseASNs aplica la política conservadora acordada: RIPEstat puede
-// devolver más de un ASN para una IP (multi-homing) — en vez de
-// elegir uno arbitrariamente (lo que inventaría una correlación de
-// grupo que no está garantizada), este prototipo solo confía en el
-// caso sin ambigüedad:
-//
-//	0 ASN        -> ("", false)
-//	exactamente 1 -> ("asn:<numero>", true)
-//	más de 1      -> ("", false)
 func parseASNs(asns []string) (string, bool) {
 	if len(asns) != 1 {
 		return "", false
@@ -374,13 +252,6 @@ func (r *Resolver) cacheSet(ip netip.Addr, group string, ok bool) {
 	r.cache[ip] = cacheEntry{group: group, ok: ok, expiresAt: r.clock.Now().Add(ttl)}
 }
 
-// Sweep elimina del caché cualquier entrada vencida respecto a now, y
-// devuelve cuántas eliminó — mismo patrón que
-// internal/profile.Store.Sweep, internal/credstuffing.Detector.Sweep
-// e internal/anomaly.Detector.Sweep. now se
-// recibe como parámetro (nunca time.Now() internamente), así que
-// sigue siendo determinista y testeable. Conectarlo a un scheduler
-// real queda fuera del alcance de esta tarea.
 func (r *Resolver) Sweep(now time.Time) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

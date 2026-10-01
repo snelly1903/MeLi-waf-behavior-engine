@@ -5,26 +5,13 @@ import (
 	"strconv"
 	"strings"
 )
-
-// ReportMeta es la información del reporte que no viene de Result: de
-// dónde salió este resultado. Deliberadamente no incluye ningún
-// timestamp de reloj real — el texto generado por RenderMarkdown tiene
-// que ser reproducible byte a byte para los mismos datos de entrada,
-// igual que el resto del proyecto (ver docs/decisiones.md).
 type ReportMeta struct {
-	// ScenarioName es un nombre legible del escenario evaluado, por
-	// ejemplo "scenario-10".
 	ScenarioName string
 
-	// ExpectedRecords es cuántas etiquetas había en labels.jsonl — la
-	// base contra la que se compara TotalJoined para saber si se
-	// evaluó todo lo que se esperaba evaluar.
 	ExpectedRecords int
 }
 
-// formatRatio imprime r como porcentaje con tres decimales, o "N/A" si
-// r.Defined es false — nunca disimula un denominador en cero con un
-// número (ver docs/decisiones.md).
+
 func formatRatio(r Ratio) string {
 	if !r.Defined {
 		return "N/A"
@@ -63,12 +50,7 @@ func writePolicySection(b *strings.Builder, title string, pr PolicyResult) {
 		pr.Matrix.TP, pr.Matrix.FP, pr.Matrix.FN, pr.Matrix.TN, pr.Matrix.Total())
 }
 
-// RenderMarkdown arma el reporte legible en Markdown de result. No
-// vuelve a calcular ninguna métrica: solo formatea lo que ya está en
-// result (ver evaluate.go). Si result.Issues.Clean() es false, el
-// reporte abre con una advertencia explícita y visible antes de
-// mostrar cualquier número, para que nunca se lo confunda con un
-// resultado definitivo.
+
 func RenderMarkdown(result Result, meta ReportMeta) string {
 	var b strings.Builder
 

@@ -1,13 +1,6 @@
 // Command holdout es la corrida de holdout — PRIMERA Y ÚNICA vez que
 // se usan los seeds 201/202/203, después de que toda la
-// configuración quedó congelada en un checkpoint pre-holdout. Compara
-// BASELINE ORIGINAL (sin ningún cambio) contra FINAL TUNED CONFIG
-// (credential_stuffing CSw2, slow_scan S3, statistical_anomaly A3,
-// Policy Challenge=0.50/Block=0.75, ScoreFloor sin tocar) — tanto
-// sobre holdout como, para el análisis de generalización, sobre los
-// mismos escenarios de tuning ya usados durante la calibración. No
-// modifica ningún threshold en función de estos resultados. Ver
-// docs/decisiones.md.
+// configuración quedó congelada
 package main
 
 import (
@@ -25,19 +18,12 @@ var tuningSeeds = []uint64{101, 102, 103}
 var holdoutSeeds = []uint64{201, 202, 203}
 var ratios = []int{0, 10, 30}
 
-// baselineCandidate: BASELINE ORIGINAL, sin ningún cambio de
-// threshold — engine.Default*Config()/DefaultPolicy() tal cual.
 func baselineCandidate() tuning.Candidate {
 	c := tuning.BaselineCandidate()
 	c.Name = "Baseline-original"
 	return c
 }
 
-// finalCandidate: FINAL TUNED CONFIG, la configuración congelada
-// completa — credential_stuffing CSw2, slow_scan S3,
-// statistical_anomaly A3 y la Policy aprobada
-// (Challenge=0.50/Block=0.75). Se toma de internal/wiring, la misma
-// fuente que usa cmd/engine: ningún valor se repite acá.
 func finalCandidate() tuning.Candidate {
 	cs, ss, an := wiring.FinalConfigs()
 	return tuning.Candidate{
@@ -60,9 +46,6 @@ func buildScenarios(seeds []uint64) map[uint64]map[int]datagen.Scenario {
 	return scenarios
 }
 
-// runCandidate corre candidate sobre scenarios (un dataset completo:
-// tuning u holdout) y arma su DetectorLayerCandidateReport +
-// ActionDistribution pooled por ratio.
 func runCandidate(candidate tuning.Candidate, seeds []uint64, scenarios map[uint64]map[int]datagen.Scenario, resolver credstuffing.NetworkResolver) (tuning.DetectorLayerCandidateReport, map[int]tuning.ActionDistribution) {
 	rep := tuning.DetectorLayerCandidateReport{
 		Candidate:          candidate.Name,

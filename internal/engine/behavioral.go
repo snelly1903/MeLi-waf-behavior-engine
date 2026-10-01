@@ -26,8 +26,6 @@ import (
 // selectAttribution.
 const anomalyPriority = 2
 
-// Errores centinela de construcción, comprobables individualmente con
-// errors.Is.
 var (
 	ErrNilCredentialStuffingDetector = errors.New("engine: credential stuffing detector is required (use credstuffing.UnavailableNetworkResolver as an explicit placeholder if no real ASN provider exists yet)")
 	ErrNilSlowScanDetector           = errors.New("engine: slow scan detector is required")
@@ -35,101 +33,36 @@ var (
 )
 
 // detector es la interfaz mínima que BehavioralDecider necesita de
-// cada fuente de Finding — privada, definida acá porque acá es donde
-// se consume (mismo criterio que engine.Decider), y usada
-// ÚNICAMENTE para el bucle de combinación interno de Decide/Sweep.
-// internal/credstuffing.Detector, internal/slowscan.Detector e
-// internal/anomaly.Detector ya la cumplen tal cual — no se les tocó
-// ni una firma para esto.
-//
-// Se agregó recién con el tercer detector: con dos, comparar a mano
-// alcanzaba; con tres, la comparación escrita a mano ya no puede
-// extenderse sin reescribirse, y una lista + un bucle es objetivamente
-// menos código y menos propenso a errores que agregar una rama más a
-// mano cada vez que aparezca un detector nuevo — la misma "regla de
-// tres" ya aplicada en este proyecto para decidir cuándo extraer algo
-// (ver el patrón de ventana con watermark).
+// cada fuente de Finding
 type detector interface {
 	Observe(event.Event)
 	Evaluate(event.Event) finding.Finding
 	Sweep(now time.Time, idleTTL time.Duration) int
 }
 
-// FindingsRecorder es la interfaz mínima que BehavioralDecider usa
-// para reportar, por cada detector, si disparó un Finding en este
-// evento — sin importar si terminó siendo el principal de la Decision
-// o no. El nombre del detector es siempre uno de los ya registrados
-// explícitamente en namedDetector.name ("credential_stuffing",
-// "slow_scan", "statistical_anomaly"): nunca se infiere con un type
-// switch sobre el detector concreto.
-//
-// RecordAnomalyScore reporta el RiskScore de statistical_anomaly en
-// CADA evaluación, dispare o no — a diferencia de RecordFinding, que
-// solo cuenta disparos. Es lo que permite observar la distribución
-// completa del score (no solo la cola que llegó a disparar), igual
-// criterio que ya usan los reportes offline de tuning/holdout. Solo
-// existe para statistical_anomaly (no para los otros dos detectores):
-// es el único requisito de observabilidad pendiente, no un patrón
-// genérico para generalizar sin necesidad.
-//
-// Exportada porque internal/telemetry la implementa desde otro
-// paquete, por tipado estructural — BehavioralDecider nunca importa
-// OpenTelemetry directamente, mismo criterio que
-// credstuffing.NetworkResolver.
 type FindingsRecorder interface {
 	RecordFinding(detector string)
 	RecordAnomalyScore(score float64)
 }
 
-// noopFindingsRecorder es el valor por defecto cuando
-// NewBehavioralDecider recibe recorder=nil.
+
 type noopFindingsRecorder struct{}
 
 func (noopFindingsRecorder) RecordFinding(string)       {}
 func (noopFindingsRecorder) RecordAnomalyScore(float64) {}
 
-// namedDetector empareja un detector con su prioridad de desempate
-// (menor número gana un empate exacto de RiskScore) y un nombre solo
-// para que quede legible en el código — nunca se expone en la
-// Decision.
 type namedDetector struct {
 	name     string
 	detector detector
 	priority int
 }
 
-// BehavioralDecider combina la evidencia de varios detectores en una
-// única decision.Decision. No agrega ningún estado mutable propio —
-// los detectores ya son seguros para concurrencia por su cuenta, así
-// que Decide lo es también sin necesitar un lock nuevo acá.
 type BehavioralDecider struct {
 	detectors []namedDetector
 	policy    Policy
 	recorder  FindingsRecorder
 }
 
-// NewBehavioralDecider construye un BehavioralDecider. Los tres
-// detectores son obligatorios — nunca nil: si todavía no existe un
-// NetworkResolver real para credential stuffing, se construye ese
-// detector igual, con credstuffing.UnavailableNetworkResolver (ver
-// docs/decisiones.md) — nunca se omite un detector por completo, para
-// no tener que ramificar con "if nil" en Decide.
-//
-// El constructor sigue recibiendo parámetros explícitos y tipados
-// (no una lista genérica): el sitio de construcción en cmd/engine se
-// mantiene legible — "acá va credential stuffing, acá slow scan, acá
-// el detector estadístico". La lista interna (y la interfaz mínima
-// detector) es un detalle de implementación de Decide/Sweep, no de
-// esta API pública.
-//
-// Prioridad de desempate, fija y documentada: credential_stuffing
-// (0) > slow_scan (1) > statistical_anomaly (2) — el más específico
-// gana un empate exacto de RiskScore; el genérico es el último
-// recurso. Generaliza la regla ya establecida de que
-// credential_stuffing gana empates contra slow_scan.
-// recorder es opcional: si es nil, se usa noopFindingsRecorder — un
-// caller que no le importa la telemetría (por ejemplo, la mayoría de
-// los tests de este paquete) puede seguir pasando nil.
 func NewBehavioralDecider(cs *credstuffing.Detector, ss *slowscan.Detector, an *anomaly.Detector, policy Policy, recorder FindingsRecorder) (*BehavioralDecider, error) {
 	if cs == nil {
 		return nil, ErrNilCredentialStuffingDetector
@@ -157,32 +90,6 @@ func NewBehavioralDecider(cs *credstuffing.Detector, ss *slowscan.Detector, an *
 	}, nil
 }
 
-// Decide implementa engine.Decider.
-//
-// Flujo: Observe en todos los detectores primero (el orden entre
-// ellos no importa, no comparten estado); después Evaluate en todos —
-// mismo contrato de dos pasos que cada detector ya exige por
-// separado. Con los Finding disparados, separa DOS preguntas
-// independientes (ver docs/decisiones.md):
-//
-//   - Qué tan riesgoso es este evento (Action/ConfidenceScore): el
-//     mayor RiskScore entre TODOS los Triggered, sin importar qué
-//     detector lo produjo — ver selectPrincipal. Esto NUNCA cambió.
-//   - De qué ataque se trata (AttackVector/EntityID/
-//     ContributingSignals/el Explanation principal): SIEMPRE un
-//     detector ESPECÍFICO (credential_stuffing/slow_scan) si alguno
-//     disparó, sin importar si statistical_anomaly tiene un RiskScore
-//     mayor — ver selectAttribution. statistical_anomaly/unknown
-//     queda reservado al caso donde NINGÚN detector específico
-//     disparó.
-//
-// Originalmente ambas preguntas las respondía el mismo
-// Finding (el de mayor RiskScore) — así que un statistical_anomaly
-// con score más alto podía dejar attack_vector=unknown aunque
-// credential_stuffing o slow_scan también hubieran disparado, lo cual
-// es una attribution engañosa: "no sabemos qué es esto" cuando en
-// realidad SÍ había una hipótesis específica activa. Separar las dos
-// preguntas corrige eso sin tocar el score ni la Action.
 func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.Decision {
 	for _, nd := range d.detectors {
 		nd.detector.Observe(e)
@@ -203,10 +110,6 @@ func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.De
 	scoreSource, _ := selectPrincipal(triggered)
 
 	if scoreSource == nil {
-		// Ningún detector disparó: el único caso que cae al default
-		// "nada que reportar" — AttackVector=unknown, score 0. El
-		// EntityID sigue la misma convención que AllowAllDecider: nunca
-		// vacío, nunca hace fallar decision.Validate().
 		return decision.Decision{
 			RequestID:    e.RequestID,
 			Timestamp:    e.Timestamp,
@@ -219,17 +122,9 @@ func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.De
 
 	action := d.policy.actionFor(scoreSource.RiskScore)
 
-	// attribution nunca es nil acá: triggered tiene al menos un
-	// elemento (scoreSource != nil lo garantiza), y selectAttribution
-	// solo devuelve nil cuando triggered está vacío.
 	attribution, secondaries := selectAttribution(triggered)
 
-	// La Decision SIEMPRE refleja la evidencia real observada
-	// (AttackVector, EntityID, señales) cuando algún detector
-	// disparó — sin importar si Action terminó en ALLOW porque el
-	// score no alcanzó ChallengeThreshold. Action refleja qué se hizo
-	// con el riesgo; estos campos reflejan DE QUÉ ataque se trata. Son
-	// preguntas distintas — ver docs/decisiones.md.
+
 	explanation := explanationFor(*attribution, secondaries, action, scoreSource.RiskScore, d.policy)
 
 	return decision.Decision{
@@ -244,18 +139,11 @@ func (d *BehavioralDecider) Decide(_ context.Context, e event.Event) decision.De
 	}
 }
 
-// triggeredFinding empareja un Finding disparado con la prioridad de
-// desempate de quien lo produjo.
 type triggeredFinding struct {
 	finding  finding.Finding
 	priority int
 }
 
-// bestIndexByScore devuelve el índice, dentro de pool, del
-// triggeredFinding con mayor RiskScore — en empate exacto, el de
-// menor priority (el más específico gana, ver NewBehavioralDecider).
-// Asume len(pool) > 0; usada por selectPrincipal y selectAttribution
-// para no duplicar la regla de desempate en dos lugares.
 func bestIndexByScore(pool []triggeredFinding) int {
 	best := 0
 	for i := 1; i < len(pool); i++ {
@@ -268,18 +156,6 @@ func bestIndexByScore(pool []triggeredFinding) int {
 	return best
 }
 
-// selectPrincipal elige, entre los Finding que dispararon, cuál
-// decide Action/ConfidenceScore — "qué tan riesgoso es esto", nunca
-// "de qué ataque se trata" (ver selectAttribution para eso). El mayor
-// RiskScore entre TODOS los Triggered — nunca se suman ni se
-// promedian scores de detectores distintos, cada uno mide algo
-// diferente con su propia escala heurística.
-//
-// secondaries son los demás Finding que también dispararon (nunca
-// nil, puede ser vacío) — ya no se usan para construir el
-// Explanation (ver explanationFor, que ahora recibe los secondaries
-// de selectAttribution), se conservan acá solo porque siguen siendo
-// parte del contrato de esta función.
 func selectPrincipal(triggered []triggeredFinding) (principal *finding.Finding, secondaries []finding.Finding) {
 	if len(triggered) == 0 {
 		return nil, nil
@@ -294,27 +170,6 @@ func selectPrincipal(triggered []triggeredFinding) (principal *finding.Finding, 
 	return &f, secondaries
 }
 
-// selectAttribution elige, entre los Finding que dispararon, cuál
-// decide AttackVector/EntityID/ContributingSignals/el Explanation
-// principal — "de qué ataque se trata", nunca "qué tan riesgoso es"
-// (ver selectPrincipal para eso). Prioridad estricta:
-// si CUALQUIER detector ESPECÍFICO (credential_stuffing/slow_scan,
-// priority < anomalyPriority) disparó, gana el de mayor RiskScore
-// ENTRE ESOS — statistical_anomaly nunca es candidato en ese caso,
-// sin importar cuánto mayor sea su propio RiskScore. Solo cuando
-// NINGÚN detector específico disparó se usa el/los que sí dispararon
-// (en la práctica, como mucho statistical_anomaly) — ahí
-// AttackVector queda en "unknown" porque ese es el AttackVector
-// propio de statistical_anomaly (ver internal/anomaly), no una regla
-// especial de acá.
-//
-// El desempate DENTRO de cada grupo (entre los específicos, o entre
-// los genéricos si no hay específicos) es el mismo bestIndexByScore
-// de siempre — nunca se introduce una regla de desempate nueva.
-//
-// secondaries son TODOS los demás Finding que dispararon (incluido
-// statistical_anomaly si perdió por esta regla, no solo por score) —
-// se mencionan en el Explanation, nunca se mezclan en la Decision.
 func selectAttribution(triggered []triggeredFinding) (attribution *finding.Finding, secondaries []finding.Finding) {
 	if len(triggered) == 0 {
 		return nil, nil
@@ -347,21 +202,7 @@ func selectAttribution(triggered []triggeredFinding) (attribution *finding.Findi
 	return &f, secondaries
 }
 
-// explanationFor arma el texto determinista de Decision.Explanation:
-// la explicación de la evidencia ATRIBUIDA (attribution, ver
-// selectAttribution — nunca necesariamente la de mayor RiskScore),
-// junto con decisionScore (el score que REALMENTE decidió Action —
-// ver selectPrincipal) y la acción resultante, y — por cada detector
-// secundario que también disparó — una mención corta de eso, SIN
-// concatenar sus señales (ver docs/decisiones.md sobre por qué
-// mezclar ContributingSignals de detectores distintos sería
-// engañoso).
-//
-// decisionScore puede diferir del RiskScore propio de attribution
-// (por ejemplo, cuando statistical_anomaly tiene mayor score pero un
-// detector específico gana la attribution) — el texto dice
-// deliberadamente "decision score", no "risk score", para no insinuar
-// que ese número es el RiskScore propio de la evidencia descrita.
+
 func explanationFor(attribution finding.Finding, secondaries []finding.Finding, action decision.Action, decisionScore float64, policy Policy) string {
 	var explanation string
 	if action == decision.ActionAllow {
@@ -371,11 +212,6 @@ func explanationFor(attribution finding.Finding, secondaries []finding.Finding, 
 		explanation = fmt.Sprintf("%s: %s (decision score %.2f; action=%s)",
 			attribution.AttackVector, attribution.Explanation, decisionScore, action)
 	}
-	// Nunca se afirma "scored lower" acá: un secondary puede tener un
-	// RiskScore mayor que decisionScore (por ejemplo, statistical_anomaly
-	// perdiendo la attribution frente a un detector específico con
-	// score menor) — el texto se limita al score, sin caracterizar la
-	// comparación.
 	for _, s := range secondaries {
 		explanation = fmt.Sprintf("%s; %s signals were also present (risk score %.2f)",
 			explanation, s.AttackVector, s.RiskScore)
@@ -383,8 +219,6 @@ func explanationFor(attribution finding.Finding, secondaries []finding.Finding, 
 	return explanation
 }
 
-// Sweep reenvía a todos los detectores. Conectarlo a un scheduler
-// real queda fuera del alcance de este proyecto.
 func (d *BehavioralDecider) Sweep(now time.Time, idleTTL time.Duration) int {
 	total := 0
 	for _, nd := range d.detectors {

@@ -5,12 +5,7 @@ import (
 	"net/netip"
 )
 
-// SimulatedASN identifica un número de sistema autónomo (ASN) asignado
-// por este generador — nunca uno real. Los ASN públicos ocupan el
-// rango 1–64511 y 65536 en adelante; el rango 64512–65534 está
-// reservado por la IANA (RFC 6996) específicamente para uso privado o
-// de documentación, así que un valor en ese rango no se puede confundir
-// por accidente con el ASN de un proveedor real.
+
 type SimulatedASN uint32
 
 type IPPool struct {
@@ -20,11 +15,7 @@ type IPPool struct {
 }
 
 var (
-	// PoolHostingSim simula una red "tipo hosting": poca diversidad de
-	// usuarios reales detrás de ella.
 	PoolHostingSim = IPPool{Name: "hosting-sim", ASN: 64512, Prefix: netip.MustParsePrefix("192.0.2.0/24")}
-
-	// dos redes "tipo residencial" distintas, usadas por el tráfico legítimo.
 	PoolResidentialSimA = IPPool{Name: "residential-sim-a", ASN: 64513, Prefix: netip.MustParsePrefix("198.51.100.0/24")}
 	PoolResidentialSimB = IPPool{Name: "residential-sim-b", ASN: 64514, Prefix: netip.MustParsePrefix("203.0.113.0/24")}
 )
@@ -62,16 +53,6 @@ func (p IPPool) DistinctAddrs(rng *RNG, n int) []netip.Addr {
 	return addrs
 }
 
-// DistinctAddrsExcluding funciona como DistinctAddrs, pero nunca
-// devuelve ninguna dirección presente en exclude. Se usa cuando dos
-// generadores distintos necesitan direcciones garantizadamente
-// disjuntas del mismo pool — por ejemplo, para que un tenant legítimo
-// (ProfileHostedTenant) y las IPs atacantes nunca coincidan dentro del
-// mismo escenario, sin depender de la probabilidad de que dos sorteos
-// independientes no se solapen.
-//
-// Entra en pánico si, después de descontar exclude, no quedan
-// suficientes direcciones para dar las n pedidas.
 func (p IPPool) DistinctAddrsExcluding(rng *RNG, n int, exclude []netip.Addr) []netip.Addr {
 	excluded := make(map[netip.Addr]bool, len(exclude))
 	for _, a := range exclude {

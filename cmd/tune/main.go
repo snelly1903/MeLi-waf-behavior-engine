@@ -1,13 +1,6 @@
 // Command tune es el evaluador/calibrador offline del motor
 // conductual: genera los escenarios de tuning (seeds 101/102/103 por
-// defecto, ratios 0/10/30%), corre la configuración ACTUAL de
-// cmd/engine (internal/tuning.BaselineCandidate, que nunca duplica
-// esos valores — ver internal/engine/defaults.go) sobre cada uno, y
-// produce un reporte reproducible (Markdown + CSV + JSON) con todas
-// las métricas — nunca solo la configuración elegida. No calibra ni
-// compara candidatos: reproduce la línea base conductual previa a la
-// calibración. Las grillas de candidatos exploradas están en el
-// Apéndice A de docs/decisiones.md.
+// defecto, ratios 0/10/30%)
 package main
 
 import (

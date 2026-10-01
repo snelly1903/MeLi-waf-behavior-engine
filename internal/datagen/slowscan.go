@@ -17,7 +17,6 @@ type SlowScanProfile struct {
 
 	MinRequests, MaxRequests int
 
-	// MinGap / MaxGap acota el tiempo entre un request y el siguiente —
 	MinGap, MaxGap time.Duration
 
 	SensitivePaths []string

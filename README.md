@@ -136,25 +136,43 @@ flowchart TD
 
     NoTrigger["Action = ALLOW<br/>AttackVector = unknown<br/>ConfidenceScore = 0"]
 
-    ScoreSelect["RiskScore = máximo entre<br/>los Finding disparados<br/>(empate: detector más específico gana)"]
-    AttrSelect["AttackVector / EntityID =<br/>detector MÁS ESPECÍFICO disparado<br/>(credential_stuffing/slow_scan sobre<br/>statistical_anomaly, aunque tenga<br/>menor score)"]
+    Findings["Findings disparados"]
+
+    ScoreSelect["Calcular RiskScore final<br/>máximo score entre Findings"]
+
+    AttrSelect["Seleccionar atribución<br/>AttackVector / EntityID<br/>prioriza detector específico:<br/>credential_stuffing / slow_scan<br/>sobre statistical_anomaly"]
 
     PolicyCheck{"Policy.actionFor(RiskScore)"}
-    Allow["ALLOW<br/>(score < ChallengeThreshold)"]
-    Challenge["CHALLENGE<br/>(ChallengeThreshold ≤ score < BlockThreshold)"]
-    Block["BLOCK<br/>(score ≥ BlockThreshold)"]
+
+    Allow["ALLOW<br/>score < ChallengeThreshold"]
+    Challenge["CHALLENGE<br/>ChallengeThreshold ≤ score < BlockThreshold"]
+    Block["BLOCK<br/>score ≥ BlockThreshold"]
+
+    BuildDecision["Construir Decision<br/>Action + RiskScore + AttackVector<br/>Signals + Explanation"]
 
     Response(["Decision al cliente"])
 
     Start --> Validate --> Observe --> Evaluate --> AnyTriggered
+
     AnyTriggered -->|No| NoTrigger --> Response
-    AnyTriggered -->|Sí| ScoreSelect
-    AnyTriggered -->|Sí| AttrSelect
+
+    AnyTriggered -->|Sí| Findings
+
+    Findings --> ScoreSelect
+    Findings --> AttrSelect
+
     ScoreSelect --> PolicyCheck
-    PolicyCheck --> Allow --> Response
-    PolicyCheck --> Challenge --> Response
-    PolicyCheck --> Block --> Response
-    AttrSelect --> Response
+
+    PolicyCheck --> Allow
+    PolicyCheck --> Challenge
+    PolicyCheck --> Block
+
+    Allow --> BuildDecision
+    Challenge --> BuildDecision
+    Block --> BuildDecision
+    AttrSelect --> BuildDecision
+
+    BuildDecision --> Response
 
     classDef entrada fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
     classDef detector fill:#ffedd5,stroke:#f97316,color:#7c2d12
@@ -164,7 +182,7 @@ flowchart TD
 
     class Start,Response entrada
     class Observe,Evaluate detector
-    class AnyTriggered,NoTrigger,ScoreSelect,AttrSelect,PolicyCheck,Allow decision
+    class AnyTriggered,NoTrigger,Findings,ScoreSelect,AttrSelect,PolicyCheck,Allow,BuildDecision decision
     class Challenge challenge
     class Block block
 ```

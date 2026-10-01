@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-// writeLines escribe cada elemento de lines como una línea de path,
-// creando el archivo (y su carpeta, si hiciera falta).
 func writeLines(t *testing.T, path string, lines []string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

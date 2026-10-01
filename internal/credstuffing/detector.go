@@ -1,15 +1,6 @@
 // Package credstuffing busca credential stuffing distribuido de bajo
 // volumen por IP, correlacionando actividad entre múltiples IPs de un
 // mismo grupo de red (ASN) dentro de una ventana temporal.
-// Deliberadamente no depende de que ninguna IP individual supere
-// ningún umbral por sí sola — el baseline (internal/baseline) ya
-// demostró con datos reales que esa técnica no alcanza contra este
-// patrón de ataque.
-//
-// Este paquete nunca importa internal/groundtruth ni internal/datagen
-// — decide únicamente con lo que ve en event.Event y con lo que le
-// informe el NetworkResolver inyectado, igual que exige el resto del
-// motor.
 package credstuffing
 
 import (
@@ -24,92 +15,39 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/finding"
 )
-
-// NetworkResolver resuelve un identificador opaco de grupo de red
-// (por ejemplo, un ASN) a partir de una IP. El detector nunca
-// interpreta el contenido de group — solo lo usa como clave de
-// agrupación. ok=false significa "no se pudo resolver"; ver
-// Detector.Observe para qué hace el detector en ese caso.
-//
-// Definida acá, en el paquete que la consume, no en quien la
-// implementa — mismo criterio que engine.Decider. Acá no existe
-// ninguna implementación real: los tests usan un fake determinista.
-// La integración con una fuente real de ASN queda para una tarea
-// posterior.
 type NetworkResolver interface {
 	Resolve(ip netip.Addr) (group string, ok bool)
 }
 
-// UnavailableNetworkResolver es un NetworkResolver de PRODUCCIÓN (no
-// un fake de test) para usar mientras no exista ningún proveedor real
-// de ASN/grupo de red — ver docs/decisiones.md. Resolve siempre
-// devuelve ok=false, así que, según la propia regla de
-// Detector.Observe, ninguna IP entra jamás a ninguna correlación: el
-// detector queda estructuralmente inerte (Triggered siempre false),
-// pero corriendo de verdad — Observe/Evaluate se siguen llamando en
-// cada evento, la degradación es explícita y segura, no un bypass
-// oculto. Reemplazar esto por un NetworkResolver real (cuando exista
-// un proveedor) es un cambio de una sola línea en quien construye el
-// Detector — no requiere tocar nada de este paquete.
 type UnavailableNetworkResolver struct{}
 
-// Resolve implementa NetworkResolver.
 func (UnavailableNetworkResolver) Resolve(netip.Addr) (string, bool) {
 	return "", false
 }
 
-// ScoreWeights son los pesos relativos de cada señal en el cálculo de
-// RiskScore (ver Detector.Evaluate). No hace falta que sumen 1 — se
-// normalizan por su suma en el momento de calcular el score, mismo
-// criterio que decision.ContributingSignal.Weight.
 type ScoreWeights struct {
 	IPs      float64
 	Accounts float64
 	Attempts float64
 	Ratio    float64
 }
-
-// Config configura el detector. Ningún valor tiene un default
-// "recomendado" en este archivo a propósito: los umbrales se calibran
-// en una tarea posterior contra un dataset separado del de reporte
-// (mismo criterio que internal/baseline) — no se eligen mirando la
-// semilla 42.
 type Config struct {
-	// Window es la ventana de correlación por grupo de red.
 	Window time.Duration
 
-	// MinDistinctIPs, MinDistinctAccounts, MinAttempts y
-	// MinFailedRatio son las cuatro condiciones del gate — TODAS deben
-	// cumplirse a la vez para que Evaluate dispare (ver Evaluate).
-	// MinDistinctIPs y MinAttempts deben ser mayores que 0.
-	// MinDistinctAccounts puede ser 0 (deshabilita esa condición del
-	// gate; documentado como válido pero inusual). MinFailedRatio debe
-	// estar en [0,1].
 	MinDistinctIPs      int
 	MinDistinctAccounts int
 	MinAttempts         int
 	MinFailedRatio      float64
 
-	// Weights pondera las cuatro señales al combinar el RiskScore.
 	Weights ScoreWeights
 
-	// ScoreFloor es el piso de RiskScore cuando Triggered es true —
-	// ver Evaluate para el porqué existe. Debe estar estrictamente
-	// entre 0 y 1.
 	ScoreFloor float64
 
-	// AuthMatcher decide qué rutas cuentan como intentos de
-	// autenticación. Si es nil, se usa event.DefaultAuthPathMatcher().
-	// Reutilizado tal cual, sin ninguna lógica nueva de reconocimiento
-	// de rutas.
 	AuthMatcher *event.AuthPathMatcher
 
-	// Resolver resuelve el grupo de red de una IP. Obligatorio.
 	Resolver NetworkResolver
 }
 
-// Errores centinela de configuración, comprobables individualmente
-// con errors.Is.
 var (
 	ErrInvalidWindow              = errors.New("credstuffing: window must be greater than 0")
 	ErrInvalidMinDistinctIPs      = errors.New("credstuffing: min_distinct_ips must be greater than 0")
@@ -121,8 +59,6 @@ var (
 	ErrNilResolver                = errors.New("credstuffing: resolver is required")
 )
 
-// Validate comprueba que cfg tenga valores utilizables, y devuelve
-// todos los problemas encontrados unidos con errors.Join.
 func (cfg Config) Validate() error {
 	var errs []error
 	if cfg.Window <= 0 {
@@ -159,29 +95,16 @@ func isFiniteNonNegative(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
 }
 
-// observation es lo mínimo que se retiene por evento de autenticación:
-// suficiente para las cuatro señales del gate, nada más.
 type observation struct {
 	timestamp     time.Time
 	ip            netip.Addr
 	loginUserHash string
 	statusCode    int
 }
-
-// groupState es el estado retenido de un grupo de red: su watermark
-// (el timestamp más reciente observado, que nunca retrocede) y las
-// observaciones todavía dentro de la ventana relativa a ese watermark
-// — mismo concepto que internal/profile, reimplementado acá de forma
-// autocontenida porque la agregación es distinta (por grupo de red,
-// no por IP/sesión) y para no modificar un componente ya probado. Ver
-// docs/decisiones.md.
 type groupState struct {
 	watermark time.Time
 	queue     []observation
 }
-
-// Detector es el detector de credential stuffing distribuido. Es
-// seguro para uso concurrente.
 type Detector struct {
 	cfg     Config
 	matcher *event.AuthPathMatcher
@@ -190,8 +113,6 @@ type Detector struct {
 	groups map[string]groupState
 }
 
-// NewDetector construye un Detector. Devuelve error si cfg no es
-// utilizable (ver Config.Validate).
 func NewDetector(cfg Config) (*Detector, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -207,20 +128,6 @@ func NewDetector(cfg Config) (*Detector, error) {
 	}, nil
 }
 
-// Observe registra e en el grupo de red de e.ClientIP, si y solo si e
-// es una petición a una ruta de autenticación (según cfg.AuthMatcher)
-// y cfg.Resolver puede resolver un grupo de red para e.ClientIP. Si
-// cualquiera de las dos condiciones falla, Observe no hace nada — un
-// evento que no es de autenticación no le interesa a este detector, y
-// un IP no resoluble queda deliberadamente excluido de toda
-// correlación (ver docs/decisiones.md: agrupar direcciones
-// "desconocidas" juntas sería mezclar tráfico no relacionado de todo
-// el mundo en una falsa campaña).
-//
-// No asume que los eventos llegan ordenados por timestamp — mismo
-// mecanismo de watermark que internal/profile: cada grupo de red
-// mantiene el máximo timestamp visto, que nunca retrocede, y la
-// ventana se interpreta siempre respecto a ese watermark.
 func (d *Detector) Observe(e event.Event) {
 	if !d.matcher.IsAuthPath(e.Path) {
 		return
@@ -260,19 +167,6 @@ func (d *Detector) Observe(e event.Event) {
 	d.groups[group] = state
 }
 
-// Evaluate decide si, a partir del estado actual del grupo de red de
-// e.ClientIP, hay evidencia de una campaña de credential stuffing
-// distribuido. Devuelve un finding.Finding{} (Triggered=false) sin
-// tocar ningún estado si e no es una petición de autenticación o si
-// e.ClientIP no se pudo resolver a un grupo de red — este detector
-// solo tiene una opinión sobre intentos de autenticación con grupo de
-// red conocido; combinar esto con el resto del tráfico de una entidad
-// es responsabilidad del futuro engine.Decider, no de este detector.
-//
-// Se espera que quien llama haya llamado Observe(e) antes de
-// Evaluate(e) para el mismo evento, así el propio e ya está incluido
-// en el agregado que se evalúa — mismo contrato de dos pasos que
-// internal/profile.Store.
 func (d *Detector) Evaluate(e event.Event) finding.Finding {
 	if !d.matcher.IsAuthPath(e.Path) {
 		return finding.Finding{}
@@ -291,16 +185,7 @@ func (d *Detector) Evaluate(e event.Event) finding.Finding {
 	return d.evaluateGroup(group, obs)
 }
 
-// GateMetrics es la evaluación diagnóstica de las cuatro condiciones
-// del gate para el grupo de red de una IP — expone los números crudos
-// (DistinctIPs, DistinctAccounts, TotalAttempts,
-// FailedRatio) SIN IMPORTAR si dispararon o no. evaluateGroup los
-// descarta en el caso no disparado (devuelve finding.Finding{}).
-// Ningún código de producción usa esto — engine.BehavioralDecider
-// solo conoce Evaluate.
 type GateMetrics struct {
-	// Group es "network:<group>" — mismo formato que
-	// finding.Finding.EntityID.
 	Group string
 
 	DistinctIPs      int
@@ -311,13 +196,6 @@ type GateMetrics struct {
 	Triggered bool
 }
 
-// EvaluateGateMetrics es el equivalente diagnóstico de Evaluate:
-// nunca muta ningún estado (a diferencia de Observe, el único lugar
-// donde este detector escribe) — es una lectura pura sobre el grupo
-// de red de e.ClientIP tal como quedó tras el último Observe. found
-// es false en los mismos dos casos en que Evaluate devuelve un
-// finding.Finding{} vacío: e no es una ruta de autenticación, o
-// e.ClientIP no se pudo resolver a ningún grupo.
 func (d *Detector) EvaluateGateMetrics(e event.Event) (metrics GateMetrics, found bool) {
 	if !d.matcher.IsAuthPath(e.Path) {
 		return GateMetrics{}, false
@@ -372,8 +250,6 @@ func (d *Detector) gateMetricsFor(group string, obs []observation) GateMetrics {
 	}
 }
 
-// evaluateGroup aplica el gate y, si dispara, calcula RiskScore y las
-// señales — sin tocar ningún estado compartido (obs ya es una copia).
 func (d *Detector) evaluateGroup(group string, obs []observation) finding.Finding {
 	gate := d.gateMetricsFor(group, obs)
 	if !gate.Triggered {
@@ -389,15 +265,6 @@ func (d *Detector) evaluateGroup(group string, obs []observation) finding.Findin
 	weightSum := w.IPs + w.Accounts + w.Attempts + w.Ratio
 	avg := (cIPs*w.IPs + cAccounts*w.Accounts + cAttempts*w.Attempts + cRatio*w.Ratio) / weightSum
 
-	// RiskScore = piso + (1-piso)*promedio. Con las cuatro señales
-	// exactamente en su umbral, cada componente da 0, así que sin este
-	// piso el score sería 0 pese a que Triggered es true — un detector
-	// que disparó no puede reportar riesgo cero, sería contradictorio
-	// para quien lea la decisión. El piso garantiza RiskScore ∈
-	// [ScoreFloor, 1) siempre que Triggered sea true: sigue siendo una
-	// heurística legible (arranca en ScoreFloor apenas se cruzan los
-	// cuatro umbrales, y crece hacia 1 cuanto más se los supera), nunca
-	// una probabilidad calibrada.
 	riskScore := d.cfg.ScoreFloor + (1-d.cfg.ScoreFloor)*avg
 
 	return finding.Finding{
@@ -420,11 +287,6 @@ func (d *Detector) evaluateGroup(group string, obs []observation) finding.Findin
 	}
 }
 
-// excessComponent es la misma heurística "cuánto se superó el umbral"
-// ya usada y justificada en internal/baseline: 1 - umbral/valor,
-// siempre en [0,1), 0 justo en el umbral, creciendo
-// cada vez más despacio a medida que valor se aleja de threshold, sin
-// tocar nunca 1.
 func excessComponent(actual, threshold float64) float64 {
 	if actual <= 0 {
 		return 0
@@ -439,8 +301,6 @@ func excessComponent(actual, threshold float64) float64 {
 	return score
 }
 
-// ratioComponent normaliza un ratio ya acotado en [0,1] contra su
-// mínimo: 0 justo en el mínimo, 1 cuando el ratio llega a 1.
 func ratioComponent(actual, min float64) float64 {
 	if min >= 1 {
 		return 0
@@ -457,13 +317,6 @@ func ratioComponent(actual, min float64) float64 {
 
 // Sweep elimina cualquier grupo de red cuyo watermark tenga más de
 // idleTTL de antigüedad respecto a now, y devuelve cuántos eliminó.
-// now se recibe como parámetro (nunca time.Now() internamente), así
-// que sigue siendo determinista y testeable — mismo criterio que
-// internal/profile.Store.Sweep. La cardinalidad de grupos
-// de red es naturalmente chica (a lo sumo unos pocos miles de ASN en
-// el mundo real), así que el riesgo de crecimiento sin límite acá es
-// mucho menor que en internal/profile; Sweep se ofrece igual, por
-// consistencia y por si hiciera falta.
 func (d *Detector) Sweep(now time.Time, idleTTL time.Duration) int {
 	d.mu.Lock()
 	defer d.mu.Unlock()

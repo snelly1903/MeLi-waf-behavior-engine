@@ -8,21 +8,14 @@ import (
 	"strings"
 )
 
-// envInfo es la información de entorno para el reporte: SO/versión,
-// arquitectura, CPU, RAM, Go version y GOMAXPROCS. OSVersion/RAMBytes
-// se obtienen con comandos del propio sistema operativo (os/exec, sin
-// dependencias nuevas) — nunca fallan de forma fatal: si el comando
-// no está disponible o el SO no está soportado, quedan en "" / 0 y el
-// reporte lo muestra como "desconocido", nunca bloquea la corrida por
-// esto.
 type envInfo struct {
 	GoVersion  string
 	GOOS       string
 	GOARCH     string
 	NumCPU     int
 	GOMAXPROCS int
-	OSVersion  string // "" si no se pudo determinar
-	RAMBytes   int64  // 0 si no se pudo determinar
+	OSVersion  string
+	RAMBytes   int64
 }
 
 func detectEnv() envInfo {
@@ -77,10 +70,6 @@ func darwinRAMBytes() int64 {
 }
 
 func linuxOSVersion() string {
-	// Mejor esfuerzo: uname -a ya da una sola línea razonablemente
-	// completa (kernel + distro en la mayoría de los casos), sin
-	// tener que parsear /etc/os-release con sus muchas variantes de
-	// formato.
 	return runCmdTrim("uname", "-a")
 }
 

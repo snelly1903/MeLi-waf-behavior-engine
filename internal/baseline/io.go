@@ -10,13 +10,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/event"
 )
 
-// LoadEvents lee un archivo events.jsonl — el formato que escribe
-// datagen.WriteScenario: un event.Event por línea, sin ninguna
-// etiqueta — y devuelve los eventos en el mismo orden en que
-// aparecen en el archivo. LoadEvents no reordena nada: es
-// responsabilidad de quien generó el archivo (datagen.WriteScenario ya
-// lo garantiza) que las líneas vengan en orden cronológico, que es lo
-// que Detect exige.
 func LoadEvents(path string) ([]event.Event, error) {
 	f, err := os.Open(path)
 	if err != nil {

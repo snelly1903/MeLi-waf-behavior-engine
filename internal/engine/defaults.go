@@ -1,15 +1,3 @@
-// Package engine (defaults.go): los valores de configuración por
-// defecto de los tres detectores y de la Policy — los mismos que usa
-// cmd/engine en producción. Viven acá, no repetidos como literales en
-// cmd/engine/main.go y en internal/tuning por separado: un único
-// lugar de verdad evita que la evaluación de "baseline" pueda
-// desincronizarse silenciosamente de lo que el motor real sirve — ver
-// TestBaselineCandidate_MatchesEngineDefaults en internal/tuning.
-//
-// NINGÚN valor acá está calibrado todavía contra un dataset real (esa
-// calibración es, precisamente, el objeto de internal/tuning). Son
-// puntos de partida razonables para que el servicio corra de punta a
-// punta — mismo criterio ya aplicado a internal/baseline.
 package engine
 
 import (
@@ -20,11 +8,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/slowscan"
 )
 
-// DefaultCredentialStuffingConfig devuelve la configuración por
-// defecto de internal/credstuffing — sin Resolver: quien la use
-// (cmd/engine, internal/tuning) le asigna el suyo después, porque el
-// resolver es la única pieza que cambia entre producción (RIPEstat) y
-// evaluación offline (un resolver determinista).
 func DefaultCredentialStuffingConfig() credstuffing.Config {
 	return credstuffing.Config{
 		Window:              30 * time.Minute,
@@ -37,8 +20,6 @@ func DefaultCredentialStuffingConfig() credstuffing.Config {
 	}
 }
 
-// DefaultSlowScanConfig devuelve la configuración por defecto de
-// internal/slowscan.
 func DefaultSlowScanConfig() slowscan.Config {
 	return slowscan.Config{
 		Window:                  time.Hour,
@@ -53,12 +34,6 @@ func DefaultSlowScanConfig() slowscan.Config {
 	}
 }
 
-// DefaultAnomalyConfig devuelve la configuración por defecto de
-// internal/anomaly. TriggerThreshold queda deliberadamente bajo
-// (0.15) porque, con las cinco features pesadas por igual, una
-// desviación clara en una sola de ellas nunca puede empujar el score
-// combinado mucho más allá de ~0.2 (el resto de las features, cerca
-// de su media, aportan ~0 al promedio) — ver docs/decisiones.md.
 func DefaultAnomalyConfig() anomaly.Config {
 	return anomaly.Config{
 		Window:           time.Hour,
@@ -70,9 +45,6 @@ func DefaultAnomalyConfig() anomaly.Config {
 	}
 }
 
-// DefaultPolicy devuelve la Policy por defecto — los umbrales que usa
-// cmd/engine si no se pasan --challenge-threshold/--block-threshold
-// explícitos.
 func DefaultPolicy() Policy {
 	return Policy{ChallengeThreshold: 0.5, BlockThreshold: 0.8}
 }

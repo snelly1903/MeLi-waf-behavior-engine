@@ -1,15 +1,6 @@
 // Package anomaly implementa un detector estadístico de anomalías:
 // un modelo online — media/varianza calculadas con el
-// algoritmo de Welford y z-scores unilaterales — que aprende cómo se
-// ve "normal" un perfil de comportamiento y puntúa cuánto se aleja
-// cada observación de esa línea de base. A diferencia de
-// internal/credstuffing e internal/slowscan (que exigen varias
-// señales CRUDAS cruzando SUS PROPIOS umbrales a la vez), este
-// detector combina evidencia entre features en una única medida de
-// "qué tan raro es esto" — es la diferencia de fondo entre un
-// detector de reglas y uno genuinamente estadístico.
-//
-// Este paquete nunca importa internal/groundtruth ni internal/datagen.
+// algoritmo de Welford y z-scores unilaterales
 package anomaly
 
 import (
@@ -25,9 +16,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/profile"
 )
 
-// featureIndex enumera las cinco features estadísticas — ver
-// extractFeatures para su definición exacta y docs/decisiones.md
-// para por qué se eligieron estas cinco y no otras.
 type featureIndex int
 
 const (
@@ -46,11 +34,6 @@ var featureNames = [featureCount]string{
 	"without_referer_ratio_z",
 	"account_diversity_ratio_z",
 }
-
-// FeatureWeights son los pesos relativos de cada feature al combinar
-// el score final. No hace falta que sumen 1 — se normalizan por su
-// suma, mismo criterio que en internal/credstuffing e
-// internal/slowscan.
 type FeatureWeights struct {
 	NotFound         float64
 	FailedAuth       float64
@@ -62,49 +45,20 @@ type FeatureWeights struct {
 func (w FeatureWeights) asArray() [featureCount]float64 {
 	return [featureCount]float64{w.NotFound, w.FailedAuth, w.PathDiversity, w.Referer, w.AccountDiversity}
 }
-
-// Config configura el detector. Ningún valor acá está calibrado
-// todavía contra un dataset real — mismo criterio que
-// internal/baseline, internal/credstuffing e internal/slowscan.
 type Config struct {
-	// Window es la ventana de retención del profile.Store privado de
-	// este detector (ver docs/decisiones.md sobre por qué tiene su
-	// propia copia en vez de compartir la de otro detector).
 	Window time.Duration
 
-	// MinSamples es cuántas muestras necesita el baseline global antes
-	// de que Evaluate empiece a puntuar (warm-up). Debe ser al menos
-	// 2 — con menos, la varianza muestral (M2/(n-1)) ni siquiera está
-	// definida.
 	MinSamples int
 
-	// ZSaturation es el z-score al que el componente normalizado de
-	// una feature llega a 0.5 (component = z/(z+ZSaturation)). Debe
-	// ser mayor que 0.
 	ZSaturation float64
 
-	// TriggerThreshold es el umbral sobre el score combinado (no sobre
-	// cada feature por separado) que decide Triggered. Debe estar
-	// estrictamente entre 0 y 1: en 0 dispararía con cualquier
-	// desviación (incluida ninguna), en 1 nunca podría disparar
-	// (combined siempre es < 1).
 	TriggerThreshold float64
 
-	// Weights pondera las cinco features al combinar el score.
 	Weights FeatureWeights
 
-	// ScoreFloor es el piso de RiskScore cuando Triggered es true —
-	// mismo mecanismo que internal/credstuffing/internal/slowscan, acá
-	// más una defensa adicional que la única barrera: como
-	// TriggerThreshold > 0 ya es obligatorio, RiskScore queda > 0 en
-	// el borde exacto solo por eso. Se mantiene por consistencia de
-	// diseño entre los tres detectores. Debe estar estrictamente entre
-	// 0 y 1.
 	ScoreFloor float64
 }
 
-// Errores centinela de configuración, comprobables individualmente
-// con errors.Is.
 var (
 	ErrInvalidWindow           = errors.New("anomaly: window must be greater than 0")
 	ErrInvalidMinSamples       = errors.New("anomaly: min_samples must be at least 2")
@@ -114,8 +68,6 @@ var (
 	ErrInvalidWeights          = errors.New("anomaly: weights must be finite, non-negative, and sum to more than 0")
 )
 
-// Validate comprueba que cfg tenga valores utilizables, y devuelve
-// todos los problemas encontrados unidos con errors.Join.
 func (cfg Config) Validate() error {
 	var errs []error
 	if cfg.Window <= 0 {
@@ -147,63 +99,28 @@ func (cfg Config) Validate() error {
 	}
 	return errors.Join(errs...)
 }
-
-// featureStats es el estado de Welford de UNA feature: su media y M2
-// (suma de cuadrados de las diferencias respecto a la media
-// incremental — de ahí sale la varianza: M2/(n-1)).
 type featureStats struct {
 	mean float64
 	m2   float64
 }
 
-// baselineSnapshot es una copia inmutable del estado del baseline en
-// un instante — nunca comparte memoria con el estado interno.
 type baselineSnapshot struct {
 	n     int
 	stats [featureCount]featureStats
 }
 
-// baseline es el estado estadístico GLOBAL — no indexado por entidad
-// (ver docs/decisiones.md sobre por qué la población es global y no
-// por IP/sesión). Es un puñado de escalares: nunca crece con la
-// cantidad de entidades vistas, a diferencia de internal/profile.Store.
-//
-// Dos limitaciones conocidas, documentadas explícitamente (ver
-// docs/decisiones.md):
-//
-//  1. Al ser una única población global, mezcla comportamientos
-//     naturalmente distintos (por ejemplo, un cliente de API y un
-//     navegador humano tienen formas de tráfico distintas por
-//     definición, no porque uno sea sospechoso) en una sola media y
-//     varianza. Además, cada evento evaluado aporta una muestra —
-//     una entidad muy activa contribuye muchas muestras
-//     correlacionadas entre sí, pudiendo sesgar el baseline hacia su
-//     propia forma de tráfico.
-//  2. Este detector excluye deliberadamente el volumen crudo (Total)
-//     de sus features — solo mira ratios/proporciones. Por diseño, se
-//     enfoca en anomalías de la FORMA del comportamiento, y no
-//     pretende detectar por sí solo un incremento puramente
-//     volumétrico (eso ya es responsabilidad de
-//     internal/credstuffing/internal/slowscan, y de un futuro
-//     enriquecimiento si hiciera falta).
 type baseline struct {
 	mu    sync.Mutex
 	n     int
 	stats [featureCount]featureStats
 }
 
-// snapshot devuelve una copia del estado actual, para puntuar contra
-// él SIN mantener el lock tomado y sin que una actualización
-// concurrente lo cambie a mitad de un cálculo.
 func (b *baseline) snapshot() baselineSnapshot {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return baselineSnapshot{n: b.n, stats: b.stats}
 }
 
-// update aplica el paso de actualización de Welford para las cinco
-// features de x, en una sola pasada — n es compartido entre las
-// cinco porque siempre se actualizan juntas, una vez por muestra.
 func (b *baseline) update(x [featureCount]float64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -218,32 +135,18 @@ func (b *baseline) update(x [featureCount]float64) {
 	}
 }
 
-// zEpsilon es el umbral por debajo del cual una desviación estándar
-// se trata como "todavía cero" — evita NaN/Inf al dividir. Con
-// varianza (todavía) cero, no se puede calcular de forma significativa
-// "cuántos desvíos estándar" de algo que no tiene desvío: se trata esa
-// feature como no informativa esta ronda (z=0), la opción conservadora,
-// no una que haya que adivinar.
 const zEpsilon = 1e-9
 
-// scope identifica si un candidato de Finding salió de la perspectiva
-// de IP o de sesión — mismo formato que internal/slowscan,
-// reimplementado acá de forma autocontenida (ver docs/decisiones.md).
 type scope struct {
 	label string // "ip" o "session"
 	key   string
 }
-
-// Detector es el detector estadístico de anomalías. Es seguro para
-// uso concurrente.
 type Detector struct {
 	cfg      Config
 	profiles *profile.Store
 	baseline *baseline
 }
 
-// NewDetector construye un Detector. Devuelve error si cfg no es
-// utilizable.
 func NewDetector(cfg Config) (*Detector, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -255,36 +158,10 @@ func NewDetector(cfg Config) (*Detector, error) {
 	return &Detector{cfg: cfg, profiles: profiles, baseline: &baseline{}}, nil
 }
 
-// Observe registra e en los perfiles de comportamiento (IP y, si
-// corresponde, sesión — internal/profile). El baseline estadístico
-// NO se toca acá — se actualiza dentro de Evaluate, después de
-// puntuar, por la razón que explica Evaluate.
 func (d *Detector) Observe(e event.Event) {
 	d.profiles.Observe(e)
 }
 
-// Evaluate calcula las features de la IP de e y, si existe, de su
-// sesión, las puntúa contra el baseline estadístico ACTUAL (tomado
-// como una única foto al principio, antes de que ninguna de las dos
-// evaluaciones lo actualice), decide un Finding por cada una, y recién
-// después actualiza el baseline — con la muestra de cada scope, salvo
-// que esa muestra en particular haya resultado Triggered después del
-// warm-up (ver el bloque de actualización más abajo).
-//
-// Puntuar contra el baseline previo y actualizar después es
-// deliberado (preferencia explícita del diseño, ver
-// docs/decisiones.md): así el propio punto anómalo nunca
-// reduce artificialmente su propio z-score por haberse promediado a
-// sí mismo dentro de la media antes de calcularlo. Es una excepción
-// documentada al patrón "Observe muta, Evaluate solo lee" que sí
-// siguen internal/credstuffing e internal/slowscan — el contrato
-// público hacia quien llama (Observe y después Evaluate) no cambia.
-//
-// Igual que internal/slowscan, evalúa SIEMPRE la IP y, si
-// e.SessionID no está vacío, TAMBIÉN la sesión, y devuelve como
-// máximo un único Finding: gana el de mayor RiskScore; en empate
-// exacto, gana sesión, por ser la entidad más específica — mismo
-// criterio que internal/slowscan.
 func (d *Detector) Evaluate(e event.Event) finding.Finding {
 	bl := d.baseline.snapshot()
 	warm := bl.n < d.cfg.MinSamples
@@ -305,16 +182,6 @@ func (d *Detector) Evaluate(e event.Event) finding.Finding {
 		}
 	}
 
-	// Actualización del baseline: cada snapshot (IP y, si existe,
-	// sesión) es su propia muestra poblacional independiente. Durante
-	// el warm-up se agrega SIEMPRE (todavía no hay ningún juicio de
-	// "anómalo" que hacer). Después del warm-up, una muestra que
-	// resultó Triggered NO se agrega — así una anomalía real nunca
-	// termina absorbida como si fuera parte de lo normal
-	// (baseline poisoning). Si el tráfico ya es mayormente ataque
-	// desde el arranque, esta protección no puede hacer nada por sí
-	// sola — limitación conocida de cualquier baseline aprendido sin
-	// supervisión, documentada, no resuelta acá.
 	if warm || !ipFinding.Triggered {
 		d.baseline.update(ipFeatures)
 	}
@@ -337,13 +204,6 @@ func (d *Detector) Evaluate(e event.Event) finding.Finding {
 	}
 }
 
-// extractFeatures deriva las cinco features de m, todas como ratios
-// (nunca conteos crudos — ver docs/decisiones.md sobre por qué: este
-// detector se enfoca en la FORMA/proporciones del comportamiento, no
-// pretende detectar por sí solo un incremento puramente volumétrico,
-// eso ya es trabajo de internal/credstuffing/internal/slowscan). Si
-// m.Total es 0, las cinco quedan en 0 — no hay ninguna proporción que
-// calcular todavía.
 func extractFeatures(m profile.Metrics) [featureCount]float64 {
 	var f [featureCount]float64
 	if m.Total == 0 {
@@ -358,14 +218,6 @@ func extractFeatures(m profile.Metrics) [featureCount]float64 {
 	return f
 }
 
-// scoreFeatures calcula el z-score unilateral de cada feature de x
-// contra bl y el score combinado — ANTES de compararlo con
-// cfg.TriggerThreshold y antes de aplicar cfg.ScoreFloor. Es el
-// núcleo matemático que comparten evaluateFeatures (producción) y
-// EvaluateDebug (diagnóstico offline): se extrajo para que la
-// evaluación diagnóstica pueda ver el score combinado también en el
-// caso NO disparado (evaluateFeatures lo descarta devolviendo
-// finding.Finding{}), sin duplicar esta fórmula en otro lugar.
 func (d *Detector) scoreFeatures(x [featureCount]float64, bl baselineSnapshot) (combined float64, zs [featureCount]float64) {
 	var components [featureCount]float64
 	for i := range x {
@@ -394,8 +246,7 @@ func (d *Detector) scoreFeatures(x [featureCount]float64, bl baselineSnapshot) (
 	return weightedSum / weightSum, zs
 }
 
-// evaluateFeatures calcula el score combinado de x contra bl y arma el
-// Finding si cruza cfg.TriggerThreshold.
+
 func (d *Detector) evaluateFeatures(x [featureCount]float64, bl baselineSnapshot, sc scope) finding.Finding {
 	combined, zs := d.scoreFeatures(x, bl)
 
@@ -413,19 +264,6 @@ func (d *Detector) evaluateFeatures(x [featureCount]float64, bl baselineSnapshot
 
 	return finding.Finding{
 		Triggered: true,
-		// Deliberadamente "unknown", nunca un vector inventado: este
-		// detector identifica una anomalía genérica en la forma del
-		// comportamiento, no sabe de qué ataque específico se trata.
-		// decision.AttackVectorUnknown ya es un caso de primera clase
-		// en el evaluador (internal/eval/vector.go,
-		// EvaluateVectorAttribution): se excluye del balde
-		// "Incorrecto" y se cuenta aparte como "Desconocido" — la
-		// semántica honesta que corresponde. Inventar un vector nuevo
-		// (por ejemplo "anomaly") rompería eso: como el ground truth
-		// del evaluador solo conoce legit/credential_stuffing/slow_scan,
-		// cualquier decisión con un vector nuevo caería siempre en
-		// "Incorrecto" en esa comparación, penalizando injustamente a
-		// un detector que está siendo honesto sobre sus límites.
 		AttackVector:        decision.AttackVectorUnknown,
 		RiskScore:           riskScore,
 		ContributingSignals: signals,
@@ -437,52 +275,14 @@ func (d *Detector) evaluateFeatures(x [featureCount]float64, bl baselineSnapshot
 	}
 }
 
-// DebugEvaluation es la evaluación diagnóstica de UN scope (IP o
-// sesión): expone el score combinado y los z-scores ANTES de que
-// TriggerThreshold decida si importan, algo que Evaluate nunca
-// expone en el caso no disparado (evaluateFeatures devuelve
-// finding.Finding{}, perdiendo el número). Necesario para poder medir
-// qué tan cerca estuvo de disparar el tráfico que NUNCA disparó, no
-// solo contar cuántas veces disparó. Ningún código de producción
-// llama a esto — engine.BehavioralDecider solo conoce Evaluate.
 type DebugEvaluation struct {
-	// Scope es "ip:<dirección>" o "session:<id>".
 	Scope string
-
-	// CombinedScore es el score combinado antes de ScoreFloor y antes
-	// de compararlo con TriggerThreshold — el mismo valor que
-	// Explanation ya imprime como texto cuando Triggered es true, acá
-	// disponible como número, y también cuando Triggered es false.
 	CombinedScore float64
-
-	// Triggered es CombinedScore >= TriggerThreshold (nunca durante el
-	// warm-up, igual que Evaluate).
 	Triggered bool
-
-	// RiskScore es ScoreFloor + (1-ScoreFloor)*CombinedScore si
-	// Triggered, o 0 si no — igual convención que finding.Finding: sin
-	// Triggered, no hay ningún riesgo que reportar.
 	RiskScore float64
-
-	// ZScores tiene una entrada por feature, con la misma clave que
-	// decision.ContributingSignal.Name en un Finding real (por ejemplo
-	// "not_found_ratio_z") — nunca un índice numérico, para que un
-	// reporte de diagnóstico pueda mostrar el nombre sin conocer
-	// featureIndex (privado a este paquete).
 	ZScores map[string]float64
 }
 
-// EvaluateDebug es el equivalente diagnóstico de Evaluate: en vez de
-// devolver como máximo un Finding ganador, devuelve la evaluación de
-// TODOS los scopes evaluados (IP, y sesión si corresponde), sin
-// descartar el score de los que no dispararon.
-//
-// Actualiza el baseline exactamente con la misma regla que Evaluate
-// (agrega durante el warm-up, o cualquier muestra que no haya
-// disparado después de él) — así que un caller tiene que llamar a
-// EvaluateDebug EN LUGAR DE Evaluate para un evento dado, nunca a los
-// dos: cada uno actualiza el baseline una vez por evento, y llamar a
-// ambos lo actualizaría dos veces.
 func (d *Detector) EvaluateDebug(e event.Event) []DebugEvaluation {
 	bl := d.baseline.snapshot()
 	warm := bl.n < d.cfg.MinSamples
@@ -521,7 +321,6 @@ func (d *Detector) EvaluateDebug(e event.Event) []DebugEvaluation {
 		})
 	}
 
-	// Misma regla de actualización que Evaluate — ver ahí el porqué.
 	if warm || !evals[0].Triggered {
 		d.baseline.update(ipFeatures)
 	}
@@ -540,10 +339,6 @@ func zScoreMap(zs [featureCount]float64) map[string]float64 {
 	return m
 }
 
-// Sweep reenvía al profile.Store privado — el baseline estadístico en
-// sí (un puñado de escalares globales, no indexados por entidad) no
-// necesita ninguna limpieza: nunca crece con la cantidad de entidades
-// vistas.
 func (d *Detector) Sweep(now time.Time, idleTTL time.Duration) int {
 	return d.profiles.Sweep(now, idleTTL)
 }

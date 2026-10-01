@@ -33,14 +33,6 @@ type summaryParams struct {
 	ExperimentDuration time.Duration
 }
 
-// writeSummary arma reports/performance/summary.md — el resumen
-// legible por humanos, con las advertencias explícitas pedidas: los
-// resultados HTTP son "local end-to-end / loopback throughput" (nunca
-// capacidad absoluta de un servidor separado, cliente y servidor
-// comparten proceso/máquina), el delta de memoria es del proceso
-// COMBINADO cliente+servidor (nunca RAM exclusiva del servidor), y
-// ningún resultado local se extrapola linealmente a 1.000 millones de
-// requests/hora.
 func writeSummary(path string, combos []loadtest.CombinationResult, p summaryParams) error {
 	var b []byte
 	w := func(format string, args ...any) { b = append(b, []byte(fmt.Sprintf(format, args...))...) }

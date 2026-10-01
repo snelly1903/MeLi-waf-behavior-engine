@@ -8,10 +8,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/groundtruth"
 )
 
-// ScenarioConfig configura un escenario de prueba completo: una
-// combinación de tráfico legítimo y, opcionalmente, los dos ataques, en
-// las proporciones exigidas por el challenge (0%, 10%, 30% de tráfico
-// malicioso)
 type ScenarioConfig struct {
 	Seed   uint64
 	Start  time.Time

@@ -1,8 +1,5 @@
-// Command eval compara las decisiones de un motor (hoy, siempre
-// ficticias — todavía no existe el motor WAF real) contra el ground
-// truth de un escenario generado por cmd/datagen, y arma un reporte
-// Markdown legible con las métricas del challenge (ver
-// docs/decisiones.md).
+// Command eval compara las decisiones de un motor contra el ground
+// truth de un escenario generado
 package main
 
 import (
@@ -15,11 +12,6 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/eval"
 )
 
-// Códigos de salida: 0 es éxito sin problemas de integridad, 1 es
-// "el reporte se generó pero tiene problemas de integridad" (no es un
-// error operativo: el comando hizo su trabajo, pero el dato de entrada
-// no está completo), y 2 es un error operativo (archivo inexistente,
-// fallo al escribir) que impidió generar el reporte.
 const (
 	exitClean            = 0
 	exitIntegrityIssues  = 1

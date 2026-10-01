@@ -1,16 +1,6 @@
 // Command loadtest es el load test HTTP end-to-end (POST /v1/events):
 // corre la matriz perfil x concurrencia contra un *httpapi.Server
-// real montado en httptest.NewServer (socket real en loopback —
-// cliente y servidor comparten proceso y máquina, así que los
-// resultados son "local end-to-end / loopback throughput", NUNCA
-// capacidad absoluta de un servidor desplegado por separado). La
-// detector layer, Policy y ScoreFloor son los CONGELADOS tras el
-// holdout, servidos vía internal/wiring.FinalConfigs()/FinalPolicy()
-// — la MISMA fuente de verdad que cmd/engine en producción — este
-// comando nunca los modifica, solo los mide. No usa RIPEstat real: el
-// resolver de ASN es datagen.NewSimulatedASNResolver() por default
-// (determinista, sin red), o UnavailableNetworkResolver con
-// --asn-mode=none. Ver docs/decisiones.md.
+// real montado en httptest.NewServer
 package main
 
 import (
@@ -33,19 +23,11 @@ import (
 	"github.com/snelly1903/MeLi-waf-behavior-engine/internal/wiring"
 )
 
-// Nombres válidos de --asn-mode. Deliberadamente NO incluye
-// "ripestat" -- un load test de performance nunca debe medir
-// latencia de Internet/proveedor.
 const (
 	asnModeNone      = "none"
 	asnModeSimulated = "simulated"
 )
 
-// otelPairedConcurrencies son los dos puntos del comparativo OTel
-// pareado: mixed@25 y mixed@100, cada uno corriendo OFF x3
-// inmediatamente seguido de ON x3 -- cerca en el tiempo, para que una
-// eventual deriva del sistema (térmica, otros procesos) no contamine
-// la comparación.
 var otelPairedConcurrencies = []int{25, 100}
 
 func main() {
@@ -84,7 +66,6 @@ func main() {
 
 	var combos []loadtest.CombinationResult
 
-	// Matriz principal: siempre con OTel deshabilitado (recorders=nil).
 	for _, profile := range profiles {
 		events := eventsByProfile[profile]
 		for _, concurrency := range concurrencies {
@@ -95,15 +76,8 @@ func main() {
 		}
 	}
 
-	// Comparativo PAREADO de OTel: solo si se pasó --otel-endpoint.
-	// Para cada concurrencia de interés, OFF x reps corre
-	// INMEDIATAMENTE seguido de ON x reps -- cerca en el tiempo,
-	// nunca separados por el resto de la matriz principal. Nunca se
-	// agranda la matriz principal para esto.
 	if *otelEndpoint != "" {
 		if _, ok := eventsByProfile["mixed"]; !ok {
-			// El comparativo OTel siempre necesita el perfil "mixed",
-			// aunque no se haya pedido en --profiles.
 			extra := buildProfileEvents([]string{"mixed"})
 			eventsByProfile["mixed"] = extra["mixed"]
 		}
@@ -153,15 +127,6 @@ func main() {
 	log.Printf("loadtest: listo en %s — reportes en %s (loadtest.csv, loadtest.json, summary.md)", experimentDuration.Round(time.Millisecond), *out)
 }
 
-// runCombination corre reps repeticiones independientes de UNA
-// combinación (perfil x concurrencia x modo OTel), CADA UNA con un
-// decider/servidor frescos Y un *http.Client/*http.Transport propios
-// (loadtest.NewClient, keep-alive habilitado, pool de conexiones
-// dimensionado para concurrency) COMPARTIDOS entre todos los workers
-// de esa repetición -- nunca se reutiliza estado entre repeticiones
-// ni entre combinaciones. La configuración de los tres detectores es
-// SIEMPRE wiring.FinalConfigs() (vía BuildServerWithResolver) -- la
-// misma que sirve cmd/engine en producción.
 func runCombination(profile string, concurrency int, otelEnabled, paired bool, events []event.Event, resolver credstuffing.NetworkResolver, recorders *telemetry.Recorders, reps int, warmup, measurement time.Duration, challengeThreshold, blockThreshold float64) loadtest.CombinationResult {
 	var memBefore, memAfter runtime.MemStats
 	runtime.ReadMemStats(&memBefore)
@@ -206,12 +171,6 @@ func buildResolver(asnMode string) credstuffing.NetworkResolver {
 	return r
 }
 
-// buildProfileEvents genera, UNA sola vez, los eventos de cada
-// perfil pedido -- reutiliza datagen/escenarios existentes
-// (DefaultScenarioConfig con ratio 0/0.10/0.30), nunca un generador
-// propio de tráfico de performance. PerfSeed (901) es una semilla
-// dedicada, distinta de tuning (101-103) y holdout (201-203), para no
-// mezclar conceptos.
 func buildProfileEvents(profiles []string) map[string][]event.Event {
 	ratios := map[string]float64{
 		"normal":       0,

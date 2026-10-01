@@ -31,10 +31,6 @@ func main() {
 	otelConnectTimeout := flag.Duration("otel-connect-timeout", 3*time.Second, "cuánto espera el motor, al arrancar, a que --otel-endpoint quede alcanzable antes de caer a métricas no-op (fail-open: nunca impide arrancar)")
 	flag.Parse()
 
-	// signal.NotifyContext (no un simple ListenAndServe bloqueante)
-	// para que SIGINT/SIGTERM disparen un apagado ordenado: sin esto,
-	// matar el proceso nunca le daría a telemetry.Init la oportunidad
-	// de hacer un último flush/Shutdown del MeterProvider.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -73,9 +69,6 @@ func main() {
 		log.Fatalf("engine: %v", err)
 	}
 
-	// Contexto nuevo y acotado para el Shutdown del MeterProvider —
-	// nunca el ctx ya cancelado por la señal de apagado, que dejaría a
-	// Shutdown sin ningún margen para el flush final.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := shutdownTelemetry(shutdownCtx); err != nil {

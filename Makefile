@@ -45,8 +45,8 @@ eval:
 # collision-safe name; pass BASELINE_OUT=$(SCENARIO)/decisions.jsonl
 # explicitly to produce the file cmd/eval expects.
 MODE ?= all
-MAX_REQUESTS ?= 100
-WINDOW ?= 30m
+MAX_REQUESTS ?= 2
+WINDOW ?= 5m
 BASELINE_OUT ?=
 baseline:
 	go run ./cmd/baseline --scenario $(SCENARIO) --mode $(MODE) --max-requests $(MAX_REQUESTS) --window $(WINDOW) --out "$(BASELINE_OUT)"
